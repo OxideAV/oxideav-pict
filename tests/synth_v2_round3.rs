@@ -182,10 +182,9 @@ fn clip_rgn_decode_succeeds() {
     // it today; honoring it is deferred).
     let width = 4u32;
     let height = 4u32;
-    let mut rgba = vec![0u8; (width * height * 4) as usize];
-    for i in 0..rgba.len() {
-        rgba[i] = (i * 13) as u8;
-    }
+    let rgba: Vec<u8> = (0..(width * height * 4) as usize)
+        .map(|i| (i * 13) as u8)
+        .collect();
     let enc = encode_pict_v2_with_clip(width, height, &rgba, PackType::Raw, [0, 0, 4, 4]).unwrap();
     let img = parse_pict(&enc).unwrap();
     assert_eq!(img.width, width);
