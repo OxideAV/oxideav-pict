@@ -5,9 +5,11 @@
 //! and skip the `oxideav-core` dependency entirely.
 //!
 //! The module exposes:
-//! * [`register`] / [`register_codecs`] — the `CodecRegistry` entry
-//!   point the umbrella `oxideav` crate calls during framework
-//!   initialisation.
+//! * [`register`] — the unified `RuntimeContext` entry point the
+//!   umbrella `oxideav` crate calls during framework initialisation.
+//!   Internally calls [`register_codecs`] and [`register_containers`].
+//! * [`register_codecs`] — registers the PICT codec (decoder) into a
+//!   [`CodecRegistry`].
 //! * [`register_containers`] — registers the canonical PICT file
 //!   extensions (`.pict`, `.pic`, `.pct`) against the `"pict"` codec
 //!   id. PICT has no demuxer of its own (the file IS the picture
@@ -17,7 +19,7 @@
 //!   lets the trait-side `Decoder` impl in `decoder.rs` bubble
 //!   bitstream errors up through the framework error type.
 
-use oxideav_core::{CodecCapabilities, CodecId, PixelFormat};
+use oxideav_core::{CodecCapabilities, CodecId, PixelFormat, RuntimeContext};
 use oxideav_core::{CodecInfo, CodecRegistry, ContainerRegistry};
 
 use crate::error::PictError;
@@ -66,11 +68,11 @@ pub fn register_containers(reg: &mut ContainerRegistry) {
     }
 }
 
-/// Combined registration for callers that just want everything wired up
-/// in one call.
-pub fn register(codecs: &mut CodecRegistry, containers: &mut ContainerRegistry) {
-    register_codecs(codecs);
-    register_containers(containers);
+/// Unified entry point: install every codec and container provided by
+/// `oxideav-pict` into a [`RuntimeContext`].
+pub fn register(ctx: &mut RuntimeContext) {
+    register_codecs(&mut ctx.codecs);
+    register_containers(&mut ctx.containers);
 }
 
 #[cfg(test)]
@@ -119,5 +121,20 @@ mod tests {
         register_containers(&mut reg);
         assert_eq!(reg.container_for_extension("png"), None);
         assert_eq!(reg.container_for_extension(""), None);
+    }
+
+    #[test]
+    fn register_via_runtime_context_installs_factories() {
+        let mut ctx = RuntimeContext::new();
+        register(&mut ctx);
+        assert!(
+            ctx.codecs.decoder_ids().next().is_some(),
+            "register(ctx) should install codec decoder factories"
+        );
+        assert_eq!(
+            ctx.containers.container_for_extension("pict"),
+            Some(crate::CODEC_ID_STR),
+            "register(ctx) should install .pict extension hint"
+        );
     }
 }
