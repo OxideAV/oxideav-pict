@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default-on `registry` Cargo feature gating the `oxideav-core`
   `Decoder` trait implementation; standalone (no-`registry`) build
   exposes only the framework-free `parse_pict` API surface.
+- `register_containers` now registers the canonical PICT file
+  extensions (`.pict`, `.pic`, `.pct`) against the `"pict"` codec id
+  in the framework `ContainerRegistry`.
 
 ### Deferred to round 2
 

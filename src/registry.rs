@@ -7,9 +7,12 @@
 //! The module exposes:
 //! * [`register`] / [`register_codecs`] — the `CodecRegistry` entry
 //!   point the umbrella `oxideav` crate calls during framework
-//!   initialisation. PICT has no separate container format (the file
-//!   IS the PICT body, with an optional 512-byte launch-stub prefix
-//!   that we sniff for); container registration is therefore a no-op.
+//!   initialisation.
+//! * [`register_containers`] — registers the canonical PICT file
+//!   extensions (`.pict`, `.pic`, `.pct`) against the `"pict"` codec
+//!   id. PICT has no demuxer of its own (the file IS the picture
+//!   body, with an optional 512-byte launch-stub prefix that the
+//!   decoder sniffs); only the extension table is populated.
 //! * The `From<PictError> for oxideav_core::Error` conversion that
 //!   lets the trait-side `Decoder` impl in `decoder.rs` bubble
 //!   bitstream errors up through the framework error type.
@@ -48,18 +51,73 @@ pub fn register_codecs(reg: &mut CodecRegistry) {
     );
 }
 
-/// Register PICT containers into the supplied [`ContainerRegistry`].
+/// Register PICT file extensions into the supplied [`ContainerRegistry`].
 ///
 /// PICT has no container layer of its own — the file IS the picture
 /// body (optionally prefixed by a 512-byte launch stub that the
-/// decoder sniffs). This function is therefore a no-op; it exists
-/// only so callers can use the same `register_containers(...)` API
-/// shape as other codec crates.
-pub fn register_containers(_reg: &mut ContainerRegistry) {}
+/// decoder sniffs), so no demuxer / probe is registered. We *do*
+/// register the canonical PICT file extensions (`.pict`, `.pic`,
+/// `.pct`) against the codec id `"pict"` so a caller resolving a path
+/// hint via [`ContainerRegistry::container_for_extension`] still gets
+/// a useful answer.
+pub fn register_containers(reg: &mut ContainerRegistry) {
+    for ext in ["pict", "pic", "pct"] {
+        reg.register_extension(ext, crate::CODEC_ID_STR);
+    }
+}
 
 /// Combined registration for callers that just want everything wired up
 /// in one call.
 pub fn register(codecs: &mut CodecRegistry, containers: &mut ContainerRegistry) {
     register_codecs(codecs);
     register_containers(containers);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn register_containers_maps_pict_extension_to_pict() {
+        let mut reg = ContainerRegistry::new();
+        register_containers(&mut reg);
+        assert_eq!(reg.container_for_extension("pict"), Some("pict"));
+    }
+
+    #[test]
+    fn register_containers_maps_pic_extension_to_pict() {
+        let mut reg = ContainerRegistry::new();
+        register_containers(&mut reg);
+        assert_eq!(reg.container_for_extension("pic"), Some("pict"));
+    }
+
+    #[test]
+    fn register_containers_maps_pct_extension_to_pict() {
+        let mut reg = ContainerRegistry::new();
+        register_containers(&mut reg);
+        assert_eq!(reg.container_for_extension("pct"), Some("pict"));
+    }
+
+    #[test]
+    fn extension_lookup_is_case_insensitive() {
+        let mut reg = ContainerRegistry::new();
+        register_containers(&mut reg);
+        for ext in [
+            "PICT", "Pict", "pIcT", "PIC", "Pic", "pIc", "PCT", "Pct", "pCt",
+        ] {
+            assert_eq!(
+                reg.container_for_extension(ext),
+                Some("pict"),
+                "extension {ext:?} should map to \"pict\""
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_extension_returns_none() {
+        let mut reg = ContainerRegistry::new();
+        register_containers(&mut reg);
+        assert_eq!(reg.container_for_extension("png"), None);
+        assert_eq!(reg.container_for_extension(""), None);
+    }
 }
