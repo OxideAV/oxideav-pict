@@ -1,0 +1,31 @@
+[package]
+name = "oxideav-pict"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+repository = "https://github.com/OxideAV/oxideav-pict"
+homepage = "https://github.com/OxideAV/oxideav-pict"
+authors = ["Mark Karpeles"]
+description = "Pure-Rust PICT (Apple QuickDraw picture) reader for oxideav — clean-room from Inside Macintosh"
+readme = "README.md"
+keywords = ["multimedia", "image", "pict", "quickdraw", "macintosh"]
+categories = ["multimedia::encoding", "multimedia::images"]
+
+[dependencies]
+# `oxideav-core` is gated behind the default-on `registry` feature so
+# image-library consumers can depend on `oxideav-pict` with
+# `default-features = false` and avoid the framework dependency tree
+# entirely. Without `registry` the crate exposes a free-standing
+# `parse_pict` API plus crate-local `PictImage` / `PictError` types and
+# never references `oxideav-core`.
+oxideav-core = { version = "0.1", optional = true }
+
+[features]
+default = ["registry"]
+
+# Wires up the codec / decoder trait implementations against
+# `oxideav-core` so the crate can plug into the `oxideav` framework
+# registry. Default-on; turn off for image-library use-cases that just
+# want the standalone `parse_pict` API.
+registry = ["dep:oxideav-core"]
