@@ -71,18 +71,42 @@ assert_eq!(img.data.len(), img.width as usize * img.height as usize * 4);
 
 ## Encode
 
-A minimal writer ships in round 2: it emits a v2 PICT containing the
-input RGBA raster as a single `DirectBitsRect` (`0x009A`) with
-packType=1 32-bit pixels in `0xFF R G B` interleaved layout, plus the
-512-byte launch-stub prefix.
+Round 3 ships a full encoder with three on-disk pack modes and v1
+format support.
+
+| Function | Format | Notes |
+| -------- | ------ | ----- |
+| `encode_pict` | v2 packType 1 (raw 4 bpp) | Compat alias; identical to round 2 |
+| `encode_pict_v2(…, PackType::Raw)` | v2 packType 1 | Largest, broadest compat |
+| `encode_pict_v2(…, PackType::Packed24)` | v2 packType 2 | 25 % smaller — no pad byte |
+| `encode_pict_v2(…, PackType::ComponentPackBits)` | v2 packType 4 | Component-separated PackBits per row; typically 20–40 % smaller than raw for photographic content; may be *larger* than raw for random noise |
+| `encode_pict_v1` | v1 8-bit-opcode format | No 512-byte stub prefix; smaller header |
+| `encode_pict_v2_with_clip` | v2 + `ClipRgn` opcode | Injects rectangular `ClipRgn` before pixel data |
 
 ```rust
-use oxideav_pict::{encode_pict, parse_pict};
+use oxideav_pict::{encode_pict, encode_pict_v2, encode_pict_v1,
+                   encode_pict_v2_with_clip, parse_pict, PackType};
 
+// Round-2 compat: raw 32-bpp packType 1.
 let rgba = vec![0u8; 4 * 4 * 4];
 let pict = encode_pict(4, 4, &rgba)?;
 let img = parse_pict(&pict)?;
 assert_eq!(img.width, 4);
+
+// packType 4: component-separated PackBits (often smaller).
+let pict4 = encode_pict_v2(4, 4, &rgba, PackType::ComponentPackBits)?;
+let img4 = parse_pict(&pict4)?;
+assert_eq!(img4.width, 4);
+
+// v1 format: 8-bit opcodes, no 512-byte stub.
+let pict_v1 = encode_pict_v1(4, 4, &rgba)?;
+assert!(pict_v1.len() < 512); // no stub
+let img_v1 = parse_pict(&pict_v1)?;
+assert_eq!(img_v1.width, 4);
+
+// With ClipRgn: clip = [top, left, bottom, right].
+let pict_clip = encode_pict_v2_with_clip(4, 4, &rgba, PackType::Raw, [1, 1, 3, 3])?;
+let _ = parse_pict(&pict_clip)?; // decoder parses ClipRgn opcode cleanly
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -106,8 +130,9 @@ oxideav-pict = { version = "0.0", default-features = false }
 
 ## What's not yet in
 
-* **Drawing-clipping by region.** `ClipRgn` is parsed but the resulting
-  mask isn't yet honoured by subsequent drawing primitives.
+* **Drawing-clipping by region.** `ClipRgn` is parsed (and `encode_pict_v2_with_clip`
+  now emits it), but the resulting mask isn't yet honoured by subsequent
+  drawing primitives — clip-region enforcement is a future round.
 * **Pattern fills (`PnPat`, `BkPixPat`, `PnPixPat`, `FillPixPat`).**
   Solid-colour ink only — patterns return `Unsupported`.
 * **Text glyphs.** `LongText` / `DH/DV/DHDVText` are walked past but
@@ -120,6 +145,8 @@ oxideav-pict = { version = "0.0", default-features = false }
   state machine but the rasteriser draws single-pixel pen only.
 * **Multi-image PICTs.** Each subsequent raster blits onto the same
   canvas — no separate per-image surfaces.
+* **v1 encoder packType 4.** `encode_pict_v1` uses raw packType 1
+  only; component-separated PackBits in v1 streams is a future round.
 
 ## License
 

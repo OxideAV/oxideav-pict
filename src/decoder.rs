@@ -1465,6 +1465,19 @@ fn dispatch_v1_opcode(
             blit_subimage(canvas, state, &img, &dst);
             Ok(true)
         }
+        // v1 DirectBitsRect / DirectBitsRgn — same PixMap header layout
+        // as their v2 counterparts (0x009A / 0x009B). QuickDraw emitted
+        // these for 16- and 32-bit direct colour in v1 picture files.
+        0x9A => {
+            let (img, dst) = decode_direct_bits_rect(r)?;
+            blit_subimage(canvas, state, &img, &dst);
+            Ok(true)
+        }
+        0x9B => {
+            let (img, dst, _rgn) = decode_direct_bits_rgn(r)?;
+            blit_subimage(canvas, state, &img, &dst);
+            Ok(true)
+        }
         0xA0 => {
             r.skip(2)?;
             Ok(true)

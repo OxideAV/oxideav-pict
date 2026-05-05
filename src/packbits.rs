@@ -135,12 +135,15 @@ mod tests {
     }
 }
 
-/// Encode `src` bytes into a PackBits-compressed buffer (test scaffolding).
+/// Encode `src` bytes into a PackBits-compressed buffer.
 ///
-/// Not exposed as a public round-1 API — PICT writing requires emitting
-/// the full opcode stream + PixMap, which is round-2. This function is
-/// reused by the round-trip tests in `tests/`.
-#[cfg(test)]
+/// Each row must be encoded independently; the caller is responsible
+/// for slicing `src` to exactly one scanline before calling this.
+///
+/// Uses a greedy one-pass strategy: at each position look ahead for a
+/// run of ≥ 3 identical bytes (capped at 128); if found emit a run
+/// packet, otherwise collect a raw literal packet (up to 128 bytes,
+/// stopping just before any ≥ 3-byte run).
 pub fn encode(src: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len() + src.len() / 64);
     let mut i = 0usize;

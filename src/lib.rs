@@ -57,7 +57,10 @@ pub mod state;
 pub const CODEC_ID_STR: &str = "pict";
 
 pub use decoder::parse_pict;
-pub use encoder::encode_pict;
+pub use encoder::{
+    build_clip_rgn_rect, encode_pict, encode_pict_v1, encode_pict_v2, encode_pict_v2_with_clip,
+    pixel_data_sizes, PackType,
+};
 pub use error::{PictError, Result};
 pub use image::{PictImage, PictPixelFormat};
 

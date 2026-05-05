@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 3: `encode_pict_v2` with `PackType` selector: `Raw` (packType 1,
+  round-2 behaviour), `Packed24` (packType 2, 3 bytes/pixel, 25 % smaller),
+  `ComponentPackBits` (packType 4, component-separated PackBits per row,
+  typically 20–40 % smaller for photographic content). Self-roundtrips
+  through `parse_pict` for all three modes.
+- Round 3: `encode_pict_v1` — PICT v1 (8-bit opcode) writer. Emits a
+  10-byte picture-record header, v1 sentinel (`0x11 0x01`), and a v1
+  `DirectBitsRect` opcode (`0x9A`) with packType=1 raw pixels. No
+  512-byte launch-stub prefix. Decoder extended to handle `0x9A`/`0x9B`
+  (`DirectBitsRect`/`DirectBitsRgn`) in v1 opcode streams.
+- Round 3: `encode_pict_v2_with_clip` — injects a `ClipRgn` (`0x0001`)
+  opcode with a rectangular region into a v2 stream immediately after
+  the headerOp stanza.
+- Round 3: `build_clip_rgn_rect` — builds the raw `ClipRgn` opcode bytes
+  for a rectangular region (rgnSize=10, no inversion data).
+- Round 3: `pixel_data_sizes` — measurement helper returning
+  `(raw_bytes, packed_bytes)` for a given `PackType` without allocating
+  the full stream; used in tests to assert byte-savings ratios.
+- Round 3: `packbits::encode` promoted from `#[cfg(test)]` to a public
+  function so the encoder can use it at runtime.
+
+### Fixed
+
+- v1 decoder: added `DirectBitsRect` (opcode `0x9A`) and
+  `DirectBitsRgn` (opcode `0x9B`) to the v1 dispatch table. Previously
+  v1 streams with colour direct-bitmap opcodes returned
+  `Unsupported("unknown / unsupported v1 opcode 0x9A …")`.
+
 - Round 2: drawing-command rasteriser. Lines, rectangles, round-
   rectangles, ovals, arcs, polygons and regions are folded onto an
   in-crate software-rasteriser canvas (Bresenham line, mid-point
