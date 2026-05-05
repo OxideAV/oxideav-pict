@@ -1,6 +1,6 @@
 # oxideav-pict
 
-Pure-Rust PICT (Apple QuickDraw picture) reader for the
+Pure-Rust PICT (Apple QuickDraw picture) reader + writer for the
 [`oxideav`](https://github.com/OxideAV/oxideav) framework.
 
 Clean-room implementation of the public **Inside Macintosh: Imaging
@@ -12,26 +12,34 @@ NetPBM `picttoppm` source consulted.
 ## Decode
 
 PICT is opcode-based: the file is a stream of QuickDraw drawing
-commands. Round 1 walks the v2 (16-bit, word-aligned) opcode stream,
-correctly skips every drawing-state / drawing-shape / comment opcode
-by its published operand size, and extracts the first raster bitmap
-it finds.
+commands. Round 2 walks the v2 (16-bit, word-aligned) opcode stream,
+steps a small drawing-state machine and folds every command —
+lines, rectangles, round-rects, ovals, arcs, polygons, regions and
+embedded rasters — onto an in-crate software-rasteriser canvas. The
+canvas is sized to `picFrame`, pre-filled with the QuickDraw "paper"
+colour (white) and returned as the decoded `PictImage`.
 
-| Opcode   | Name                | Round-1 behaviour       |
+| Opcode   | Name                | Round-2 behaviour       |
 | -------- | ------------------- | ----------------------- |
 | `0x0000` | NOP                 | skip                    |
-| `0x0001` | ClipRgn             | size-prefixed skip      |
-| `0x0002`-`0x0010`, `0x0015`, `0x0016`, `0x001A`-`0x001F` | pen / colour / pattern / text state | fixed-size skip |
-| `0x0020`-`0x0023` | Line / LineFrom / ShortLine[From] | fixed-size skip |
-| `0x0028`-`0x002B` | Long/DH/DV/DHDV Text  | length-prefixed skip   |
+| `0x0001` | ClipRgn             | parse region (bbox + inversion data) |
+| `0x0002`-`0x0010`, `0x0015`, `0x0016`, `0x001A`-`0x001F` | pen / colour / pattern / text state | rasteriser tracks fg/bg colour, pen size, oval-corner size, origin |
+| `0x0020`-`0x0023` | Line / LineFrom / ShortLine[From] | **draw via Bresenham** |
+| `0x0028`-`0x002B` | Long/DH/DV/DHDV Text  | length-prefixed skip (no font rasteriser) |
 | `0x002C`-`0x002E` | FontName / LineJustify / GlyphState | size-prefixed skip |
-| `0x0030`-`0x006C` | Frame / Paint / Erase / Invert / Fill of Rect / RoundRect / Oval / Arc | fixed-size skip |
-| `0x0070`-`0x0074` | poly verbs          | size-prefixed skip      |
-| `0x0080`-`0x0084` | region verbs        | size-prefixed skip      |
+| `0x0030`-`0x006C` | Frame / Paint / Erase / Invert / Fill of Rect / RoundRect / Oval / Arc | **rasterise via in-crate kernel** |
+| `0x0070`-`0x0074` | Frame / Paint / Erase / Invert / Fill Poly | **rasterise via even-odd scanline** |
+| `0x0080`-`0x0084` | Frame / Paint / Erase / Invert / Fill Rgn | **rasterise (rect bbox + per-row inversion mask)** |
+| `0x0090` | **BitsRect**        | **decode -> RGBA** (1-bpp BitMap, raw rows) |
+| `0x0091` | **BitsRgn**         | **decode -> RGBA** (BitsRect + clip region) |
 | `0x0098` | **PackBitsRect**    | **decode -> RGBA** (1-bpp BitMap, PackBits-RLE rows) |
-| `0x009A` | **DirectBitsRect**  | **decode -> RGBA** (16-bit A1R5G5B5 / 32-bit XRGB / ARGB, packType=1) |
+| `0x0099` | **PackBitsRgn**     | **decode -> RGBA** (PackBitsRect + clip region) |
+| `0x009A` | **DirectBitsRect**  | **decode -> RGBA** (16-bit A1R5G5B5 / 32-bit XRGB|ARGB; packType 0/1 raw, 2 packed 24bpp, 3 u16-PackBits, 4 component-separated PackBits) |
+| `0x009B` | **DirectBitsRgn**   | **decode -> RGBA** (DirectBitsRect + clip region) |
 | `0x00A0` | ShortComment        | fixed-size skip         |
 | `0x00A1` | LongComment         | length-prefixed skip    |
+| `0x8200` | CompressedQuickTime | length-prefixed skip (embedded JPEG/RLE/Animation decode is a future round) |
+| `0x8201` | UncompressedQuickTime | length-prefixed skip   |
 | `0x00FF` | OpEndPic            | terminate               |
 
 The PICT version stanza (`0x0011 0x02FF` for v2, `0x1101` for v1) is
@@ -43,7 +51,13 @@ auto-detected by sniffing for a plausible picture record at offset
 
 PackBits (`n` byte: `0..=127` = literal `n+1` bytes; `129..=255` =
 repeat next byte `257-n` times; `128` = NOP) is implemented per
-Inside Macintosh §A-5; see [`packbits`](src/packbits.rs).
+Inside Macintosh §A-5; see [`packbits`](src/packbits.rs). The
+DirectBitsRect packType-3 variant uses the same RLE algorithm at u16
+unit size; packType 4 is byte-PackBits per channel plane.
+
+PICT v1 (8-bit opcodes) parses the same drawing-state machine plus a
+smaller raster opcode set (`BitsRect 0x90`, `BitsRgn 0x91`,
+`PackBitsRect 0x98`, `PackBitsRgn 0x99`).
 
 ```rust
 use oxideav_pict::{parse_pict, PictPixelFormat};
@@ -55,14 +69,31 @@ assert_eq!(img.data.len(), img.width as usize * img.height as usize * 4);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+## Encode
+
+A minimal writer ships in round 2: it emits a v2 PICT containing the
+input RGBA raster as a single `DirectBitsRect` (`0x009A`) with
+packType=1 32-bit pixels in `0xFF R G B` interleaved layout, plus the
+512-byte launch-stub prefix.
+
+```rust
+use oxideav_pict::{encode_pict, parse_pict};
+
+let rgba = vec![0u8; 4 * 4 * 4];
+let pict = encode_pict(4, 4, &rgba)?;
+let img = parse_pict(&pict)?;
+assert_eq!(img.width, 4);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 ## Standalone vs registry-integrated
 
 The crate's default `registry` Cargo feature pulls in `oxideav-core`
 and exposes the framework `Decoder` trait surface plus a
 `registry::register` entry point. Disable the feature
 (`default-features = false`) for an `oxideav-core`-free build that
-still exposes the standalone `parse_pict` API plus crate-local
-`PictImage` / `PictPixelFormat` / `PictError` types.
+still exposes the standalone `parse_pict` / `encode_pict` API plus
+crate-local `PictImage` / `PictPixelFormat` / `PictError` types.
 
 ```toml
 [dependencies]
@@ -73,26 +104,22 @@ oxideav-pict = "0.0"
 oxideav-pict = { version = "0.0", default-features = false }
 ```
 
-## What's not in round 1
+## What's not yet in
 
-* **Drawing-command extraction.** Lines, polygons, regions, text glyphs
-  are recognised + skipped, not rasterised. PICTs that contain only
-  drawing commands (no `PackBitsRect` / `DirectBitsRect`) decode as
-  `PictError::NoRaster` — round 2 will add a software rasteriser.
-* **DirectBitsRect packType 2 / 3 / 4.** Only the uncompressed
-  packType=1 form decodes; component-separated and packed 16-bit RLE
-  planes are deferred.
-* **Region-clipped raster.** `PackBitsRgn` (`0x0099`) and
-  `DirectBitsRgn` (`0x009B`) return `Unsupported`.
-* **CompressedQuickTime** (`0x8200`). Embedded JPEG / Animation / RLE
-  QuickTime ImageDescription decode is round-2.
-* **PICT v1 raster.** v1 (8-bit opcodes) is *detected* (sentinel
-  `0x1101`), but its raster opcodes return `Unsupported`.
-* **Multi-image PICTs.** Only the first extractable raster is
-  surfaced; PICTs with several embedded images need a different API
-  shape.
-* **PICT writing.** Many opcodes to emit + old-Mac-only consumer
-  base — round 2 at the earliest.
+* **Drawing-clipping by region.** `ClipRgn` is parsed but the resulting
+  mask isn't yet honoured by subsequent drawing primitives.
+* **Pattern fills (`PnPat`, `BkPixPat`, `PnPixPat`, `FillPixPat`).**
+  Solid-colour ink only — patterns return `Unsupported`.
+* **Text glyphs.** `LongText` / `DH/DV/DHDVText` are walked past but
+  not rasterised — a TrueType engine is a separate round.
+* **CompressedQuickTime decode.** The opcode is parsed (length-prefixed
+  payload skipped cleanly so the surrounding decode keeps going), but
+  the embedded image (typically JPEG) is not decoded — that needs
+  `oxideav-mjpeg`'s `decode_jpeg` exposed publicly.
+* **Pen-size aware line/frame draws.** Pen size is tracked in the
+  state machine but the rasteriser draws single-pixel pen only.
+* **Multi-image PICTs.** Each subsequent raster blits onto the same
+  canvas — no separate per-image surfaces.
 
 ## License
 

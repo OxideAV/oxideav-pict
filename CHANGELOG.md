@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 2: drawing-command rasteriser. Lines, rectangles, round-
+  rectangles, ovals, arcs, polygons and regions are folded onto an
+  in-crate software-rasteriser canvas (Bresenham line, mid-point
+  ellipse, even-odd active-edge-list polygon scanline) sized to
+  `picFrame` and pre-filled with the QuickDraw "paper" colour. PICTs
+  containing only drawing commands now decode to an actual raster
+  instead of returning `NoRaster`. Drawing-state machine
+  ([`PictState`]) tracks pen position / size, foreground /
+  background colour, oval-corner size, and the last-rect /
+  -roundrect / -oval / -arc operands consumed by the *SameRect*
+  family.
+- Round 2: `DirectBitsRect` packType 2 (3-byte interleaved RGB),
+  packType 3 (16-bit u16-PackBits) and packType 4 (component-
+  separated PackBits, 3 or 4 channels) decoding.
+- Round 2: `BitsRect` (`0x0090`) and `BitsRgn` (`0x0091`)
+  uncompressed 1-bpp BitMap decoding.
+- Round 2: `PackBitsRgn` (`0x0099`) and `DirectBitsRgn` (`0x009B`)
+  region-clipped raster paths — region payload parsed; embedded
+  raster decoded and composited (clip-mask use deferred).
+- Round 2: PICT v1 (8-bit opcode) raster + drawing decode —
+  `BitsRect`, `BitsRgn`, `PackBitsRect`, `PackBitsRgn` all decode;
+  same drawing-state machine as v2.
+- Round 2: minimal PICT v2 writer (`encode_pict`) emitting one
+  `DirectBitsRect` with packType=1 32-bit pixels per the picFrame
+  bounds, plus the 512-byte launch-stub prefix.
+- Round 2: `Region` parser (`region.rs`) covering both rectangular
+  regions (rgnSize == 10) and inversion-encoded regions per the
+  Apple §2 algorithm — running x-flip parity per scanline.
+- Round 2: `CompressedQuickTime` (`0x8200`) and
+  `UncompressedQuickTime` (`0x8201`) opcode parsing — length-prefixed
+  payload skipped cleanly so the surrounding PICT decode no longer
+  wedges.
 - Round 1: clean-room PICT reader per the public **Inside Macintosh:
   Imaging With QuickDraw** (Apple, 1994). PICT v1 (8-bit opcodes) +
   v2 (16-bit, word-aligned opcodes) framing.
@@ -40,20 +72,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extensions (`.pict`, `.pic`, `.pct`) against the `"pict"` codec id
   in the framework `ContainerRegistry`.
 
-### Deferred to round 2
+### Deferred to round 3
 
-- Drawing-command extraction (lines / polygons / regions / text glyphs
-  raster-rendered to a synthesised image canvas). Round 1 only
-  surfaces *raster* bitmaps embedded via PackBitsRect / DirectBitsRect.
-- PackType 2 / 3 / 4 of DirectBitsRect (component-separated and packed
-  16-bit RLE planes).
-- `PackBitsRgn` (`0x0099`) and `DirectBitsRgn` (`0x009B`) region-clipped
-  raster paths.
-- `CompressedQuickTime` (`0x8200`) opcode — embedded JPEG / Animation /
-  RLE QuickTime ImageDescription decode.
-- v1 raster opcodes (`BitsRect` `0x90`, `BitsRgn` `0x91`, `PackBitsRect`
-  `0x98` 8-bit form, `PackBitsRgn` `0x99` 8-bit form). v1 *header* is
-  parsed; v1 raster opcodes return `Unsupported` in round 1.
-- Multi-image PICT files (current API surfaces only the *first*
-  extractable raster).
-- PICT writing — many opcodes to emit, old-Mac-only consumer base.
+- Drawing-clipping by region. `ClipRgn` is parsed but the resulting
+  mask isn't yet honoured by subsequent drawing primitives; same for
+  the clip mask in `PackBitsRgn` / `DirectBitsRgn` (the embedded
+  raster decodes + blits but doesn't honour the supplied region).
+- Pattern fills (`PnPat`, `BkPixPat`, `PnPixPat`, `FillPixPat`).
+  Solid-colour ink only — patterns return `Unsupported`.
+- Text-glyph rasterisation (`LongText` / `DH/DV/DHDVText`). Currently
+  walked-past without rendering — needs a TrueType engine.
+- CompressedQuickTime decode. The opcode is parsed (skipped) but the
+  embedded image (typically JPEG) is not decoded — needs
+  `oxideav-mjpeg`'s `decode_jpeg` exposed publicly.
+- Pen-size aware line / frame draws. Pen size is tracked in the
+  state machine but the rasteriser draws single-pixel pen only.
+- Multi-image PICTs as separate surfaces. Currently each subsequent
+  raster blits onto the same canvas.

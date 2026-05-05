@@ -9,22 +9,27 @@
 //! ## Status
 //!
 //! PICT is opcode-based: the file is a stream of QuickDraw drawing
-//! commands. Round 1 *recognises* the entire v2 opcode roster — pen /
-//! colour / font / pattern state, line / rect / oval / round-rect /
-//! arc / poly / region drawing verbs, text glyph emit, comments — and
-//! correctly walks past every opcode by its published operand size,
-//! so the decoder can reach the *raster* opcodes (`PackBitsRect` =
-//! `0x0098`, `DirectBitsRect` = `0x009A`) regardless of how much
-//! drawing-state padding the encoder chose to emit.
+//! commands. Round 2 walks the v2 opcode stream, steps a small
+//! drawing-state machine ([`state::PictState`]) and folds every
+//! drawing command (line / rect / round-rect / oval / arc / poly /
+//! region / raster) onto an in-crate software-rasteriser canvas
+//! ([`raster::Canvas`]). DirectBitsRect packTypes 0/1 (uncompressed),
+//! 2 (3-byte packed RGB), 3 (16-bit u16-PackBits) and 4 (component-
+//! separated PackBits) all decode. PackBitsRgn / DirectBitsRgn region
+//! variants are honoured for the embedded raster (clip-mask use is a
+//! future round).
 //!
-//! The drawing commands themselves aren't *rasterised* in round 1 —
-//! the decoder returns the first raster bitmap it finds. PICTs that
-//! contain only drawing commands (no `PackBitsRect` / `DirectBitsRect`)
-//! produce [`PictError::NoRaster`].
+//! v1 PICTs (8-bit opcodes) parse the same drawing-state machine and
+//! a smaller raster opcode set (`BitsRect 0x90`, `BitsRgn 0x91`,
+//! `PackBitsRect 0x98`, `PackBitsRgn 0x99`).
 //!
-//! v1 PICTs (8-bit opcodes) are detected (sentinel `0x1101`) but
-//! their raster opcodes return [`PictError::Unsupported`]; the
-//! workspace's modern targets are all v2.
+//! `CompressedQuickTime` (`0x8200`) and `UncompressedQuickTime`
+//! (`0x8201`) opcodes are *parsed* (length-prefixed payload skipped
+//! cleanly) so they don't wedge a surrounding-PICT decode, but the
+//! embedded image (typically JPEG) is not yet decoded.
+//!
+//! Text glyph opcodes (`LongText` / `DH/DV/DHDVText`) are walked but
+//! not rasterised — that needs a TrueType engine.
 //!
 //! ## Standalone vs registry-integrated
 //!
@@ -36,18 +41,23 @@
 //! [`PictImage`] / [`PictPixelFormat`] / [`PictError`] types.
 
 pub mod decoder;
+pub mod encoder;
 pub mod error;
 pub mod image;
 pub mod opcodes;
 pub mod packbits;
+pub mod raster;
 pub mod reader;
+pub mod region;
 #[cfg(feature = "registry")]
 pub mod registry;
+pub mod state;
 
 /// Codec id for PICT image frames.
 pub const CODEC_ID_STR: &str = "pict";
 
 pub use decoder::parse_pict;
+pub use encoder::encode_pict;
 pub use error::{PictError, Result};
 pub use image::{PictImage, PictPixelFormat};
 
