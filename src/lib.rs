@@ -65,4 +65,4 @@ pub use error::{PictError, Result};
 pub use image::{PictImage, PictPixelFormat};
 
 #[cfg(feature = "registry")]
-pub use registry::{register, register_codecs, register_containers};
+pub use registry::{__oxideav_entry, register, register_codecs, register_containers};
