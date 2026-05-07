@@ -45,6 +45,7 @@ pub mod encoder;
 pub mod error;
 pub mod image;
 pub mod opcodes;
+pub mod ops;
 pub mod packbits;
 pub mod raster;
 pub mod reader;
@@ -63,6 +64,11 @@ pub use encoder::{
 };
 pub use error::{PictError, Result};
 pub use image::{PictImage, PictPixelFormat};
+pub use ops::{
+    build_arc_op, build_line, build_line_from, build_oval_op, build_oval_size, build_pn_size,
+    build_poly_op, build_rect_op, build_rgb_bk_col, build_rgb_fg_col, build_rgn_inverted_op,
+    build_rgn_rect_op, build_round_rect_op, PictBuilder, Verb,
+};
 
 #[cfg(feature = "registry")]
 pub use registry::{__oxideav_entry, register, register_codecs, register_containers};

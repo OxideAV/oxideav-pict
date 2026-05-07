@@ -180,6 +180,49 @@ pub fn encode(src: &[u8]) -> Vec<u8> {
     out
 }
 
+/// PackBits encoder where the replicated unit is a `u16` (big-endian).
+/// Mirrors [`encode`] but operates on `u16` pixels — used by
+/// DirectBitsRect packType 3.
+///
+/// `src` is a flat `&[u16]` row of pixels (caller-supplied; one row per
+/// call). The output is a `Vec<u8>` of packets where each "byte" of
+/// data is a u16 BE pair on the wire. Per Inside Macintosh §A-5 the
+/// flag-byte semantics carry over verbatim — only the unit size
+/// changes.
+pub fn encode_u16(src: &[u16]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(src.len() * 2 + src.len() / 32);
+    let mut i = 0usize;
+    while i < src.len() {
+        // Detect a run of >= 3 identical pixels starting at i (cap 128).
+        let mut run = 1usize;
+        while run < 128 && i + run < src.len() && src[i + run] == src[i] {
+            run += 1;
+        }
+        if run >= 3 {
+            out.push((1i32 - run as i32) as i8 as u8);
+            out.extend_from_slice(&src[i].to_be_bytes());
+            i += run;
+            continue;
+        }
+        // Raw packet: collect up to 128 pixels stopping just before any
+        // ≥ 3-pixel run.
+        let mut raw = 1usize;
+        while raw < 128 && i + raw < src.len() {
+            let s = i + raw;
+            if s + 2 < src.len() && src[s] == src[s + 1] && src[s + 1] == src[s + 2] {
+                break;
+            }
+            raw += 1;
+        }
+        out.push((raw - 1) as u8);
+        for k in 0..raw {
+            out.extend_from_slice(&src[i + k].to_be_bytes());
+        }
+        i += raw;
+    }
+    out
+}
+
 #[cfg(test)]
 mod encode_tests {
     use super::*;
@@ -215,5 +258,73 @@ mod encode_tests {
         let mut out = vec![0u8; src.len()];
         decode_into(&mut r, &mut out).unwrap();
         assert_eq!(out, src);
+    }
+
+    #[test]
+    fn roundtrip_u16_runs_and_literals() {
+        // Mix of a run + literal stretch + run.
+        let src: Vec<u16> = vec![
+            0x0001, 0x0001, 0x0001, 0x0001, // run of 4
+            0xABCD, 0x1234, 0x5678, // literal block
+            0x9ABC, 0x9ABC, 0x9ABC, // run of 3
+        ];
+        let encoded = encode_u16(&src);
+        let mut r = Reader::new(&encoded);
+        let mut out = vec![0u8; src.len() * 2];
+        decode_packbits_u16_into(&mut r, &mut out).unwrap();
+        let mut decoded = Vec::with_capacity(src.len());
+        for chunk in out.chunks_exact(2) {
+            decoded.push(u16::from_be_bytes([chunk[0], chunk[1]]));
+        }
+        assert_eq!(decoded, src);
+    }
+
+    #[test]
+    fn roundtrip_u16_solid_block() {
+        let src = vec![0xA5A5u16; 200];
+        let encoded = encode_u16(&src);
+        // Run-encoded — should be much smaller than 400 raw bytes.
+        assert!(encoded.len() < 50, "expected high RLE compression");
+        let mut r = Reader::new(&encoded);
+        let mut out = vec![0u8; src.len() * 2];
+        decode_packbits_u16_into(&mut r, &mut out).unwrap();
+        for (i, chunk) in out.chunks_exact(2).enumerate() {
+            assert_eq!(u16::from_be_bytes([chunk[0], chunk[1]]), src[i]);
+        }
+    }
+
+    /// Local copy of the decoder's `decode_packbits_u16_into` so this
+    /// crate's encoder unit-tests don't need to reach across to the
+    /// decoder module. Identical algorithm to the decoder version.
+    fn decode_packbits_u16_into(src: &mut Reader<'_>, out: &mut [u8]) -> Result<()> {
+        let expected_pixels = out.len() / 2;
+        let mut written = 0usize;
+        while written < expected_pixels {
+            let flag = src.read_u8()? as i8;
+            if flag >= 0 {
+                let n = flag as usize + 1;
+                if written + n > expected_pixels {
+                    return Err(PictError::invalid("u16 raw overrun"));
+                }
+                let bytes = src.read_bytes(n * 2)?;
+                out[written * 2..(written + n) * 2].copy_from_slice(bytes);
+                written += n;
+            } else if flag == -128 {
+                continue;
+            } else {
+                let n = (1 - flag as i32) as usize;
+                if written + n > expected_pixels {
+                    return Err(PictError::invalid("u16 run overrun"));
+                }
+                let lo = src.read_u8()?;
+                let hi = src.read_u8()?;
+                for px in 0..n {
+                    out[(written + px) * 2] = lo;
+                    out[(written + px) * 2 + 1] = hi;
+                }
+                written += n;
+            }
+        }
+        Ok(())
     }
 }

@@ -43,6 +43,12 @@ pub enum PackType {
     /// packType 2 — 3 bytes per pixel (`R G B`), no pad/fill byte.
     /// 25 % smaller than `Raw` for opaque images.
     Packed24,
+    /// packType 3 — 16-bit-per-pixel (A1R5G5B5), each row PackBits-RLE
+    /// at u16 unit size. Typically 30–60 % smaller than `Raw` and the
+    /// pixel format Mac Color QuickDraw used for video memory until
+    /// the 32-bit transition. Slight quality loss vs `Raw` (5 bits per
+    /// channel instead of 8); the alpha bit is always set.
+    Rle16,
     /// packType 4 — component-separated PackBits. Each row's R, G, B
     /// planes encoded independently by [`packbits::encode`]. Typically
     /// 20–40 % smaller than `Raw` for photographic content; larger than
@@ -74,10 +80,18 @@ pub fn encode_pict(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
 pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> Result<Vec<u8>> {
     validate_dims(width, height, data)?;
 
-    let row_bytes_raw: usize = width as usize * 4; // raw stride always 4 bpp
+    // For packType 3 the on-disk pixel is a 16-bit u16; for the other
+    // packTypes it's 32 bits. `row_bytes_raw` is the rowBytes value
+    // we write into the PixMap header — the *uncompressed* byte
+    // stride per row, in pixel-size units.
+    let row_bytes_raw: usize = match pack {
+        PackType::Rle16 => width as usize * 2,
+        _ => width as usize * 4,
+    };
     let row_bytes_disk: usize = match pack {
         PackType::Raw => width as usize * 4,
         PackType::Packed24 => width as usize * 3,
+        PackType::Rle16 => width as usize * 2, // post-PackBits byte count varies
         PackType::ComponentPackBits => width as usize * 4,
     };
     if row_bytes_disk > 0x3FFF {
@@ -89,6 +103,7 @@ pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> R
     let pack_type_word: u16 = match pack {
         PackType::Raw => 1,
         PackType::Packed24 => 2,
+        PackType::Rle16 => 3,
         PackType::ComponentPackBits => 4,
     };
 
@@ -133,10 +148,14 @@ pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> R
     write_u32(&mut out, 0x00480000);
 
     // pixelType, pixelSize, cmpCount, cmpSize.
+    let (pixel_size, cmp_size) = match pack {
+        PackType::Rle16 => (16u16, 5u16),
+        _ => (32u16, 8u16),
+    };
     write_u16(&mut out, 16); // RGBDirect
-    write_u16(&mut out, 32);
+    write_u16(&mut out, pixel_size);
     write_u16(&mut out, 3); // cmpCount=3 (no alpha plane)
-    write_u16(&mut out, 8);
+    write_u16(&mut out, cmp_size);
 
     // planeBytes, pmTable, pmReserved.
     write_u32(&mut out, 0);
@@ -175,6 +194,26 @@ pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> R
                     out.push(px[1]);
                     out.push(px[2]);
                 }
+            }
+            PackType::Rle16 => {
+                // Pack each pixel as A1R5G5B5 BE, then u16-PackBits.
+                let mut row_u16: Vec<u16> = Vec::with_capacity(w);
+                for px in row_in.chunks_exact(4) {
+                    let r5 = (px[0] >> 3) as u16 & 0x1F;
+                    let g5 = (px[1] >> 3) as u16 & 0x1F;
+                    let b5 = (px[2] >> 3) as u16 & 0x1F;
+                    let a1 = 0x8000u16; // alpha bit always set
+                    row_u16.push(a1 | (r5 << 10) | (g5 << 5) | b5);
+                }
+                let encoded = packbits::encode_u16(&row_u16);
+                let total = encoded.len();
+                // byteCount prefix: 1 byte if rowBytes <= 250, else 2.
+                if row_bytes_raw > 250 {
+                    write_u16(&mut out, total as u16);
+                } else {
+                    out.push(total as u8);
+                }
+                out.extend_from_slice(&encoded);
             }
             PackType::ComponentPackBits => {
                 // Separate R, G, B planes then PackBits-encode each.
@@ -394,6 +433,25 @@ pub fn pixel_data_sizes(width: u32, height: u32, data: &[u8], pack: PackType) ->
     let packed_size = match pack {
         PackType::Raw => raw_size,
         PackType::Packed24 => width as usize * height as usize * 3,
+        PackType::Rle16 => {
+            let w = width as usize;
+            let h = height as usize;
+            let mut total = 0usize;
+            for y in 0..h {
+                let row = &data[y * w * 4..(y + 1) * w * 4];
+                let mut row_u16: Vec<u16> = Vec::with_capacity(w);
+                for px in row.chunks_exact(4) {
+                    let r5 = (px[0] >> 3) as u16 & 0x1F;
+                    let g5 = (px[1] >> 3) as u16 & 0x1F;
+                    let b5 = (px[2] >> 3) as u16 & 0x1F;
+                    row_u16.push(0x8000 | (r5 << 10) | (g5 << 5) | b5);
+                }
+                let enc = packbits::encode_u16(&row_u16);
+                let prefix_len = if w * 2 > 250 { 2 } else { 1 };
+                total += prefix_len + enc.len();
+            }
+            total
+        }
         PackType::ComponentPackBits => {
             let w = width as usize;
             let h = height as usize;

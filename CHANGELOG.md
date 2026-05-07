@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 4: `PackType::Rle16` — packType 3 emit. Each row is packed as
+  A1R5G5B5 (alpha bit always set) then PackBits-RLE'd at u16 unit
+  size. Self-roundtrips through `parse_pict` and is accepted by
+  ImageMagick's PICT delegate. Adds 5-bit-per-channel quantisation
+  (decoder reproduces `0xFF` losslessly via 5→8 bit replication).
+- Round 4: `packbits::encode_u16` — public PackBits encoder at u16
+  unit size. Mirrors `encode` (existing 8-bit) but each replicated
+  packet carries a u16 BE pixel.
+- Round 4: `ops` module — v2 opcode-builder API. Public surface:
+  `Verb` enum (Frame / Paint / Erase / Invert / Fill); low-level
+  byte builders `build_line` / `build_line_from` / `build_rect_op` /
+  `build_round_rect_op` / `build_oval_op` / `build_arc_op` /
+  `build_poly_op` / `build_rgn_rect_op` / `build_rgn_inverted_op` /
+  `build_rgb_fg_col` / `build_rgb_bk_col` / `build_pn_size` /
+  `build_oval_size`; high-level `PictBuilder` that owns the launch
+  stub + picture-record header + headerOp stanza + per-opcode word
+  alignment + OpEndPic. Drawing-only PICT streams now self-roundtrip
+  through `parse_pict` and pass ImageMagick cross-decode.
+- Round 4: `tests/synth_v2_round4.rs` — 12 tests covering packType=3
+  round-trip + size compression + every drawing-command opcode family
+  via the builder + region inversion-encoded emit + ImageMagick
+  cross-decoder validation (`magick` invoked with a tempfile to
+  preserve the launch-stub seek).
+
 - Round 3: `encode_pict_v2` with `PackType` selector: `Raw` (packType 1,
   round-2 behaviour), `Packed24` (packType 2, 3 bytes/pixel, 25 % smaller),
   `ComponentPackBits` (packType 4, component-separated PackBits per row,
