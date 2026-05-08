@@ -48,6 +48,13 @@ pub struct Canvas {
     /// distinguish "no drawing happened" from "deliberately drew
     /// nothing visible".
     pub dirty: bool,
+    /// Optional canvas-local boolean clip mask. `None` means draw
+    /// everywhere; `Some(mask)` is `width × height` row-major bools
+    /// (`true` = inside clip, `false` = outside). Set by the decoder
+    /// from a `ClipRgn` opcode (round 42); honoured by every plot
+    /// primitive (`put` / `span` / `blit`) so subsequent drawing /
+    /// raster ops are masked.
+    pub clip: Option<Vec<bool>>,
 }
 
 impl Canvas {
@@ -66,6 +73,23 @@ impl Canvas {
             height,
             data,
             dirty: false,
+            clip: None,
+        }
+    }
+
+    /// True if pixel `(x, y)` (canvas-local) is in-bounds and inside
+    /// any active clip mask.
+    #[inline]
+    fn in_clip(&self, x: i32, y: i32) -> bool {
+        if x < 0 || y < 0 || (x as u32) >= self.width || (y as u32) >= self.height {
+            return false;
+        }
+        match &self.clip {
+            None => true,
+            Some(mask) => {
+                let idx = (y as u32 * self.width + x as u32) as usize;
+                mask[idx]
+            }
         }
     }
 
@@ -74,10 +98,11 @@ impl Canvas {
     /// against `(width, height)` first to keep the inner loops branch-
     /// free, but we still defensively bound here to handle the
     /// integer-arithmetic edge cases (rounding, off-by-one) that
-    /// pop out of the ellipse / arc primitives.
+    /// pop out of the ellipse / arc primitives. Writes outside the
+    /// active clip mask (if any) are also dropped.
     #[inline]
     pub fn put(&mut self, x: i32, y: i32, c: Rgba) {
-        if x < 0 || y < 0 || (x as u32) >= self.width || (y as u32) >= self.height {
+        if !self.in_clip(x, y) {
             return;
         }
         let off = ((y as u32 * self.width + x as u32) * 4) as usize;
@@ -93,6 +118,7 @@ impl Canvas {
 
     /// Fill a horizontal span `[x0, x1)` at row `y` with `c`. Coords
     /// are clipped to the canvas; out-of-range spans are no-ops.
+    /// Pixels outside the active clip mask (if any) are dropped.
     pub fn span(&mut self, y: i32, x0: i32, x1: i32, c: Rgba) {
         if y < 0 || (y as u32) >= self.height {
             return;
@@ -103,14 +129,36 @@ impl Canvas {
             return;
         }
         let row = y as u32 * self.width;
-        for x in lo..hi {
-            let off = ((row + x as u32) * 4) as usize;
-            self.data[off] = c.r;
-            self.data[off + 1] = c.g;
-            self.data[off + 2] = c.b;
-            self.data[off + 3] = c.a;
+        match &self.clip {
+            None => {
+                for x in lo..hi {
+                    let off = ((row + x as u32) * 4) as usize;
+                    self.data[off] = c.r;
+                    self.data[off + 1] = c.g;
+                    self.data[off + 2] = c.b;
+                    self.data[off + 3] = c.a;
+                }
+                self.dirty = true;
+            }
+            Some(mask) => {
+                let mut any = false;
+                for x in lo..hi {
+                    let idx = (row + x as u32) as usize;
+                    if !mask[idx] {
+                        continue;
+                    }
+                    let off = idx * 4;
+                    self.data[off] = c.r;
+                    self.data[off + 1] = c.g;
+                    self.data[off + 2] = c.b;
+                    self.data[off + 3] = c.a;
+                    any = true;
+                }
+                if any {
+                    self.dirty = true;
+                }
+            }
         }
-        self.dirty = true;
     }
 
     /// Composite an externally-decoded RGBA raster into the canvas at
@@ -118,7 +166,8 @@ impl Canvas {
     /// `src_rgba` is `src_w × src_h` packed RGBA. If src and dst sizes
     /// differ we fall back to nearest-neighbour resampling — PICT
     /// allows scaled blits via dstRect != srcRect in `PackBitsRect` /
-    /// `DirectBitsRect`. Out-of-canvas dst pixels are clipped.
+    /// `DirectBitsRect`. Out-of-canvas dst pixels are clipped, and
+    /// pixels outside the active clip mask (if any) are dropped.
     pub fn blit(
         &mut self,
         src_rgba: &[u8],
@@ -146,7 +195,7 @@ impl Canvas {
             for dx in 0..dst_w {
                 let sx = (dx as u64 * src_w as u64 / dst_w as u64) as u32;
                 let cx = dst_left + dx as i32;
-                if cx < 0 || (cx as u32) >= self.width {
+                if !self.in_clip(cx, cy) {
                     continue;
                 }
                 let s_off = ((sy * src_w + sx) * 4) as usize;
@@ -577,6 +626,136 @@ fn arc_range(start_deg: i32, arc_deg: i32) -> (f64, f64) {
     } else {
         (b, a)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pen-size aware drawing — round 42.
+// ---------------------------------------------------------------------------
+//
+// QuickDraw `PnSize` (Inside Macintosh: Imaging With QuickDraw §2,
+// "Setting the Pen Size") attaches a per-axis thickness `(pen_h,
+// pen_v)` to the pen. Subsequent `Line` / `LineFrom` / `Frame*` ops
+// extrude the geometry by a `pen_h × pen_v` brush whose top-left
+// corner is the geometric pixel. We implement that as a brush stamp:
+// each pen plot writes a `pen_h × pen_v` rectangle. Pen sizes of
+// `(1, 1)` (the default) collapse to the original 1-pixel primitive,
+// so the pen-thick variants degrade gracefully.
+
+/// Stamp a pen-sized brush (`pen_h × pen_v` rectangle, top-left at
+/// `(x, y)`) onto the canvas. Used by every pen-aware primitive.
+#[inline]
+fn stamp_pen(canvas: &mut Canvas, x: i32, y: i32, pen_h: i32, pen_v: i32, c: Rgba) {
+    if pen_h <= 1 && pen_v <= 1 {
+        canvas.put(x, y, c);
+        return;
+    }
+    let w = pen_h.max(1);
+    let h = pen_v.max(1);
+    for dy in 0..h {
+        canvas.span(y + dy, x, x + w, c);
+    }
+}
+
+/// Bresenham line with a `pen_h × pen_v` brush stamped at every
+/// rasterised pixel. Falls back to [`line`] when the pen is 1×1.
+pub fn line_thick(
+    canvas: &mut Canvas,
+    mut x0: i32,
+    mut y0: i32,
+    x1: i32,
+    y1: i32,
+    pen_h: i32,
+    pen_v: i32,
+    c: Rgba,
+) {
+    if pen_h <= 1 && pen_v <= 1 {
+        line(canvas, x0, y0, x1, y1, c);
+        return;
+    }
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    loop {
+        stamp_pen(canvas, x0, y0, pen_h, pen_v, c);
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x0 += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+/// Outline rectangle drawn with a `pen_h × pen_v` brush along each
+/// edge. The brush extends inward from each edge per QuickDraw's
+/// `framePen` rule (Inside Macintosh §2: "the pen size is added to
+/// the rectangle's right and bottom"). Falls back to [`frame_rect`]
+/// for 1×1 pens.
+pub fn frame_rect_thick(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pen_h: i32,
+    pen_v: i32,
+    c: Rgba,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    if pen_h <= 1 && pen_v <= 1 {
+        frame_rect(canvas, top, left, bottom, right, c);
+        return;
+    }
+    let ph = pen_h.max(1);
+    let pv = pen_v.max(1);
+    // Top + bottom strips (each `pv` rows thick).
+    for dy in 0..pv {
+        canvas.span(top + dy, left, right, c);
+        canvas.span(bottom - 1 - dy, left, right, c);
+    }
+    // Left + right strips (each `ph` cols thick), excluding the
+    // corners we already drew.
+    for y in (top + pv)..(bottom - pv) {
+        for dx in 0..ph {
+            canvas.put(left + dx, y, c);
+            canvas.put(right - 1 - dx, y, c);
+        }
+    }
+}
+
+/// Frame oval with a brush of `pen_h × pen_v` stamped at every
+/// boundary pixel. Approximation: stamps overlap on adjacent boundary
+/// pixels; QuickDraw's exact rule is "draw the boundary as if it were
+/// the outline of a `(right + ph - left) × (bottom + pv - top)`
+/// ellipse" but stamping is visually close and matches the
+/// rasteriser's other thick-pen primitives.
+pub fn frame_oval_thick(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pen_h: i32,
+    pen_v: i32,
+    c: Rgba,
+) {
+    if pen_h <= 1 && pen_v <= 1 {
+        frame_oval(canvas, top, left, bottom, right, c);
+        return;
+    }
+    walk_ellipse(top, left, bottom, right, |x, y| {
+        stamp_pen(canvas, x, y, pen_h, pen_v, c);
+    });
 }
 
 #[cfg(test)]

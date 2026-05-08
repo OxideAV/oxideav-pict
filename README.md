@@ -85,7 +85,9 @@ emit, and a builder-with-raster path:
 | `encode_pict_v1_with(…, PackType)` | v1, packType 1 / 2 / 3 / 4 | round 5 — v1 emit gains the same PackType selector as v2; no 512-byte stub, no headerOp |
 | `encode_pict_bits_rect` | v2 + `BitsRect` (`0x0090`) | round 5 — 1-bpp BitMap, raw rows; RGBA reduced via 50 %-luminance threshold |
 | `encode_pict_pack_bits_rect` | v2 + `PackBitsRect` (`0x0098`) | round 5 — 1-bpp BitMap, PackBits-RLE rows when `rowBytes >= 8` (raw fall-through for narrower bitmaps) |
-| `encode_pict_v2_with_clip` | v2 + `ClipRgn` opcode | Injects rectangular `ClipRgn` before pixel data |
+| `encode_pict_bits_rgn` | v2 + `BitsRgn` (`0x0091`) | round 6 — 1-bpp BitMap with rectangular clip-region attached after the rect/mode header |
+| `encode_pict_pack_bits_rgn` | v2 + `PackBitsRgn` (`0x0099`) | round 6 — masked PackBits-RLE 1-bpp variant; rectangular clip region injected |
+| `encode_pict_v2_with_clip` | v2 + `ClipRgn` opcode | Injects rectangular `ClipRgn` before pixel data; honoured by the decoder as a draw-time mask (round 6) |
 | `ops::PictBuilder` | v2 drawing-command synth | assembles drawing PICT streams from line / rect / round-rect / oval / arc / polygon / region opcodes (`build_*_op` low-level helpers also exposed) |
 | `PictBuilder::raster` | drawing + raster combined | round 5 — appends a `DirectBitsRect` raster onto a builder so callers can mix drawing primitives + raster in the same v2 stream |
 | `build_direct_bits_rect_op` | DirectBitsRect opcode bytes | round 5 — public helper for the raw `0x009A` opcode bytes (no stub / header / OpEndPic) |
@@ -175,9 +177,6 @@ oxideav-pict = { version = "0.0", default-features = false }
 
 ## What's not yet in
 
-* **Drawing-clipping by region.** `ClipRgn` is parsed (and `encode_pict_v2_with_clip`
-  now emits it), but the resulting mask isn't yet honoured by subsequent
-  drawing primitives — clip-region enforcement is a future round.
 * **Pattern fills (`PnPat`, `BkPixPat`, `PnPixPat`, `FillPixPat`).**
   Solid-colour ink only — patterns return `Unsupported`.
 * **Text glyphs.** `LongText` / `DH/DV/DHDVText` are walked past but
@@ -186,17 +185,11 @@ oxideav-pict = { version = "0.0", default-features = false }
   payload skipped cleanly so the surrounding decode keeps going), but
   the embedded image (typically JPEG) is not decoded — that needs
   `oxideav-mjpeg`'s `decode_jpeg` exposed publicly.
-* **Pen-size aware line/frame draws.** Pen size is tracked in the
-  state machine but the rasteriser draws single-pixel pen only.
 * **Multi-image PICTs.** Each subsequent raster blits onto the same
   canvas — no separate per-image surfaces.
 * **8-bit-indexed PixMaps.** `DirectBitsRect` (`0x009A`) only; the
   indexed-colour `PackBitsRect`-as-PixMap path with a colour table
   is a future round.
-* **`BitsRgn` / `PackBitsRgn` encoders.** The `BitsRgn` (`0x0091`)
-  and `PackBitsRgn` (`0x0099`) variants — 1-bpp BitMap with a clip
-  region — are decoded but not yet emit-able through a public
-  encoder helper.
 
 ## License
 

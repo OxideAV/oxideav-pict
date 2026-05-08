@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 6: drawing-clipping by region. The decoder now honours
+  `ClipRgn` (v2 `0x0001`, v1 `0x01`) and the per-blit region embedded
+  in `BitsRgn` (`0x0091`) / `PackBitsRgn` (`0x0099`) /
+  `DirectBitsRgn` (`0x009B`). Implementation: `Canvas` carries an
+  optional `width × height` boolean mask; every plot primitive
+  (`Canvas::put` / `Canvas::span` / `Canvas::blit`) consults it.
+  `ClipRgn` is materialised once into a canvas-local mask and survives
+  across opcodes; per-blit `Rgn` opcodes intersect their region with
+  the active clip for that blit only and restore afterwards.
+- Round 6: pen-size aware drawing. `Line` / `LineFrom` / `ShortLine` /
+  `ShortLineFrom` / `Frame(Rect|Oval)` now stamp a `pen_h × pen_v`
+  brush at every plot per `PnSize`. New rasteriser primitives
+  `line_thick`, `frame_rect_thick`, `frame_oval_thick`. 1×1 pens
+  collapse to the original 1-pixel primitives so default behaviour
+  is unchanged.
+- Round 6: `encode_pict_bits_rgn` (`0x0091`) /
+  `encode_pict_pack_bits_rgn` (`0x0099`) — 1-bpp BitMap encoders
+  with an attached rectangular clip region. Mirror round 5's
+  `encode_pict_bits_rect` / `encode_pict_pack_bits_rect` byte layout
+  with a 10-byte rectangular region inserted after the rect/mode
+  header.
+- Round 6: `tests/synth_v2_round6.rs` — 13 round-trip tests covering
+  `ClipRgn` masks (raster + drawing primitives + line), pen-size aware
+  lines + frame-rects (3×3, 2×2, 1×1 fallback), and `BitsRgn` /
+  `PackBitsRgn` encoders (full-clip + narrow-clip + RLE-branch
+  round-trip + size-mismatch rejection).
+
 - Round 5: `encode_pict_v1_with` — v1 PICT emit with a `PackType`
   selector (raw / packed-24 / 16-bpp PackBits / component-separated
   PackBits), bringing v1 emit to parity with v2. The legacy

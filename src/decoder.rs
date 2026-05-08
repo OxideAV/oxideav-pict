@@ -42,8 +42,9 @@ use crate::image::{PictImage, PictPixelFormat};
 use crate::opcodes::*;
 use crate::packbits;
 use crate::raster::{
-    fill_arc, fill_oval, fill_polygon, fill_rect, fill_round_rect, frame_arc, frame_oval,
-    frame_polygon, frame_rect, frame_round_rect, line as draw_line, Canvas,
+    fill_arc, fill_oval, fill_polygon, fill_rect, fill_round_rect, frame_arc, frame_oval_thick,
+    frame_polygon, frame_rect, frame_rect_thick, frame_round_rect, line_thick as draw_line_thick,
+    Canvas,
 };
 use crate::reader::Reader;
 use crate::region::{parse_region, Region};
@@ -227,10 +228,12 @@ fn dispatch_v2_opcode(
         OP_NOP => Ok(true),
         OP_OP_END_PIC => Ok(false),
         OP_CLIP_RGN => {
-            // Clip region: parse + discard for now (round 2 doesn't
-            // honour clipping on subsequent draws — we record the
-            // bbox so future rounds can without rejigging the parser).
-            let _rgn = parse_region(r)?;
+            // Clip region: parse + materialise into a canvas-local
+            // boolean mask. Subsequent drawing / raster ops are gated
+            // through `Canvas::put` / `span` / `blit`, all of which
+            // consult `canvas.clip`. (Round 42.)
+            let rgn = parse_region(r)?;
+            install_clip_region(canvas, state, &rgn);
             Ok(true)
         }
         OP_FRAME_RGN => {
@@ -306,7 +309,8 @@ fn dispatch_v2_opcode(
             let pt1_h = r.read_i16()? as i32;
             let (x0, y0) = to_canvas(state, pt0_h, pt0_v);
             let (x1, y1) = to_canvas(state, pt1_h, pt1_v);
-            draw_line(canvas, x0, y0, x1, y1, state.fg);
+            let (ph, pv) = state.pen_size;
+            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
             state.pen = (pt1_h, pt1_v);
             Ok(true)
         }
@@ -315,7 +319,8 @@ fn dispatch_v2_opcode(
             let pt_h = r.read_i16()? as i32;
             let (x0, y0) = to_canvas(state, state.pen.0, state.pen.1);
             let (x1, y1) = to_canvas(state, pt_h, pt_v);
-            draw_line(canvas, x0, y0, x1, y1, state.fg);
+            let (ph, pv) = state.pen_size;
+            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
             state.pen = (pt_h, pt_v);
             Ok(true)
         }
@@ -328,7 +333,8 @@ fn dispatch_v2_opcode(
             let ny = pt_v + dv;
             let (x0, y0) = to_canvas(state, pt_h, pt_v);
             let (x1, y1) = to_canvas(state, nx, ny);
-            draw_line(canvas, x0, y0, x1, y1, state.fg);
+            let (ph, pv) = state.pen_size;
+            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
             state.pen = (nx, ny);
             Ok(true)
         }
@@ -339,7 +345,8 @@ fn dispatch_v2_opcode(
             let ny = state.pen.1 + dv;
             let (x0, y0) = to_canvas(state, state.pen.0, state.pen.1);
             let (x1, y1) = to_canvas(state, nx, ny);
-            draw_line(canvas, x0, y0, x1, y1, state.fg);
+            let (ph, pv) = state.pen_size;
+            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
             state.pen = (nx, ny);
             Ok(true)
         }
@@ -487,21 +494,23 @@ fn dispatch_v2_opcode(
             Ok(true)
         }
         OP_PACK_BITS_RGN => {
-            let (img, dst, _rgn) = decode_pack_bits_rgn(r)?;
-            blit_subimage(canvas, state, &img, &dst);
+            let (img, dst, rgn) = decode_pack_bits_rgn(r)?;
+            blit_subimage_with_rgn(canvas, state, &img, &dst, Some(&rgn));
             Ok(true)
         }
         OP_DIRECT_BITS_RGN => {
-            let (img, dst, _rgn) = decode_direct_bits_rgn(r)?;
-            blit_subimage(canvas, state, &img, &dst);
+            let (img, dst, rgn) = decode_direct_bits_rgn(r)?;
+            blit_subimage_with_rgn(canvas, state, &img, &dst, Some(&rgn));
             Ok(true)
         }
         OP_BITS_RECT | OP_BITS_RGN => {
             // v2 BitsRect / BitsRgn — uncompressed BitMap (no
             // PackBits per row). Layout is identical to PackBitsRect
-            // but with raw row data for each scan line.
-            let (img, dst) = decode_bits_rect_v2(r, opcode == OP_BITS_RGN)?;
-            blit_subimage(canvas, state, &img, &dst);
+            // but with raw row data for each scan line. Round 42:
+            // BitsRgn's embedded region is honoured as a transient
+            // mask for this blit only.
+            let (img, dst, rgn) = decode_bits_rect_v2(r, opcode == OP_BITS_RGN)?;
+            blit_subimage_with_rgn(canvas, state, &img, &dst, rgn.as_ref());
             Ok(true)
         }
         OP_COMPRESSED_QUICKTIME => {
@@ -583,8 +592,9 @@ fn read_rgb16(r: &mut Reader<'_>) -> Result<(u16, u16, u16)> {
 /// `0x30..=0x34`) to the canvas.
 fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
+    let (ph, pv) = state.pen_size;
     match opcode & 0x000F {
-        0 => frame_rect(canvas, top, left, bottom, right, state.fg),
+        0 => frame_rect_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
         1 => fill_rect(canvas, top, left, bottom, right, state.fg),
         2 => fill_rect(canvas, top, left, bottom, right, state.bg),
         3 => invert_rect(canvas, top, left, bottom, right),
@@ -613,11 +623,12 @@ fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: R
 
 fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
+    let (ph, pv) = state.pen_size;
     match opcode & 0x000F {
-        0 => frame_oval(canvas, top, left, bottom, right, state.fg),
+        0 => frame_oval_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
         1 => fill_oval(canvas, top, left, bottom, right, state.fg),
         2 => fill_oval(canvas, top, left, bottom, right, state.bg),
-        3 => frame_oval(canvas, top, left, bottom, right, state.fg),
+        3 => frame_oval_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
         4 => fill_oval(canvas, top, left, bottom, right, state.fg),
         _ => {}
     }
@@ -731,6 +742,68 @@ fn paint_region_outline(canvas: &mut Canvas, state: &PictState, rgn: &Region) {
     }
 }
 
+/// Materialise the supplied region into a canvas-local boolean clip
+/// mask (`true` = pixel is inside the clip, drawing allowed). For a
+/// purely rectangular region we install a pre-filled rectangle inside
+/// the canvas-local bbox. For an inversion-encoded region we copy the
+/// `Region`'s mask cell-by-cell into the canvas-local frame.
+///
+/// PICT `ClipRgn` semantics (Inside Macintosh: Imaging With QuickDraw
+/// §2 "QuickDraw Drawing"): every subsequent drawing primitive is
+/// painted only where the clip region permits. The mask survives
+/// across opcodes until the next `ClipRgn` opcode.
+fn install_clip_region(canvas: &mut Canvas, state: &PictState, rgn: &Region) {
+    let cw = canvas.width as i32;
+    let ch = canvas.height as i32;
+    if cw <= 0 || ch <= 0 {
+        return;
+    }
+    let mut mask = vec![false; (cw as usize) * (ch as usize)];
+    // Translate region bbox into canvas-local coords once.
+    // `to_canvas` returns (cx, cy).
+    let (left, top) = to_canvas(state, rgn.bbox.left, rgn.bbox.top);
+    let (right, bottom) = to_canvas(state, rgn.bbox.right, rgn.bbox.bottom);
+    if right <= left || bottom <= top {
+        canvas.clip = Some(mask);
+        return;
+    }
+    let lo_x = left.max(0);
+    let hi_x = right.min(cw);
+    let lo_y = top.max(0);
+    let hi_y = bottom.min(ch);
+    match &rgn.mask {
+        None => {
+            for y in lo_y..hi_y {
+                for x in lo_x..hi_x {
+                    mask[(y * cw + x) as usize] = true;
+                }
+            }
+        }
+        Some(rgn_mask) => {
+            let rgn_w = rgn.width().max(0);
+            for y in lo_y..hi_y {
+                for x in lo_x..hi_x {
+                    // Convert canvas-local (x, y) back to picture-frame
+                    // coords via state.origin, then to region-local
+                    // coords via the rgn bbox.
+                    let pic_x = x + state.origin.0;
+                    let pic_y = y + state.origin.1;
+                    let lx = pic_x - rgn.bbox.left;
+                    let ly = pic_y - rgn.bbox.top;
+                    if lx < 0 || ly < 0 || lx >= rgn_w {
+                        continue;
+                    }
+                    let idx = (ly * rgn_w + lx) as usize;
+                    if idx < rgn_mask.len() && rgn_mask[idx] {
+                        mask[(y * cw + x) as usize] = true;
+                    }
+                }
+            }
+        }
+    }
+    canvas.clip = Some(mask);
+}
+
 fn invert_region(canvas: &mut Canvas, state: &PictState, rgn: &Region) {
     for y in rgn.bbox.top..rgn.bbox.bottom {
         for x in rgn.bbox.left..rgn.bbox.right {
@@ -762,6 +835,50 @@ struct RasterSub {
 fn blit_subimage(canvas: &mut Canvas, state: &PictState, img: &RasterSub, dst: &RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, *dst);
     canvas.blit(&img.data, img.width, img.height, top, left, bottom, right);
+}
+
+/// Blit with a transient region clip honoured for this opcode only.
+/// `rgn` is the BitsRgn / PackBitsRgn / DirectBitsRgn embedded region
+/// (per Inside Macintosh: Imaging With QuickDraw §A-3 — bitmap is
+/// painted only where the region permits). The region intersects with
+/// any pre-existing `ClipRgn` mask; both are restored afterwards.
+fn blit_subimage_with_rgn(
+    canvas: &mut Canvas,
+    state: &PictState,
+    img: &RasterSub,
+    dst: &RectI32,
+    rgn: Option<&Region>,
+) {
+    let Some(rgn) = rgn else {
+        blit_subimage(canvas, state, img, dst);
+        return;
+    };
+    // Stash any pre-existing clip, build the intersection of the
+    // pre-existing clip and the per-blit region, install it as the
+    // active clip, blit, then restore.
+    let prev_clip = canvas.clip.take();
+    let cw = canvas.width as i32;
+    let ch = canvas.height as i32;
+    let mut transient = vec![false; (cw as usize) * (ch as usize)];
+    if cw > 0 && ch > 0 {
+        for y in 0..ch {
+            for x in 0..cw {
+                let pic_x = x + state.origin.0;
+                let pic_y = y + state.origin.1;
+                let inside_rgn = rgn.contains(pic_x, pic_y);
+                let inside_prev = match &prev_clip {
+                    None => true,
+                    Some(mask) => mask[(y * cw + x) as usize],
+                };
+                if inside_rgn && inside_prev {
+                    transient[(y * cw + x) as usize] = true;
+                }
+            }
+        }
+    }
+    canvas.clip = Some(transient);
+    blit_subimage(canvas, state, img, dst);
+    canvas.clip = prev_clip;
 }
 
 /// Final canvas → PictImage. Returns NoRaster if nothing was drawn.
@@ -856,8 +973,13 @@ fn expand_1bpp_to_rgba(bitmap: &[u8], width: u32, height: u32, row_bytes: usize)
 
 /// v2 `BitsRect` (`0x0090`) — same layout as PackBitsRect but every
 /// row is raw (no PackBits, no per-row byteCount). `BitsRgn` (0x91)
-/// adds a clipping region after the rects (consumed + ignored here).
-fn decode_bits_rect_v2(r: &mut Reader<'_>, with_region: bool) -> Result<(RasterSub, RectI32)> {
+/// adds a clipping region after the rects; round 42 honours it as a
+/// transient mask for this blit (returned alongside the raster +
+/// destination rect).
+fn decode_bits_rect_v2(
+    r: &mut Reader<'_>,
+    with_region: bool,
+) -> Result<(RasterSub, RectI32, Option<Region>)> {
     let row_bytes_raw = r.read_u16()?;
     if row_bytes_raw & 0x8000 != 0 {
         return Err(PictError::invalid(
@@ -869,9 +991,11 @@ fn decode_bits_rect_v2(r: &mut Reader<'_>, with_region: bool) -> Result<(RasterS
     let _src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
     let _mode = r.read_u16()?;
-    if with_region {
-        let _ = parse_region(r)?;
-    }
+    let rgn = if with_region {
+        Some(parse_region(r)?)
+    } else {
+        None
+    };
 
     let width = (bounds.3 - bounds.1).max(0) as u32;
     let height = (bounds.2 - bounds.0).max(0) as u32;
@@ -889,6 +1013,7 @@ fn decode_bits_rect_v2(r: &mut Reader<'_>, with_region: bool) -> Result<(RasterS
             data: rgba,
         },
         RectI32::from_be(dst_rect.0, dst_rect.1, dst_rect.2, dst_rect.3),
+        rgn,
     ))
 }
 
@@ -1309,7 +1434,8 @@ fn dispatch_v1_opcode(
         0x00 => Ok(true),
         0xFF => Ok(false), // OpEndPic in v1 is one byte 0xFF
         0x01 => {
-            let _ = parse_region(r)?;
+            let rgn = parse_region(r)?;
+            install_clip_region(canvas, state, &rgn);
             Ok(true)
         }
         0x02 => {
@@ -1352,7 +1478,8 @@ fn dispatch_v1_opcode(
             let pt1_h = r.read_i16()? as i32;
             let (x0, y0) = to_canvas(state, pt0_h, pt0_v);
             let (x1, y1) = to_canvas(state, pt1_h, pt1_v);
-            draw_line(canvas, x0, y0, x1, y1, state.fg);
+            let (ph, pv) = state.pen_size;
+            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
             state.pen = (pt1_h, pt1_v);
             Ok(true)
         }
@@ -1361,7 +1488,8 @@ fn dispatch_v1_opcode(
             let pt_h = r.read_i16()? as i32;
             let (x0, y0) = to_canvas(state, state.pen.0, state.pen.1);
             let (x1, y1) = to_canvas(state, pt_h, pt_v);
-            draw_line(canvas, x0, y0, x1, y1, state.fg);
+            let (ph, pv) = state.pen_size;
+            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
             state.pen = (pt_h, pt_v);
             Ok(true)
         }
@@ -1374,7 +1502,8 @@ fn dispatch_v1_opcode(
             let ny = pt_v + dv;
             let (x0, y0) = to_canvas(state, pt_h, pt_v);
             let (x1, y1) = to_canvas(state, nx, ny);
-            draw_line(canvas, x0, y0, x1, y1, state.fg);
+            let (ph, pv) = state.pen_size;
+            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
             state.pen = (nx, ny);
             Ok(true)
         }
@@ -1385,7 +1514,8 @@ fn dispatch_v1_opcode(
             let ny = state.pen.1 + dv;
             let (x0, y0) = to_canvas(state, state.pen.0, state.pen.1);
             let (x1, y1) = to_canvas(state, nx, ny);
-            draw_line(canvas, x0, y0, x1, y1, state.fg);
+            let (ph, pv) = state.pen_size;
+            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
             state.pen = (nx, ny);
             Ok(true)
         }
@@ -1446,13 +1576,13 @@ fn dispatch_v1_opcode(
             Ok(true)
         }
         0x90 => {
-            let (img, dst) = decode_bits_rect_v2(r, false)?;
+            let (img, dst, _rgn) = decode_bits_rect_v2(r, false)?;
             blit_subimage(canvas, state, &img, &dst);
             Ok(true)
         }
         0x91 => {
-            let (img, dst) = decode_bits_rect_v2(r, true)?;
-            blit_subimage(canvas, state, &img, &dst);
+            let (img, dst, rgn) = decode_bits_rect_v2(r, true)?;
+            blit_subimage_with_rgn(canvas, state, &img, &dst, rgn.as_ref());
             Ok(true)
         }
         0x98 => {
@@ -1461,8 +1591,8 @@ fn dispatch_v1_opcode(
             Ok(true)
         }
         0x99 => {
-            let (img, dst, _rgn) = decode_pack_bits_rgn(r)?;
-            blit_subimage(canvas, state, &img, &dst);
+            let (img, dst, rgn) = decode_pack_bits_rgn(r)?;
+            blit_subimage_with_rgn(canvas, state, &img, &dst, Some(&rgn));
             Ok(true)
         }
         // v1 DirectBitsRect / DirectBitsRgn — same PixMap header layout
@@ -1474,8 +1604,8 @@ fn dispatch_v1_opcode(
             Ok(true)
         }
         0x9B => {
-            let (img, dst, _rgn) = decode_direct_bits_rgn(r)?;
-            blit_subimage(canvas, state, &img, &dst);
+            let (img, dst, rgn) = decode_direct_bits_rgn(r)?;
+            blit_subimage_with_rgn(canvas, state, &img, &dst, Some(&rgn));
             Ok(true)
         }
         0xA0 => {

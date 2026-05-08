@@ -629,6 +629,115 @@ fn encode_pict_bitmap(width: u32, height: u32, data: &[u8], pack_bits: bool) -> 
     Ok(out)
 }
 
+/// Encode an RGBA8 raster as a v2 PICT containing a single
+/// **`BitsRgn`** (`0x0091`) opcode — 1-bpp BitMap with a clipping
+/// region attached just after the rect/mode header.
+///
+/// `clip` is the rectangular clip-region bbox in picture-frame
+/// coordinates `(top, left, bottom, right)`. The region is emitted in
+/// its trivial 10-byte form (no inversion data). The raster is
+/// reduced to 1 bpp via the same 50 %-luminance threshold used by
+/// [`encode_pict_bits_rect`].
+///
+/// Round 42: pairs with the existing `decode_bits_rect_v2(_,
+/// with_region=true)` decoder path.
+pub fn encode_pict_bits_rgn(
+    width: u32,
+    height: u32,
+    data: &[u8],
+    clip: [i16; 4],
+) -> Result<Vec<u8>> {
+    encode_pict_bitmap_with_region(width, height, data, /* pack_bits = */ false, clip)
+}
+
+/// Encode an RGBA8 raster as a v2 PICT containing a single
+/// **`PackBitsRgn`** (`0x0099`) opcode — 1-bpp BitMap with a clipping
+/// region. PackBits-RLE rows when `rowBytes >= 8`, otherwise raw rows
+/// (Inside Macintosh §A-3 narrow-row carve-out).
+///
+/// `clip` is `[top, left, bottom, right]` in picture-frame coords.
+pub fn encode_pict_pack_bits_rgn(
+    width: u32,
+    height: u32,
+    data: &[u8],
+    clip: [i16; 4],
+) -> Result<Vec<u8>> {
+    encode_pict_bitmap_with_region(width, height, data, /* pack_bits = */ true, clip)
+}
+
+fn encode_pict_bitmap_with_region(
+    width: u32,
+    height: u32,
+    data: &[u8],
+    pack_bits: bool,
+    clip: [i16; 4],
+) -> Result<Vec<u8>> {
+    validate_dims(width, height, data)?;
+    let row_bytes = width.div_ceil(8) as usize;
+    if row_bytes > 0x3FFE {
+        return Err(PictError::invalid(format!(
+            "encode_pict_bits_rgn: rowBytes {row_bytes} exceeds the 14-bit limit"
+        )));
+    }
+    let bitmap = rgba_to_1bpp(width, height, data, row_bytes);
+
+    let mut out: Vec<u8> = Vec::with_capacity(560 + 12 + row_bytes * height as usize + 4);
+    out.extend_from_slice(&[0u8; 512]);
+    write_u16(&mut out, 0);
+    write_i16(&mut out, 0);
+    write_i16(&mut out, 0);
+    write_i16(&mut out, height as i16);
+    write_i16(&mut out, width as i16);
+    write_u16(&mut out, 0x0011);
+    write_u16(&mut out, 0x02FF);
+    write_u16(&mut out, 0x0C00);
+    out.extend_from_slice(&[0u8; 24]);
+
+    let opcode = if pack_bits { 0x0099 } else { 0x0091 };
+    write_u16(&mut out, opcode);
+
+    write_u16(&mut out, row_bytes as u16);
+    for _ in 0..3 {
+        write_i16(&mut out, 0);
+        write_i16(&mut out, 0);
+        write_i16(&mut out, height as i16);
+        write_i16(&mut out, width as i16);
+    }
+    write_u16(&mut out, 0); // mode = srcCopy
+
+    // Region bytes: rgnSize=10 + bbox.
+    write_u16(&mut out, 10);
+    write_i16(&mut out, clip[0]);
+    write_i16(&mut out, clip[1]);
+    write_i16(&mut out, clip[2]);
+    write_i16(&mut out, clip[3]);
+
+    let h = height as usize;
+    if !pack_bits || row_bytes < 8 {
+        for y in 0..h {
+            out.extend_from_slice(&bitmap[y * row_bytes..(y + 1) * row_bytes]);
+        }
+    } else {
+        for y in 0..h {
+            let raw = &bitmap[y * row_bytes..(y + 1) * row_bytes];
+            let enc = packbits::encode(raw);
+            let total = enc.len();
+            if row_bytes > 250 {
+                write_u16(&mut out, total as u16);
+            } else {
+                out.push(total as u8);
+            }
+            out.extend_from_slice(&enc);
+        }
+    }
+
+    if out.len() % 2 != 0 {
+        out.push(0);
+    }
+    write_u16(&mut out, 0x00FF);
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // ClipRgn opcode builder helper.
 // ---------------------------------------------------------------------------
