@@ -1,31 +1,31 @@
-//! PICT writer — round 3.
+//! PICT writer — rounds 3 / 4 / 5.
 //!
-//! Round 2 shipped a minimal packType=1 v2-only encoder. Round 3 adds:
+//! Round 2 shipped a minimal packType=1 v2-only encoder. Round 3 added
+//! v2 packTypes 2/4 + v1 emit + ClipRgn injection. Round 4 added v2
+//! packType 3 (16-bpp PackBits) + the [`crate::ops::PictBuilder`] for
+//! drawing-only PICT streams. Round 5 brings:
 //!
-//! * **packType 4** (component-separated PackBits, 32-bit pixels):
-//!   splits each row into R, G, B planes and PackBits-encodes each
-//!   plane independently. Produces substantially smaller files for
-//!   photographic content (typically 20-40 % vs raw packType 1).
-//!   Per Inside Macintosh: Imaging With QuickDraw §4, packType 4 is
-//!   the standard encoding emitted by Color QuickDraw on actual Mac
-//!   hardware.
+//! * **`encode_pict_v1` with [`PackType`] selector** — v1 streams
+//!   gain packType 2/3/4 emit, identical layout to v2 but inside the
+//!   8-bit-opcode v1 wrapper (no headerOp stanza, no 512-byte stub).
+//!   The previous behaviour (packType 1 only) is preserved because
+//!   [`encode_pict_v1`] now defaults to `PackType::Raw`.
 //!
-//! * **packType 2** (3-byte packed RGB, no pad byte): drops the fill
-//!   byte, saving 25 % vs packType 1 for content that has no alpha.
+//! * **1-bpp BitMap encoders** ([`encode_pict_bits_rect`] /
+//!   [`encode_pict_pack_bits_rect`]) — emit `BitsRect` (`0x0090`) or
+//!   `PackBitsRect` (`0x0098`) opcodes for monochrome images. The
+//!   input is RGBA8 (per the rest of the encoder API); pixels are
+//!   reduced to 1 bpp via a 50 %-luminance threshold (Y =
+//!   0.299 R + 0.587 G + 0.114 B, threshold 128). PackBitsRect uses
+//!   the same RLE algorithm as packType 1 BitMap rows.
 //!
-//! * **PICT v1 emit** ([`encode_pict_v1`]): the older 8-bit opcode
-//!   format with a 10-byte picture-record header and no headerOp stanza.
-//!   v1 pixel data uses `BitsRect` / `PackBitsRect` for monochrome or a
-//!   plain byte-strip layout; for colour we emit a v1 `DirectBitsRect`
-//!   (opcode `0x9A` as a single byte).
-//!
-//! * **clipRgn opcode emit** ([`encode_pict_clip_rgn`]): inserts a
-//!   `ClipRgn` opcode into any v2 stream with a caller-supplied
-//!   inversion-encoded region blob.
+//! * **[`crate::ops::PictBuilder::raster`]** — append a
+//!   DirectBitsRect raster chunk to a drawing-builder so callers can
+//!   mix drawing primitives + raster in the same v2 stream.
 //!
 //! Cross-validation: every output produced by this module decodes
-//! cleanly via [`crate::decoder::parse_pict`] and passes through
-//! ImageMagick's PICT delegate unchanged.
+//! cleanly via [`crate::decoder::parse_pict`] and the v2 outputs pass
+//! through ImageMagick's PICT delegate unchanged.
 
 use crate::error::{PictError, Result};
 use crate::packbits;
@@ -174,6 +174,30 @@ pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> R
     write_u16(&mut out, 0);
 
     // Pixel data per row.
+    write_pixel_rows(&mut out, width, height, data, pack, row_bytes_raw)?;
+
+    // Word-align before terminator.
+    if out.len() % 2 != 0 {
+        out.push(0);
+    }
+    write_u16(&mut out, 0x00FF); // OpEndPic
+    Ok(out)
+}
+
+/// Emit per-row PixMap pixel data for a DirectBitsRect-style opcode
+/// (shared by [`encode_pict_v2`] and [`encode_pict_v1_with`]).
+///
+/// `row_bytes_raw` is the *uncompressed* byte stride; the byteCount
+/// prefix size for packTypes 3/4 is `1` if `row_bytes_raw <= 250`,
+/// otherwise `2` (Inside Macintosh §A-3).
+fn write_pixel_rows(
+    out: &mut Vec<u8>,
+    width: u32,
+    height: u32,
+    data: &[u8],
+    pack: PackType,
+    row_bytes_raw: usize,
+) -> Result<()> {
     let w = width as usize;
     for y in 0..height as usize {
         let row_in = &data[y * w * 4..(y + 1) * w * 4];
@@ -209,7 +233,7 @@ pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> R
                 let total = encoded.len();
                 // byteCount prefix: 1 byte if rowBytes <= 250, else 2.
                 if row_bytes_raw > 250 {
-                    write_u16(&mut out, total as u16);
+                    write_u16(out, total as u16);
                 } else {
                     out.push(total as u8);
                 }
@@ -233,7 +257,7 @@ pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> R
                 // else 2 bytes. Inside Macintosh §A-3: threshold is
                 // 250 (not 256).
                 if row_bytes_raw > 250 {
-                    write_u16(&mut out, total as u16);
+                    write_u16(out, total as u16);
                 } else {
                     out.push(total as u8);
                 }
@@ -243,26 +267,30 @@ pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> R
             }
         }
     }
-
-    // Word-align before terminator.
-    if out.len() % 2 != 0 {
-        out.push(0);
-    }
-    write_u16(&mut out, 0x00FF); // OpEndPic
-    Ok(out)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
 // PICT v1 encoder.
 // ---------------------------------------------------------------------------
 
-/// Encode an RGBA8 raster as a **PICT v1** byte stream.
+/// Encode an RGBA8 raster as a **PICT v1** byte stream using
+/// [`PackType::Raw`] pixel data.
+///
+/// Equivalent to `encode_pict_v1_with(width, height, data, PackType::Raw)`.
+/// Preserves the round-3 API behaviour (packType 1 only). Use
+/// [`encode_pict_v1_with`] for the round-5 [`PackType`] selector.
+pub fn encode_pict_v1(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+    encode_pict_v1_with(width, height, data, PackType::Raw)
+}
+
+/// Encode an RGBA8 raster as a **PICT v1** byte stream using the
+/// chosen [`PackType`].
 ///
 /// v1 PICTs use 8-bit opcodes, no word alignment between opcodes, and a
 /// simpler 10-byte picture-record header (no v2 headerOp stanza). The
 /// pixel data is emitted as a v1 `DirectBitsRect` (opcode `0x9A`),
-/// identical layout to the v2 `0x009A` opcode, using `packType=1` raw
-/// pixels. v1 emits with packType 1 (raw 4 bytes/pixel).
+/// identical PixMap-header layout to the v2 `0x009A` opcode.
 ///
 /// Preview.app and ImageMagick both accept v1 PICT streams; the format
 /// pre-dates System 7 but is still in wide use for legacy interchange.
@@ -270,17 +298,41 @@ pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> R
 /// **Note:** This function does NOT emit a 512-byte launch-stub prefix
 /// because v1 files pre-date the stub convention. If a consuming
 /// application requires the stub, prepend 512 zero bytes manually.
-pub fn encode_pict_v1(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+pub fn encode_pict_v1_with(
+    width: u32,
+    height: u32,
+    data: &[u8],
+    pack: PackType,
+) -> Result<Vec<u8>> {
     validate_dims(width, height, data)?;
 
-    let row_bytes = (width as usize) * 4;
-    if row_bytes > 0x3FFF {
+    // For packType 3 the on-disk pixel is a 16-bit u16; for the other
+    // packTypes it's 32 bits. `row_bytes_raw` is the rowBytes value
+    // we write into the PixMap header — the *uncompressed* byte
+    // stride per row, in pixel-size units.
+    let row_bytes_raw: usize = match pack {
+        PackType::Rle16 => width as usize * 2,
+        _ => width as usize * 4,
+    };
+    if row_bytes_raw > 0x3FFF {
         return Err(PictError::invalid(format!(
-            "encode_pict_v1: rowBytes {row_bytes} exceeds 14-bit limit"
+            "encode_pict_v1: rowBytes {row_bytes_raw} exceeds 14-bit limit"
         )));
     }
 
-    let mut out: Vec<u8> = Vec::with_capacity(10 + 4 + row_bytes * height as usize + 4);
+    let pack_type_word: u16 = match pack {
+        PackType::Raw => 1,
+        PackType::Packed24 => 2,
+        PackType::Rle16 => 3,
+        PackType::ComponentPackBits => 4,
+    };
+
+    let (pixel_size, cmp_size) = match pack {
+        PackType::Rle16 => (16u16, 5u16),
+        _ => (32u16, 8u16),
+    };
+
+    let mut out: Vec<u8> = Vec::with_capacity(10 + 4 + row_bytes_raw * height as usize + 4);
 
     // 10-byte picture record header (NO 512-byte stub for v1).
     write_u16(&mut out, 0); // picSize
@@ -298,7 +350,7 @@ pub fn encode_pict_v1(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
 
     // PixMap header (same layout as v2 0x009A).
     write_u32(&mut out, 0x000000FF); // baseAddr
-    write_u16(&mut out, (row_bytes as u16) | 0x8000); // rowBytes + PixMap flag
+    write_u16(&mut out, (row_bytes_raw as u16) | 0x8000); // rowBytes + PixMap flag
 
     // bounds.
     write_i16(&mut out, 0);
@@ -306,20 +358,20 @@ pub fn encode_pict_v1(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
     write_i16(&mut out, height as i16);
     write_i16(&mut out, width as i16);
 
-    // pmVersion=0, packType=1, packSize=0.
+    // pmVersion, packType, packSize.
     write_u16(&mut out, 0);
-    write_u16(&mut out, 1);
+    write_u16(&mut out, pack_type_word);
     write_u32(&mut out, 0);
 
     // hRes / vRes = 72 dpi.
     write_u32(&mut out, 0x00480000);
     write_u32(&mut out, 0x00480000);
 
-    // pixelType=16, pixelSize=32, cmpCount=3, cmpSize=8.
+    // pixelType, pixelSize, cmpCount, cmpSize.
     write_u16(&mut out, 16);
-    write_u16(&mut out, 32);
+    write_u16(&mut out, pixel_size);
     write_u16(&mut out, 3);
-    write_u16(&mut out, 8);
+    write_u16(&mut out, cmp_size);
 
     // planeBytes, pmTable, pmReserved.
     write_u32(&mut out, 0);
@@ -335,20 +387,245 @@ pub fn encode_pict_v1(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
     }
     write_u16(&mut out, 0); // mode = srcCopy
 
-    // Pixel data: 0xFF R G B per pixel (packType=1 raw).
-    let w = width as usize;
-    for y in 0..height as usize {
-        let row_in = &data[y * w * 4..(y + 1) * w * 4];
-        for px in row_in.chunks_exact(4) {
-            out.push(0xFF);
-            out.push(px[0]);
-            out.push(px[1]);
-            out.push(px[2]);
-        }
-    }
+    // Pixel data per row.
+    write_pixel_rows(&mut out, width, height, data, pack, row_bytes_raw)?;
 
     // v1 OpEndPic: single byte 0xFF.
     out.push(0xFF);
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// DirectBitsRect opcode-bytes builder (used by PictBuilder::raster).
+// ---------------------------------------------------------------------------
+
+/// Build the bytes for a single PICT v2 `DirectBitsRect` (`0x009A`)
+/// opcode + payload at picture-frame coordinates `(top, left, bottom,
+/// right)`. No 512-byte stub, no headerOp, no `OpEndPic` — just the
+/// opcode word and the PixMap header + pixel data.
+///
+/// The image is RGBA8 row-major; the `(top, left, bottom, right)`
+/// coordinate quadruple specifies the dst rect in picture-frame coords.
+/// The raster's intrinsic width and height are derived from
+/// `right - left` and `bottom - top`; the input data buffer must be
+/// `width × height × 4` bytes in size.
+///
+/// This is the building block [`crate::ops::PictBuilder::raster`] uses
+/// to fold a raster into a drawing-only stream.
+pub fn build_direct_bits_rect_op(
+    top: i16,
+    left: i16,
+    bottom: i16,
+    right: i16,
+    data: &[u8],
+    pack: PackType,
+) -> Result<Vec<u8>> {
+    if bottom <= top || right <= left {
+        return Err(PictError::invalid(format!(
+            "build_direct_bits_rect_op: degenerate rect ({top},{left})→({bottom},{right})"
+        )));
+    }
+    let width = (right - left) as u32;
+    let height = (bottom - top) as u32;
+    let expected = width as usize * height as usize * 4;
+    if data.len() != expected {
+        return Err(PictError::invalid(format!(
+            "build_direct_bits_rect_op: data.len() = {} but width × height × 4 = {expected}",
+            data.len()
+        )));
+    }
+
+    let row_bytes_raw: usize = match pack {
+        PackType::Rle16 => width as usize * 2,
+        _ => width as usize * 4,
+    };
+    if row_bytes_raw > 0x3FFF {
+        return Err(PictError::invalid(format!(
+            "build_direct_bits_rect_op: rowBytes {row_bytes_raw} exceeds the 14-bit limit"
+        )));
+    }
+
+    let pack_type_word: u16 = match pack {
+        PackType::Raw => 1,
+        PackType::Packed24 => 2,
+        PackType::Rle16 => 3,
+        PackType::ComponentPackBits => 4,
+    };
+    let (pixel_size, cmp_size) = match pack {
+        PackType::Rle16 => (16u16, 5u16),
+        _ => (32u16, 8u16),
+    };
+
+    let mut buf = Vec::with_capacity(2 + 50 + row_bytes_raw * height as usize);
+    write_u16(&mut buf, 0x009A); // DirectBitsRect
+    write_u32(&mut buf, 0x000000FF); // baseAddr
+    write_u16(&mut buf, (row_bytes_raw as u16) | 0x8000); // rowBytes + PixMap flag
+                                                          // bounds: 0..height, 0..width (the bitmap's own coordinate frame).
+    write_i16(&mut buf, 0);
+    write_i16(&mut buf, 0);
+    write_i16(&mut buf, height as i16);
+    write_i16(&mut buf, width as i16);
+    // pmVersion, packType, packSize.
+    write_u16(&mut buf, 0);
+    write_u16(&mut buf, pack_type_word);
+    write_u32(&mut buf, 0);
+    // hRes / vRes = 72 dpi.
+    write_u32(&mut buf, 0x00480000);
+    write_u32(&mut buf, 0x00480000);
+    // pixelType, pixelSize, cmpCount, cmpSize.
+    write_u16(&mut buf, 16); // RGBDirect
+    write_u16(&mut buf, pixel_size);
+    write_u16(&mut buf, 3);
+    write_u16(&mut buf, cmp_size);
+    // planeBytes, pmTable, pmReserved.
+    write_u32(&mut buf, 0);
+    write_u32(&mut buf, 0);
+    write_u32(&mut buf, 0);
+    // srcRect: bitmap-local 0..width × 0..height.
+    write_i16(&mut buf, 0);
+    write_i16(&mut buf, 0);
+    write_i16(&mut buf, height as i16);
+    write_i16(&mut buf, width as i16);
+    // dstRect: caller-supplied picture-frame coordinates.
+    write_i16(&mut buf, top);
+    write_i16(&mut buf, left);
+    write_i16(&mut buf, bottom);
+    write_i16(&mut buf, right);
+    // mode = srcCopy.
+    write_u16(&mut buf, 0);
+    // Pixel rows.
+    write_pixel_rows(&mut buf, width, height, data, pack, row_bytes_raw)?;
+    Ok(buf)
+}
+
+// ---------------------------------------------------------------------------
+// 1-bpp BitMap encoders (BitsRect / PackBitsRect).
+// ---------------------------------------------------------------------------
+
+/// Reduce an RGBA8 raster to a 1-bit-per-pixel BitMap row buffer,
+/// `row_bytes` bytes per row (rounded up from `ceil(width / 8)`).
+///
+/// Bits are packed MSB-first within each byte (column 0 is bit 7 of
+/// byte 0). Per the decoder convention (`expand_1bpp_to_rgba`), bit
+/// `1` represents black and bit `0` represents white. The encoder
+/// uses a 50 %-luminance threshold (Y = 0.299 R + 0.587 G + 0.114 B,
+/// `Y < 128` → ink/black/bit=1).
+fn rgba_to_1bpp(width: u32, height: u32, data: &[u8], row_bytes: usize) -> Vec<u8> {
+    let w = width as usize;
+    let mut bitmap = vec![0u8; row_bytes * height as usize];
+    for y in 0..height as usize {
+        let row_in = &data[y * w * 4..(y + 1) * w * 4];
+        for (x, px) in row_in.chunks_exact(4).enumerate() {
+            // ITU-R BT.601 luminance approx; round to nearest with
+            // integer arithmetic (multiply numerators × 1000, divide by
+            // 1000 at the end).
+            let y_val = (299 * px[0] as u32 + 587 * px[1] as u32 + 114 * px[2] as u32) / 1000;
+            if y_val < 128 {
+                bitmap[y * row_bytes + (x >> 3)] |= 0x80 >> (x & 7);
+            }
+        }
+    }
+    bitmap
+}
+
+/// Encode an RGBA8 raster as a v2 PICT containing a single
+/// **`BitsRect`** (`0x0090`) opcode — 1-bpp BitMap, raw rows (no
+/// PackBits).
+///
+/// The raster is reduced to 1 bpp via a 50 %-luminance threshold.
+///
+/// Returns `InvalidData` if the per-row stride exceeds the 14-bit
+/// PICT v2 rowBytes limit (`0x3FFE`, since the top bit is reserved
+/// for the PixMap flag).
+pub fn encode_pict_bits_rect(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+    encode_pict_bitmap(width, height, data, /* pack_bits = */ false)
+}
+
+/// Encode an RGBA8 raster as a v2 PICT containing a single
+/// **`PackBitsRect`** (`0x0098`) opcode — 1-bpp BitMap, PackBits-RLE
+/// rows (only when `rowBytes >= 8`, per Inside Macintosh §A-3).
+///
+/// The raster is reduced to 1 bpp via a 50 %-luminance threshold.
+/// For images narrower than 64 columns (`rowBytes < 8`), the opcode's
+/// per-row data is laid out raw with no byteCount prefix and no
+/// PackBits compression — same encoding as `BitsRect`.
+pub fn encode_pict_pack_bits_rect(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+    encode_pict_bitmap(width, height, data, /* pack_bits = */ true)
+}
+
+fn encode_pict_bitmap(width: u32, height: u32, data: &[u8], pack_bits: bool) -> Result<Vec<u8>> {
+    validate_dims(width, height, data)?;
+    let row_bytes = width.div_ceil(8) as usize;
+    if row_bytes > 0x3FFE {
+        return Err(PictError::invalid(format!(
+            "encode_pict_bits_rect: rowBytes {row_bytes} exceeds the 14-bit limit"
+        )));
+    }
+    let bitmap = rgba_to_1bpp(width, height, data, row_bytes);
+
+    let mut out: Vec<u8> = Vec::with_capacity(560 + row_bytes * height as usize + 4);
+    // 512-byte launch stub.
+    out.extend_from_slice(&[0u8; 512]);
+    // Picture record: picSize + picFrame.
+    write_u16(&mut out, 0);
+    write_i16(&mut out, 0);
+    write_i16(&mut out, 0);
+    write_i16(&mut out, height as i16);
+    write_i16(&mut out, width as i16);
+    // v2 sentinel + headerOp stanza.
+    write_u16(&mut out, 0x0011);
+    write_u16(&mut out, 0x02FF);
+    write_u16(&mut out, 0x0C00);
+    out.extend_from_slice(&[0u8; 24]);
+
+    // Opcode: BitsRect (0x0090) or PackBitsRect (0x0098). For BitMap
+    // opcodes the rowBytes top bit must stay clear (the decoder
+    // explicitly rejects rowBytes & 0x8000 != 0 here).
+    let opcode = if pack_bits { 0x0098 } else { 0x0090 };
+    write_u16(&mut out, opcode);
+
+    // BitMap header: rowBytes, bounds, srcRect, dstRect, mode.
+    write_u16(&mut out, row_bytes as u16);
+    for _ in 0..3 {
+        write_i16(&mut out, 0);
+        write_i16(&mut out, 0);
+        write_i16(&mut out, height as i16);
+        write_i16(&mut out, width as i16);
+    }
+    write_u16(&mut out, 0); // mode = srcCopy
+
+    // Per-row data.
+    let h = height as usize;
+    if !pack_bits || row_bytes < 8 {
+        // BitsRect: always raw rows. PackBitsRect with rowBytes < 8:
+        // also raw, no byteCount prefix (Inside Macintosh §A-3 carves
+        // out this special case so very narrow bitmaps don't pay the
+        // PackBits overhead).
+        for y in 0..h {
+            out.extend_from_slice(&bitmap[y * row_bytes..(y + 1) * row_bytes]);
+        }
+    } else {
+        // PackBitsRect with rowBytes >= 8: per-row PackBits-encode the
+        // raw scanline, prefix with byteCount (1 byte if rowBytes <=
+        // 250, else 2).
+        for y in 0..h {
+            let raw = &bitmap[y * row_bytes..(y + 1) * row_bytes];
+            let enc = packbits::encode(raw);
+            let total = enc.len();
+            if row_bytes > 250 {
+                write_u16(&mut out, total as u16);
+            } else {
+                out.push(total as u8);
+            }
+            out.extend_from_slice(&enc);
+        }
+    }
+
+    // Word-align before terminator.
+    if out.len() % 2 != 0 {
+        out.push(0);
+    }
+    write_u16(&mut out, 0x00FF); // OpEndPic
     Ok(out)
 }
 
@@ -747,5 +1024,84 @@ mod tests {
         // rgnSize = 10.
         assert_eq!(enc[pos + 2], 0x00);
         assert_eq!(enc[pos + 3], 0x0A);
+    }
+
+    // ---- round 5: build_direct_bits_rect_op layout ----
+
+    #[test]
+    fn build_direct_bits_rect_op_opcode_byte() {
+        // Just verify the opening opcode bytes: 0x009A.
+        let rgba = vec![0u8; 2 * 2 * 4];
+        let bytes = build_direct_bits_rect_op(0, 0, 2, 2, &rgba, PackType::Raw).unwrap();
+        assert_eq!(&bytes[0..2], &[0x00, 0x9A]);
+    }
+
+    #[test]
+    fn build_direct_bits_rect_op_rejects_degenerate() {
+        let rgba = vec![0u8; 0];
+        assert!(matches!(
+            build_direct_bits_rect_op(0, 0, 0, 0, &rgba, PackType::Raw).unwrap_err(),
+            PictError::InvalidData(_)
+        ));
+    }
+
+    #[test]
+    fn build_direct_bits_rect_op_rejects_size_mismatch() {
+        let rgba = vec![0u8; 5];
+        assert!(matches!(
+            build_direct_bits_rect_op(0, 0, 2, 2, &rgba, PackType::Raw).unwrap_err(),
+            PictError::InvalidData(_)
+        ));
+    }
+
+    // ---- round 5: 1-bpp BitMap encoders ----
+
+    #[test]
+    fn bits_rect_emits_bits_rect_opcode() {
+        // The opcode at the start of the picture record body should be
+        // 0x0090 (BitsRect), not 0x0098 / 0x009A.
+        let rgba = vec![0xFFu8; 8 * 8 * 4];
+        let enc = encode_pict_bits_rect(8, 8, &rgba).unwrap();
+        // After stub(512) + picSize(2) + picFrame(8) + sentinel(2+2) +
+        // headerOp(2) + 24-byte payload = 552, the next two bytes are
+        // the first opcode word.
+        let pos = 552usize;
+        assert_eq!(enc[pos], 0x00, "high byte of BitsRect opcode");
+        assert_eq!(enc[pos + 1], 0x90, "low byte of BitsRect opcode");
+    }
+
+    #[test]
+    fn pack_bits_rect_emits_pack_bits_rect_opcode() {
+        let rgba = vec![0xFFu8; 64 * 8 * 4]; // wide enough for RLE path
+        let enc = encode_pict_pack_bits_rect(64, 8, &rgba).unwrap();
+        let pos = 552usize;
+        assert_eq!(enc[pos], 0x00, "high byte of PackBitsRect opcode");
+        assert_eq!(enc[pos + 1], 0x98, "low byte of PackBitsRect opcode");
+    }
+
+    #[test]
+    fn bits_rect_rejects_size_mismatch() {
+        let err = encode_pict_bits_rect(2, 2, &[0u8; 7]).unwrap_err();
+        assert!(matches!(err, PictError::InvalidData(_)));
+    }
+
+    // ---- round 5: v1 with PackType selector ----
+
+    #[test]
+    fn v1_with_packtype_emits_correct_pack_type_word() {
+        // v1 PixMap header sits at: picSize(2) + picFrame(8) +
+        // sentinel(2) + opcode(1) + baseAddr(4) + rowBytes(2) +
+        // bounds(8) + pmVersion(2) = offset 29; packType is the next 2.
+        let rgba = vec![0u8; 4 * 4 * 4];
+        for &(pack, expected_word) in &[
+            (PackType::Raw, 1u16),
+            (PackType::Packed24, 2u16),
+            (PackType::Rle16, 3u16),
+            (PackType::ComponentPackBits, 4u16),
+        ] {
+            let enc = encode_pict_v1_with(4, 4, &rgba, pack).unwrap();
+            let pack_word = u16::from_be_bytes([enc[29], enc[30]]);
+            assert_eq!(pack_word, expected_word, "{pack:?}");
+        }
     }
 }

@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 5: `encode_pict_v1_with` — v1 PICT emit with a `PackType`
+  selector (raw / packed-24 / 16-bpp PackBits / component-separated
+  PackBits), bringing v1 emit to parity with v2. The legacy
+  `encode_pict_v1` is preserved as a `PackType::Raw` adapter so the
+  round-3 API stays callable; a 32×32 solid image shrinks ~89 % under
+  v1 packType 3 vs v1 packType 1.
+- Round 5: `encode_pict_bits_rect` / `encode_pict_pack_bits_rect` —
+  1-bpp BitMap encoders emitting `BitsRect` (`0x0090`) and
+  `PackBitsRect` (`0x0098`) opcodes for monochrome content. Pixels
+  are reduced from RGBA via a 50 %-luminance threshold (Y =
+  0.299 R + 0.587 G + 0.114 B). PackBitsRect path takes the per-row
+  RLE branch when `rowBytes >= 8` (Inside Macintosh §A-3) and
+  fall-through to raw rows otherwise.
+- Round 5: `build_direct_bits_rect_op` — public helper that builds
+  the bytes for a single PICT v2 `DirectBitsRect` (`0x009A`) opcode
+  + payload (no stub, no headerOp, no `OpEndPic`). Used by
+  `PictBuilder::raster` and exposed for callers needing the raw
+  opcode chunk.
+- Round 5: `PictBuilder::raster` — appends a raster opcode to a
+  drawing-only builder, allowing mixed drawing + raster in the same
+  v2 stream. Drawing primitives emitted before paint underneath the
+  raster; primitives emitted after overlay it.
+- Round 5: `tests/synth_v2_round5.rs` — 18 round-trip tests covering
+  v1 packType 2/3/4 emit, 1-bpp BitsRect / PackBitsRect (all-white,
+  all-black, checkerboard, luminance threshold, narrow-row
+  fall-through, wide-row PackBits compression), and builder + raster
+  composition (raster alone, drawing-then-raster overlay,
+  raster-then-drawing overlay, packType 3 raster).
+
 - Round 4: `PackType::Rle16` — packType 3 emit. Each row is packed as
   A1R5G5B5 (alpha bit always set) then PackBits-RLE'd at u16 unit
   size. Self-roundtrips through `parse_pict` and is accepted by

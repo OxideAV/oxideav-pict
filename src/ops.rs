@@ -598,6 +598,30 @@ impl PictBuilder {
         self
     }
 
+    /// Push a `DirectBitsRect` raster opcode at picture-frame
+    /// destination `(top, left, bottom, right)`. The raster's width
+    /// and height are derived from the rect; `data` must be RGBA8
+    /// row-major sized `width × height × 4` bytes.
+    ///
+    /// Mixes a raster blit into an otherwise drawing-only PICT stream:
+    /// every drawing primitive emitted *before* the raster paints
+    /// underneath it; every drawing primitive emitted *after* paints
+    /// over it.
+    pub fn raster(
+        &mut self,
+        top: i16,
+        left: i16,
+        bottom: i16,
+        right: i16,
+        data: &[u8],
+        pack: crate::encoder::PackType,
+    ) -> Result<&mut Self> {
+        let bytes =
+            crate::encoder::build_direct_bits_rect_op(top, left, bottom, right, data, pack)?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
     /// Word-align then append `OpEndPic` (`0x00FF`) and return the
     /// final byte stream.
     pub fn finish(mut self) -> Vec<u8> {

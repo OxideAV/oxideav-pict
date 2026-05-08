@@ -71,23 +71,30 @@ assert_eq!(img.data.len(), img.width as usize * img.height as usize * 4);
 
 ## Encode
 
-Round 4 brings the encoder up to four DirectBitsRect pack modes plus
-a full opcode-builder API for synthesising drawing-only PICTs:
+Round 5 widens the encoder to v1-with-PackType, 1-bpp BitMap
+emit, and a builder-with-raster path:
 
 | Function | Format | Notes |
 | -------- | ------ | ----- |
 | `encode_pict` | v2 packType 1 (raw 4 bpp) | Compat alias; identical to round 2 |
 | `encode_pict_v2(…, PackType::Raw)` | v2 packType 1 | Largest, broadest compat |
 | `encode_pict_v2(…, PackType::Packed24)` | v2 packType 2 | 25 % smaller — no pad byte |
-| `encode_pict_v2(…, PackType::Rle16)` | v2 packType 3 | A1R5G5B5 + u16-PackBits per row; round 4 — typically 30–60 % smaller than raw, with 5-bit-per-channel quantisation |
+| `encode_pict_v2(…, PackType::Rle16)` | v2 packType 3 | A1R5G5B5 + u16-PackBits per row; typically 30–60 % smaller than raw, with 5-bit-per-channel quantisation |
 | `encode_pict_v2(…, PackType::ComponentPackBits)` | v2 packType 4 | Component-separated PackBits per row; typically 20–40 % smaller than raw for photographic content; may be *larger* than raw for random noise |
-| `encode_pict_v1` | v1 8-bit-opcode format | No 512-byte stub prefix; smaller header |
+| `encode_pict_v1` | v1, packType 1 | Compat alias for round-3 behaviour |
+| `encode_pict_v1_with(…, PackType)` | v1, packType 1 / 2 / 3 / 4 | round 5 — v1 emit gains the same PackType selector as v2; no 512-byte stub, no headerOp |
+| `encode_pict_bits_rect` | v2 + `BitsRect` (`0x0090`) | round 5 — 1-bpp BitMap, raw rows; RGBA reduced via 50 %-luminance threshold |
+| `encode_pict_pack_bits_rect` | v2 + `PackBitsRect` (`0x0098`) | round 5 — 1-bpp BitMap, PackBits-RLE rows when `rowBytes >= 8` (raw fall-through for narrower bitmaps) |
 | `encode_pict_v2_with_clip` | v2 + `ClipRgn` opcode | Injects rectangular `ClipRgn` before pixel data |
-| `ops::PictBuilder` | v2 drawing-command synth | round 4 — assembles drawing-only PICT streams from line / rect / round-rect / oval / arc / polygon / region opcodes (`build_*_op` low-level helpers also exposed) |
+| `ops::PictBuilder` | v2 drawing-command synth | assembles drawing PICT streams from line / rect / round-rect / oval / arc / polygon / region opcodes (`build_*_op` low-level helpers also exposed) |
+| `PictBuilder::raster` | drawing + raster combined | round 5 — appends a `DirectBitsRect` raster onto a builder so callers can mix drawing primitives + raster in the same v2 stream |
+| `build_direct_bits_rect_op` | DirectBitsRect opcode bytes | round 5 — public helper for the raw `0x009A` opcode bytes (no stub / header / OpEndPic) |
 
 ```rust
 use oxideav_pict::{encode_pict, encode_pict_v2, encode_pict_v1,
-                   encode_pict_v2_with_clip, parse_pict, PackType};
+                   encode_pict_v1_with, encode_pict_v2_with_clip,
+                   encode_pict_bits_rect, encode_pict_pack_bits_rect,
+                   parse_pict, PackType};
 use oxideav_pict::ops::{PictBuilder, Verb};
 
 // Round-2 compat: raw 32-bpp packType 1.
@@ -105,18 +112,38 @@ let pict4 = encode_pict_v2(4, 4, &rgba, PackType::ComponentPackBits)?;
 let img4 = parse_pict(&pict4)?;
 assert_eq!(img4.width, 4);
 
-// v1 format: 8-bit opcodes, no 512-byte stub.
+// v1 format: 8-bit opcodes, no 512-byte stub. Round-3 default
+// (raw 32-bpp).
 let pict_v1 = encode_pict_v1(4, 4, &rgba)?;
 assert!(pict_v1.len() < 512); // no stub
-let img_v1 = parse_pict(&pict_v1)?;
-assert_eq!(img_v1.width, 4);
+
+// Round 5: v1 with PackType selector — same compression options as
+// v2, just inside the 8-bit-opcode v1 wrapper.
+let pict_v1c = encode_pict_v1_with(4, 4, &rgba, PackType::ComponentPackBits)?;
+let _ = parse_pict(&pict_v1c)?;
+
+// Round 5: 1-bpp BitMap encoders. Pixels are reduced via a
+// 50 %-luminance threshold (Y < 128 → black/bit=1).
+let pict_bm = encode_pict_bits_rect(8, 8, &vec![0xFFu8; 8 * 8 * 4])?;
+let pict_pbm = encode_pict_pack_bits_rect(64, 16, &vec![0xFFu8; 64 * 16 * 4])?;
 
 // With ClipRgn: clip = [top, left, bottom, right].
 let pict_clip = encode_pict_v2_with_clip(4, 4, &rgba, PackType::Raw, [1, 1, 3, 3])?;
 let _ = parse_pict(&pict_clip)?; // decoder parses ClipRgn opcode cleanly
 
-// Drawing-only PICT: synth a red square + black frame using the
-// builder API.
+// Drawing + raster combined: synth a green page, paste a 4×4 yellow
+// raster, then frame it in red.
+let mut b = PictBuilder::new(0, 0, 16, 16);
+b.fg_color(0x00, 0xFF, 0x00);
+b.rect(Verb::Paint, 0, 0, 16, 16);
+let raster_rgba = vec![0xFFu8; 4 * 4 * 4]; // bytes interpreted RGBA
+b.raster(4, 4, 8, 8, &raster_rgba, PackType::Raw)?;
+b.fg_color(0xFF, 0x00, 0x00);
+b.rect(Verb::Frame, 4, 4, 8, 8);
+let combined_pict = b.finish();
+let _img_combined = parse_pict(&combined_pict)?;
+
+// Drawing-only PICT (round-4 path).
 let mut b = PictBuilder::new(0, 0, 16, 16);
 b.fg_color(0xFF, 0x00, 0x00);
 b.rect(Verb::Paint, 4, 4, 12, 12);
@@ -163,13 +190,13 @@ oxideav-pict = { version = "0.0", default-features = false }
   state machine but the rasteriser draws single-pixel pen only.
 * **Multi-image PICTs.** Each subsequent raster blits onto the same
   canvas — no separate per-image surfaces.
-* **v1 encoder packType 3 / 4.** `encode_pict_v1` uses raw packType 1
-  only; component-separated PackBits / 16-bpp in v1 streams is a
-  future round.
-* **`PictBuilder` + raster.** The builder emits drawing opcodes only;
-  combine with `encode_pict_v2` for raster + drawing in the same
-  stream by concatenating bytes manually (a future round will fold
-  that into the builder).
+* **8-bit-indexed PixMaps.** `DirectBitsRect` (`0x009A`) only; the
+  indexed-colour `PackBitsRect`-as-PixMap path with a colour table
+  is a future round.
+* **`BitsRgn` / `PackBitsRgn` encoders.** The `BitsRgn` (`0x0091`)
+  and `PackBitsRgn` (`0x0099`) variants — 1-bpp BitMap with a clip
+  region — are decoded but not yet emit-able through a public
+  encoder helper.
 
 ## License
 
