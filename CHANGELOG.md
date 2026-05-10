@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2](https://github.com/OxideAV/oxideav-pict/compare/v0.0.1...v0.0.2) - 2026-05-08
+
+### Other
+
+- encoder round 6: ClipRgn honoured + pen-size aware drawing + BitsRgn/PackBitsRgn emit
+- encoder round 5: v1+PackType, 1-bpp BitMap emit, builder+raster
+- oxideav-pict round 4: encoder push to ~60% — packType 3 + drawing-command builder
+- drop stale REGISTRARS / with_all_features intra-doc links
+- drop dead `linkme` dep
+- re-export __oxideav_entry from registry sub-module
+- fix needless_range_loop clippy lint in synth_v2_round3
+- oxideav-pict round 3: encoder push to ~60% — packType 2/4 + v1 emit + ClipRgn + decoder v1 DirectBits fix
+- oxideav-pict round 2: drawing-command rasteriser + DirectBits packType 2/3/4 + Region paths + v1 raster + writer
+- auto-register via oxideav_core::register! macro (linkme distributed slice)
+- unify entry point on register(&mut RuntimeContext) ([#502](https://github.com/OxideAV/oxideav-pict/pull/502))
+- register .pict / .pic / .pct extensions
+
 ### Added
 
 - Round 6: drawing-clipping by region. The decoder now honours
