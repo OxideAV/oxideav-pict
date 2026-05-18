@@ -47,6 +47,7 @@ pub mod image;
 pub mod opcodes;
 pub mod ops;
 pub mod packbits;
+pub mod probe;
 pub mod raster;
 pub mod reader;
 pub mod region;
@@ -70,6 +71,7 @@ pub use ops::{
     build_poly_op, build_rect_op, build_rgb_bk_col, build_rgb_fg_col, build_rgn_inverted_op,
     build_rgn_rect_op, build_round_rect_op, PictBuilder, Verb,
 };
+pub use probe::{probe_pict, PictProbe, ProbeRect, ProbeTermination, ProbeVersion};
 
 #[cfg(feature = "registry")]
 pub use registry::{__oxideav_entry, register, register_codecs, register_containers};

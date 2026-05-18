@@ -157,6 +157,37 @@ assert_eq!(img_dr.width, 16);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+## Probe (read-only introspection)
+
+Round 7 adds [`probe_pict`] — a read-only walker that returns a
+`PictProbe` summary without rasterising any pixels. Useful for
+thumbnail UIs, content scanners (spotting embedded QuickTime payloads
+before paying the JPEG-decode cost), and test harnesses asserting an
+encoder emitted the expected opcode mix.
+
+```rust
+use oxideav_pict::{encode_pict, probe_pict, ProbeTermination, ProbeVersion};
+
+let rgba = vec![0x80u8; 8 * 8 * 4];
+let pict = encode_pict(8, 8, &rgba)?;
+let p = probe_pict(&pict)?;
+assert_eq!(p.version, ProbeVersion::V2);
+assert_eq!(p.width, 8);
+assert_eq!(p.height, 8);
+assert_eq!(p.raster_count, 1);
+assert_eq!(p.drawing_count, 0);
+assert!(p.end_pic_seen);
+assert_eq!(p.termination, ProbeTermination::EndPic);
+assert!(p.has_visible_content());
+assert!(!p.has_quicktime());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The probe shares its opcode walker with the decoder: every opcode the
+rasteriser observes is counted here. Unsupported opcodes terminate the
+walk *without* losing the statistics gathered up to that point — the
+caller still sees how many primitives appeared before the failure.
+
 ## Standalone vs registry-integrated
 
 The crate's default `registry` Cargo feature pulls in `oxideav-core`

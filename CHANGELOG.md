@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Round 7: `probe_pict` — read-only opcode-stream walker returning a
+  `PictProbe` (version, picFrame, width/height, has_launch_stub,
+  per-category opcode counts, termination cause, terminated_at). No
+  pixel data, no canvas allocation; useful for thumbnail UIs, content
+  scanners spotting embedded QuickTime payloads, and encoder-side
+  test harnesses that want to assert the emitted opcode mix without
+  reaching into the decoded raster.
+- Round 7: `PictProbe`, `ProbeVersion`, `ProbeTermination`, `ProbeRect`
+  public types re-exported from the crate root. Termination cause is
+  one of `EndPic` (clean `0x00FF`/`0xFF` terminator), `Eof` (input ran
+  out before the terminator), `Unsupported(String)` (the same message
+  the decoder would surface), or `Invalid(String)` (truncated payload,
+  malformed region/polygon header). Partial statistics are preserved
+  across `Unsupported`/`Invalid` terminations.
+- Round 7: `PictProbe::has_visible_content` (`true` when any raster /
+  drawing / same-shape opcode appears) and `PictProbe::has_quicktime`
+  (`true` when the stream embeds a `CompressedQuickTime` or
+  `UncompressedQuickTime` opcode) helpers.
+- Round 7: `tests/probe.rs` — 18 round-trip tests covering v1 and v2
+  framing detection, launch-stub vs raw-body detection, per-category
+  opcode counting (drawing primitives, same-shape, lines, polygons,
+  comments, ClipRgn, embedded QuickTime), all four DirectBitsRect
+  packTypes (1/2/3/4), 1-bpp PackBitsRect with `rowBytes ≥ 8`, EOF
+  termination without `OpEndPic`, framing-error rejection, and
+  unsupported-opcode partial-statistic preservation.
+
 ## [0.0.2](https://github.com/OxideAV/oxideav-pict/compare/v0.0.1...v0.0.2) - 2026-05-08
 
 ### Other
