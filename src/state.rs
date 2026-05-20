@@ -68,6 +68,62 @@ impl Rgba {
     }
 }
 
+/// QuickDraw monochrome 8×8 bit pattern.
+///
+/// Inside Macintosh: Imaging With QuickDraw §A-3 — the `PnPat` /
+/// `BkPat` / `FillPat` opcodes each carry an 8-byte payload that
+/// represents an 8 row × 8 column on/off bitmap. The most significant
+/// bit of byte 0 is the top-left pixel; the least significant bit of
+/// byte 7 is the bottom-right pixel.
+///
+/// Stippling semantics: a `1` bit selects the *foreground* colour for
+/// that cell, a `0` bit selects the *background* colour. So an all-ones
+/// pattern (`[0xFF; 8]`, the QuickDraw `black()` constant) collapses to
+/// a solid foreground fill — and an all-zeros pattern (`[0x00; 8]`, the
+/// QuickDraw `white()` constant) collapses to a solid background fill.
+/// Intermediate patterns produce the classic "50 % grey", "horizontal
+/// stripes", "diagonal hatch" etc. textures Mac apps draw with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pattern(pub [u8; 8]);
+
+impl Pattern {
+    /// All-ones pattern — "solid black ink" in classic QuickDraw, i.e.
+    /// stipple selects foreground at every cell. This is the default
+    /// `PnPat` and `FillPat` (Inside Macintosh: `qd.black`).
+    pub const BLACK: Self = Self([0xFF; 8]);
+    /// All-zeros pattern — "solid white paper" in classic QuickDraw,
+    /// i.e. stipple selects background at every cell. This is the
+    /// default `BkPat` (Inside Macintosh: `qd.white`).
+    pub const WHITE: Self = Self([0x00; 8]);
+
+    /// Returns `true` if every bit is set (foreground everywhere).
+    pub fn is_solid_fg(&self) -> bool {
+        self.0.iter().all(|&b| b == 0xFF)
+    }
+
+    /// Returns `true` if every bit is clear (background everywhere).
+    pub fn is_solid_bg(&self) -> bool {
+        self.0.iter().all(|&b| b == 0x00)
+    }
+
+    /// Sample the pattern at picture-frame coordinates `(x, y)`.
+    /// Returns `true` if the cell is a foreground bit. The pattern
+    /// tiles every 8 pixels along both axes; the QuickDraw origin
+    /// corresponds to byte-0 bit-7 of the pattern.
+    #[inline]
+    pub fn sample(&self, x: i32, y: i32) -> bool {
+        let row = self.0[(y.rem_euclid(8)) as usize];
+        let bit_index = 7 - (x.rem_euclid(8)) as usize;
+        ((row >> bit_index) & 1) != 0
+    }
+}
+
+impl Default for Pattern {
+    fn default() -> Self {
+        Self::BLACK
+    }
+}
+
 /// QuickDraw `Rect` (top, left, bottom, right) — same layout we read
 /// off disk. Stored as i32 internally so the rasteriser can use
 /// signed arithmetic without risking i16 overflow on out-of-bounds
@@ -123,6 +179,19 @@ pub struct PictState {
     /// Used by the decoder to distinguish "produced a picture" vs
     /// "no drawing happened, no raster found" (NoRaster).
     pub touched: bool,
+    /// Current pen pattern (set by `PnPat`, opcode `0x0009`).
+    /// Default = `Pattern::BLACK` (solid foreground), matching the
+    /// `qd.black` Inside Macintosh default. Honoured by frame / paint
+    /// verbs of rect / round-rect / oval / arc / poly / region.
+    pub pen_pat: Pattern,
+    /// Current background pattern (set by `BkPat`, opcode `0x0002`).
+    /// Default = `Pattern::WHITE` (solid background), the `qd.white`
+    /// default. Honoured by erase verbs.
+    pub back_pat: Pattern,
+    /// Current fill pattern (set by `FillPat`, opcode `0x000A`).
+    /// Default = `Pattern::BLACK` (solid foreground), the `qd.black`
+    /// default. Honoured by fill verbs (low-nibble `4`).
+    pub fill_pat: Pattern,
 }
 
 impl Default for PictState {
@@ -139,6 +208,77 @@ impl Default for PictState {
             last_oval: None,
             last_arc_rect: None,
             touched: false,
+            pen_pat: Pattern::BLACK,
+            back_pat: Pattern::WHITE,
+            fill_pat: Pattern::BLACK,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pattern_solid_collapses() {
+        assert!(Pattern::BLACK.is_solid_fg());
+        assert!(!Pattern::BLACK.is_solid_bg());
+        assert!(Pattern::WHITE.is_solid_bg());
+        assert!(!Pattern::WHITE.is_solid_fg());
+    }
+
+    #[test]
+    fn pattern_sample_all_ones() {
+        for x in 0..16 {
+            for y in 0..16 {
+                assert!(Pattern::BLACK.sample(x, y), "{x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn pattern_sample_all_zeros() {
+        for x in 0..16 {
+            for y in 0..16 {
+                assert!(!Pattern::WHITE.sample(x, y), "{x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn pattern_sample_horizontal_stripes() {
+        // Alternating rows of 0xFF / 0x00 → even rows foreground, odd rows
+        // background. Tile wraps every 8 rows.
+        let pat = Pattern([0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00]);
+        for x in 0..16 {
+            assert!(pat.sample(x, 0));
+            assert!(!pat.sample(x, 1));
+            assert!(pat.sample(x, 2));
+            assert!(!pat.sample(x, 9)); // wraps: row 9 -> 1 -> 0x00
+            assert!(pat.sample(x, 16)); // wraps: row 16 -> 0 -> 0xFF
+        }
+    }
+
+    #[test]
+    fn pattern_sample_vertical_stripes() {
+        // 0xAA = 0b10101010 → even columns foreground, odd background.
+        let pat = Pattern([0xAA; 8]);
+        for y in 0..16 {
+            assert!(pat.sample(0, y));
+            assert!(!pat.sample(1, y));
+            assert!(pat.sample(8, y)); // wraps to col 0
+            assert!(!pat.sample(9, y)); // wraps to col 1
+        }
+    }
+
+    #[test]
+    fn pattern_sample_negative_coordinates() {
+        // rem_euclid handles negative coordinates — pattern must still
+        // tile cleanly when picture-frame coords go below zero (e.g. an
+        // Origin offset that shifts pixels into negative space).
+        let pat = Pattern([0xAA; 8]);
+        assert_eq!(pat.sample(-1, 0), pat.sample(7, 0));
+        assert_eq!(pat.sample(-8, 0), pat.sample(0, 0));
+        assert_eq!(pat.sample(-9, 0), pat.sample(7, 0));
     }
 }

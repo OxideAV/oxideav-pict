@@ -42,13 +42,13 @@ use crate::image::{PictImage, PictPixelFormat};
 use crate::opcodes::*;
 use crate::packbits;
 use crate::raster::{
-    fill_arc, fill_oval, fill_polygon, fill_rect, fill_round_rect, frame_arc, frame_oval_thick,
-    frame_polygon, frame_rect, frame_rect_thick, frame_round_rect, line_thick as draw_line_thick,
-    Canvas,
+    fill_arc, fill_oval_pattern, fill_polygon_pattern, fill_rect, fill_rect_pattern,
+    fill_round_rect_pattern, frame_arc, frame_oval_thick, frame_polygon, frame_rect,
+    frame_rect_pattern_thick, frame_round_rect, line_thick as draw_line_thick, Canvas,
 };
 use crate::reader::Reader;
 use crate::region::{parse_region, Region};
-use crate::state::{PictState, RectI32, Rgba};
+use crate::state::{Pattern, PictState, RectI32, Rgba};
 
 /// Decode a complete PICT byte stream into a single rasterised
 /// [`PictImage`].
@@ -241,14 +241,22 @@ fn dispatch_v2_opcode(
             paint_region_outline(canvas, state, &rgn);
             Ok(true)
         }
-        OP_PAINT_RGN | OP_FILL_RGN => {
+        OP_PAINT_RGN => {
             let rgn = parse_region(r)?;
-            paint_region_filled(canvas, state, &rgn, state.fg);
+            paint_region_pattern(canvas, state, &rgn, state.pen_pat, state.fg, state.bg);
+            Ok(true)
+        }
+        OP_FILL_RGN => {
+            let rgn = parse_region(r)?;
+            paint_region_pattern(canvas, state, &rgn, state.fill_pat, state.fg, state.bg);
             Ok(true)
         }
         OP_ERASE_RGN => {
             let rgn = parse_region(r)?;
-            paint_region_filled(canvas, state, &rgn, state.bg);
+            // Erase: stipple on-bits map to *background*, off-bits to
+            // foreground — the BkPat inversion convention from Inside
+            // Macintosh §A-3.
+            paint_region_pattern(canvas, state, &rgn, state.back_pat, state.bg, state.fg);
             Ok(true)
         }
         OP_INVERT_RGN => {
@@ -299,6 +307,32 @@ fn dispatch_v2_opcode(
             let dv = r.read_i16()?;
             state.origin.0 -= dh as i32;
             state.origin.1 -= dv as i32;
+            Ok(true)
+        }
+        OP_PN_PAT => {
+            // PnPat (0x0009): 8-byte monochrome 8×8 pattern, applied by
+            // frame / paint verbs. Inside Macintosh §A-3.
+            let bytes = r.read_bytes(8)?;
+            let mut p = [0u8; 8];
+            p.copy_from_slice(bytes);
+            state.pen_pat = Pattern(p);
+            Ok(true)
+        }
+        OP_BK_PAT => {
+            // BkPat (0x0002): background pattern, used by erase verbs.
+            let bytes = r.read_bytes(8)?;
+            let mut p = [0u8; 8];
+            p.copy_from_slice(bytes);
+            state.back_pat = Pattern(p);
+            Ok(true)
+        }
+        OP_FILL_PAT => {
+            // FillPat (0x000A): fill pattern, used by fill verbs
+            // (low-nibble 4).
+            let bytes = r.read_bytes(8)?;
+            let mut p = [0u8; 8];
+            p.copy_from_slice(bytes);
+            state.fill_pat = Pattern(p);
             Ok(true)
         }
         // Pen-position-affecting ops.
@@ -555,15 +589,15 @@ fn dispatch_v2_opcode(
 /// has variable-size operands — those have their own match arm in
 /// [`dispatch_v2_opcode`].
 fn fixed_operand_size(opcode: u16) -> Option<usize> {
+    // OP_BK_PAT / OP_PN_PAT / OP_FILL_PAT are handled with dedicated
+    // match arms in `dispatch_v2_opcode` so they can update the
+    // drawing-state's `back_pat` / `pen_pat` / `fill_pat` fields.
     Some(match opcode {
-        OP_BK_PAT => 8,
         OP_TX_FONT => 2,
         OP_TX_FACE => 1,
         OP_TX_MODE => 2,
         OP_SP_EXTRA => 4,
         OP_PN_MODE => 2,
-        OP_PN_PAT => 8,
-        OP_FILL_PAT => 8,
         OP_TX_SIZE => 2,
         OP_TX_RATIO => 8,
         OP_PN_LOC_HFRAC => 2,
@@ -589,16 +623,62 @@ fn read_rgb16(r: &mut Reader<'_>) -> Result<(u16, u16, u16)> {
 }
 
 /// Apply a `frame|paint|erase|invert|fill Rect` opcode (`opcode` ∈
-/// `0x30..=0x34`) to the canvas.
+/// `0x30..=0x34`) to the canvas. Inside Macintosh §2 / §A-3 ties each
+/// verb to a distinct pattern slot:
+///
+/// * `frame` / `paint` use the **pen pattern** (`PnPat`).
+/// * `erase` uses the **background pattern** (`BkPat`), inverted —
+///   on-bits select the background colour, off-bits select the
+///   foreground.
+/// * `fill` uses the **fill pattern** (`FillPat`).
+/// * `invert` ignores patterns entirely.
 fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
     let (ph, pv) = state.pen_size;
     match opcode & 0x000F {
-        0 => frame_rect_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
-        1 => fill_rect(canvas, top, left, bottom, right, state.fg),
-        2 => fill_rect(canvas, top, left, bottom, right, state.bg),
+        0 => frame_rect_pattern_thick(
+            canvas,
+            top,
+            left,
+            bottom,
+            right,
+            ph,
+            pv,
+            state.pen_pat,
+            state.fg,
+            state.bg,
+        ),
+        1 => fill_rect_pattern(
+            canvas,
+            top,
+            left,
+            bottom,
+            right,
+            state.pen_pat,
+            state.fg,
+            state.bg,
+        ),
+        2 => fill_rect_pattern(
+            canvas,
+            top,
+            left,
+            bottom,
+            right,
+            state.back_pat,
+            state.bg,
+            state.fg,
+        ),
         3 => invert_rect(canvas, top, left, bottom, right),
-        4 => fill_rect(canvas, top, left, bottom, right, state.fg),
+        4 => fill_rect_pattern(
+            canvas,
+            top,
+            left,
+            bottom,
+            right,
+            state.fill_pat,
+            state.fg,
+            state.bg,
+        ),
         _ => {}
     }
 }
@@ -608,15 +688,48 @@ fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: R
     let (ow, oh) = state.oval_size;
     match opcode & 0x000F {
         0 => frame_round_rect(canvas, top, left, bottom, right, ow, oh, state.fg),
-        1 => fill_round_rect(canvas, top, left, bottom, right, ow, oh, state.fg),
-        2 => fill_round_rect(canvas, top, left, bottom, right, ow, oh, state.bg),
+        1 => fill_round_rect_pattern(
+            canvas,
+            top,
+            left,
+            bottom,
+            right,
+            ow,
+            oh,
+            state.pen_pat,
+            state.fg,
+            state.bg,
+        ),
+        2 => fill_round_rect_pattern(
+            canvas,
+            top,
+            left,
+            bottom,
+            right,
+            ow,
+            oh,
+            state.back_pat,
+            state.bg,
+            state.fg,
+        ),
         3 => {
             // Approximate invert as "frame for outline + nothing for
             // interior" — true invert needs per-pixel toggle and we
             // don't have an alpha pipeline. Round 2: just frame.
             frame_round_rect(canvas, top, left, bottom, right, ow, oh, state.fg)
         }
-        4 => fill_round_rect(canvas, top, left, bottom, right, ow, oh, state.fg),
+        4 => fill_round_rect_pattern(
+            canvas,
+            top,
+            left,
+            bottom,
+            right,
+            ow,
+            oh,
+            state.fill_pat,
+            state.fg,
+            state.bg,
+        ),
         _ => {}
     }
 }
@@ -626,10 +739,37 @@ fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
     let (ph, pv) = state.pen_size;
     match opcode & 0x000F {
         0 => frame_oval_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
-        1 => fill_oval(canvas, top, left, bottom, right, state.fg),
-        2 => fill_oval(canvas, top, left, bottom, right, state.bg),
+        1 => fill_oval_pattern(
+            canvas,
+            top,
+            left,
+            bottom,
+            right,
+            state.pen_pat,
+            state.fg,
+            state.bg,
+        ),
+        2 => fill_oval_pattern(
+            canvas,
+            top,
+            left,
+            bottom,
+            right,
+            state.back_pat,
+            state.bg,
+            state.fg,
+        ),
         3 => frame_oval_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
-        4 => fill_oval(canvas, top, left, bottom, right, state.fg),
+        4 => fill_oval_pattern(
+            canvas,
+            top,
+            left,
+            bottom,
+            right,
+            state.fill_pat,
+            state.fg,
+            state.bg,
+        ),
         _ => {}
     }
 }
@@ -656,10 +796,10 @@ fn apply_arc_verb(
 fn apply_poly_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, verts: &[(i32, i32)]) {
     match opcode & 0x000F {
         0 => frame_polygon(canvas, verts, state.fg),
-        1 => fill_polygon(canvas, verts, state.fg),
-        2 => fill_polygon(canvas, verts, state.bg),
+        1 => fill_polygon_pattern(canvas, verts, state.pen_pat, state.fg, state.bg),
+        2 => fill_polygon_pattern(canvas, verts, state.back_pat, state.bg, state.fg),
         3 => frame_polygon(canvas, verts, state.fg),
-        4 => fill_polygon(canvas, verts, state.fg),
+        4 => fill_polygon_pattern(canvas, verts, state.fill_pat, state.fg, state.bg),
         _ => {}
     }
 }
@@ -687,25 +827,51 @@ fn invert_rect(canvas: &mut Canvas, top: i32, left: i32, bottom: i32, right: i32
     canvas.dirty = true;
 }
 
-/// Paint a region's interior with `colour`.
-fn paint_region_filled(canvas: &mut Canvas, state: &PictState, rgn: &Region, colour: Rgba) {
+/// Paint a region's interior with `pat` between `fg` (on bits) and
+/// `bg` (off bits). Falls back to a solid fill when the pattern
+/// collapses (all-ones → fg, all-zeros → bg).
+fn paint_region_pattern(
+    canvas: &mut Canvas,
+    state: &PictState,
+    rgn: &Region,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+) {
     let bb_w = rgn.width().max(0);
     let bb_h = rgn.height().max(0);
     if bb_w == 0 || bb_h == 0 {
         return;
     }
+    let solid = if pat.is_solid_fg() {
+        Some(fg)
+    } else if pat.is_solid_bg() {
+        Some(bg)
+    } else {
+        None
+    };
     if rgn.mask.is_none() {
         // Pure rectangular region — equivalent to fill_rect on the
         // bbox.
         let (top, left, bottom, right) = rect_to_canvas(state, rgn.bbox);
-        fill_rect(canvas, top, left, bottom, right, colour);
+        if let Some(c) = solid {
+            fill_rect(canvas, top, left, bottom, right, c);
+        } else {
+            fill_rect_pattern(canvas, top, left, bottom, right, pat, fg, bg);
+        }
         return;
     }
     for y in rgn.bbox.top..rgn.bbox.bottom {
         for x in rgn.bbox.left..rgn.bbox.right {
             if rgn.contains(x, y) {
                 let (cx, cy) = to_canvas(state, x, y);
-                canvas.put(cx, cy, colour);
+                if let Some(c) = solid {
+                    canvas.put(cx, cy, c);
+                } else if pat.sample(cx, cy) {
+                    canvas.put(cx, cy, fg);
+                } else {
+                    canvas.put(cx, cy, bg);
+                }
             }
         }
     }
@@ -1439,7 +1605,27 @@ fn dispatch_v1_opcode(
             Ok(true)
         }
         0x02 => {
-            r.skip(8)?; // BkPat
+            // BkPat (v1 opcode 0x02): 8-byte background pattern.
+            let bytes = r.read_bytes(8)?;
+            let mut p = [0u8; 8];
+            p.copy_from_slice(bytes);
+            state.back_pat = Pattern(p);
+            Ok(true)
+        }
+        0x09 => {
+            // PnPat (v1 opcode 0x09): 8-byte pen pattern.
+            let bytes = r.read_bytes(8)?;
+            let mut p = [0u8; 8];
+            p.copy_from_slice(bytes);
+            state.pen_pat = Pattern(p);
+            Ok(true)
+        }
+        0x0A => {
+            // FillPat (v1 opcode 0x0A): 8-byte fill pattern.
+            let bytes = r.read_bytes(8)?;
+            let mut p = [0u8; 8];
+            p.copy_from_slice(bytes);
+            state.fill_pat = Pattern(p);
             Ok(true)
         }
         0x07 => {
@@ -1568,8 +1754,9 @@ fn dispatch_v1_opcode(
             let rgn = parse_region(r)?;
             match opcode & 0x0F {
                 0 => paint_region_outline(canvas, state, &rgn),
-                1 | 4 => paint_region_filled(canvas, state, &rgn, state.fg),
-                2 => paint_region_filled(canvas, state, &rgn, state.bg),
+                1 => paint_region_pattern(canvas, state, &rgn, state.pen_pat, state.fg, state.bg),
+                4 => paint_region_pattern(canvas, state, &rgn, state.fill_pat, state.fg, state.bg),
+                2 => paint_region_pattern(canvas, state, &rgn, state.back_pat, state.bg, state.fg),
                 3 => invert_region(canvas, state, &rgn),
                 _ => {}
             }

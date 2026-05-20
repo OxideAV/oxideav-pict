@@ -55,8 +55,9 @@ pub enum Verb {
     Erase,
     /// XOR-invert every pixel covered.
     Invert,
-    /// Solid fill at the current foreground colour (`fillPat` ignored —
-    /// the round-2 decoder does not implement patterned fill).
+    /// Solid fill at the current foreground colour. The round-8
+    /// decoder honours the current `FillPat` pattern slot for this
+    /// verb — see `state::Pattern` and `PictBuilder::fill_pattern`.
     Fill,
 }
 
@@ -401,6 +402,34 @@ pub fn build_oval_size(h: i16, v: i16) -> Vec<u8> {
     buf
 }
 
+/// Build a `PnPat` (`0x0009`) opcode carrying an 8-byte monochrome
+/// pen pattern. Honoured by the decoder's frame / paint verbs (Inside
+/// Macintosh §A-3).
+pub fn build_pn_pat(pattern: [u8; 8]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(10);
+    write_u16(&mut buf, OP_PN_PAT);
+    buf.extend_from_slice(&pattern);
+    buf
+}
+
+/// Build a `BkPat` (`0x0002`) opcode carrying an 8-byte monochrome
+/// background pattern. Honoured by erase verbs.
+pub fn build_bk_pat(pattern: [u8; 8]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(10);
+    write_u16(&mut buf, OP_BK_PAT);
+    buf.extend_from_slice(&pattern);
+    buf
+}
+
+/// Build a `FillPat` (`0x000A`) opcode carrying an 8-byte monochrome
+/// fill pattern. Honoured by fill verbs (low nibble `4`).
+pub fn build_fill_pat(pattern: [u8; 8]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(10);
+    write_u16(&mut buf, OP_FILL_PAT);
+    buf.extend_from_slice(&pattern);
+    buf
+}
+
 // ---------------------------------------------------------------------------
 // PictBuilder: assemble a complete v2 stream.
 // ---------------------------------------------------------------------------
@@ -594,6 +623,27 @@ impl PictBuilder {
     /// Push an `OvSize` opcode (round-rect corner radius).
     pub fn oval_size(&mut self, h: i16, v: i16) -> &mut Self {
         let bytes = build_oval_size(h, v);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `PnPat` opcode (pen pattern, 8 bytes).
+    pub fn pen_pattern(&mut self, pattern: [u8; 8]) -> &mut Self {
+        let bytes = build_pn_pat(pattern);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `BkPat` opcode (background pattern, 8 bytes).
+    pub fn bg_pattern(&mut self, pattern: [u8; 8]) -> &mut Self {
+        let bytes = build_bk_pat(pattern);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `FillPat` opcode (fill pattern, 8 bytes).
+    pub fn fill_pattern(&mut self, pattern: [u8; 8]) -> &mut Self {
+        let bytes = build_fill_pat(pattern);
         self.push(&bytes);
         self
     }

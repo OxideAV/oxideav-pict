@@ -23,7 +23,10 @@ colour (white) and returned as the decoded `PictImage`.
 | -------- | ------------------- | ----------------------- |
 | `0x0000` | NOP                 | skip                    |
 | `0x0001` | ClipRgn             | parse region (bbox + inversion data) |
-| `0x0002`-`0x0010`, `0x0015`, `0x0016`, `0x001A`-`0x001F` | pen / colour / pattern / text state | rasteriser tracks fg/bg colour, pen size, oval-corner size, origin |
+| `0x0002` | **BkPat**           | 8-byte background pattern → `state.back_pat` |
+| `0x0009` | **PnPat**           | 8-byte pen pattern → `state.pen_pat`        |
+| `0x000A` | **FillPat**         | 8-byte fill pattern → `state.fill_pat`      |
+| `0x0003`-`0x0008`, `0x000B`-`0x0010`, `0x0015`, `0x0016`, `0x001A`-`0x001F` | pen / colour / text state | rasteriser tracks fg/bg colour, pen size, oval-corner size, origin |
 | `0x0020`-`0x0023` | Line / LineFrom / ShortLine[From] | **draw via Bresenham** |
 | `0x0028`-`0x002B` | Long/DH/DV/DHDV Text  | length-prefixed skip (no font rasteriser) |
 | `0x002C`-`0x002E` | FontName / LineJustify / GlyphState | size-prefixed skip |
@@ -57,7 +60,66 @@ unit size; packType 4 is byte-PackBits per channel plane.
 
 PICT v1 (8-bit opcodes) parses the same drawing-state machine plus a
 smaller raster opcode set (`BitsRect 0x90`, `BitsRgn 0x91`,
-`PackBitsRect 0x98`, `PackBitsRgn 0x99`).
+`PackBitsRect 0x98`, `PackBitsRgn 0x99`). Round 8 wires up the v1
+pattern opcodes too (`BkPat 0x02`, `PnPat 0x09`, `FillPat 0x0A`) — the
+same 8-byte monochrome pattern payload, just inside the 8-bit opcode
+wrapper.
+
+## Patterns (round 8)
+
+The three monochrome pattern slots in Inside Macintosh: Imaging With
+QuickDraw §A-3 are honoured by the rasteriser:
+
+* **`PnPat` (0x0009 / v1 0x09)** — pen pattern. Consumed by `frame` and
+  `paint` verbs of rect / round-rect / oval / poly / region. On-bits
+  select the current foreground colour; off-bits select the current
+  background colour.
+* **`BkPat` (0x0002 / v1 0x02)** — background pattern. Consumed by
+  `erase` verbs. On-bits select **background**, off-bits select
+  **foreground** (the inverted convention from §A-3 — erase is the
+  "paint background" verb so the pattern interpretation flips).
+* **`FillPat` (0x000A / v1 0x0A)** — fill pattern. Consumed by `fill`
+  verbs (low-nibble `4`).
+* `invert` verbs ignore patterns.
+
+Each pattern is 8 bytes representing an 8 row × 8 column on/off
+bitmap, tiled across the canvas every 8 pixels on both axes (the
+QuickDraw `Pattern` record layout from §A-3 — most-significant bit of
+byte 0 is the top-left pixel, least-significant bit of byte 7 the
+bottom-right). The default state matches the Mac defaults
+(`qd.black = [0xFF; 8]` for pen / fill, `qd.white = [0x00; 8]` for
+background), so PICTs that never emit a pattern opcode behave
+identically to the round-7 solid-colour pipeline (the all-ones and
+all-zeros patterns take a `fill_rect` / `fill_oval` / `fill_polygon`
+solid-colour fast path).
+
+```rust
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::{parse_pict, Pattern};
+
+const HSTRIPE: [u8; 8] = [0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00];
+
+let mut b = PictBuilder::new(0, 0, 8, 8);
+b.fg_color(0xFF, 0x00, 0x00); // red on-bits
+b.pen_pattern(HSTRIPE);
+b.rect(Verb::Paint, 0, 0, 8, 8);
+let img = parse_pict(&b.finish())?;
+assert_eq!(img.width, 8);
+// Row 0 (on-bits) is red; row 1 (off-bits) is paper white.
+assert_eq!(&img.data[0..4], &[0xFF, 0x00, 0x00, 0xFF]);
+assert_eq!(&img.data[8 * 4..8 * 4 + 4], &[0xFF, 0xFF, 0xFF, 0xFF]);
+
+// Pattern::BLACK / Pattern::WHITE are the QuickDraw `qd.black` /
+// `qd.white` defaults; either collapses to a solid-colour fill.
+assert!(Pattern::BLACK.is_solid_fg());
+assert!(Pattern::WHITE.is_solid_bg());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+PixPat (multi-colour pattern) opcodes — `BkPixPat 0x0012`,
+`PnPixPat 0x0013`, `FillPixPat 0x0014` — still return `Unsupported`
+because they need a PixMap-aware skip; the monochrome stipple is the
+common case for archival PICTs and is now landed.
 
 ```rust
 use oxideav_pict::{parse_pict, PictPixelFormat};
@@ -90,6 +152,8 @@ emit, and a builder-with-raster path:
 | `encode_pict_v2_with_clip` | v2 + `ClipRgn` opcode | Injects rectangular `ClipRgn` before pixel data; honoured by the decoder as a draw-time mask (round 6) |
 | `ops::PictBuilder` | v2 drawing-command synth | assembles drawing PICT streams from line / rect / round-rect / oval / arc / polygon / region opcodes (`build_*_op` low-level helpers also exposed) |
 | `PictBuilder::raster` | drawing + raster combined | round 5 — appends a `DirectBitsRect` raster onto a builder so callers can mix drawing primitives + raster in the same v2 stream |
+| `PictBuilder::pen_pattern` / `bg_pattern` / `fill_pattern` | pattern-set opcodes | round 8 — emits `PnPat` / `BkPat` / `FillPat`; honoured by the decoder's stipple path |
+| `build_pn_pat` / `build_bk_pat` / `build_fill_pat` | pattern opcode bytes | round 8 — public helpers for the raw `0x0009` / `0x0002` / `0x000A` opcode bytes |
 | `build_direct_bits_rect_op` | DirectBitsRect opcode bytes | round 5 — public helper for the raw `0x009A` opcode bytes (no stub / header / OpEndPic) |
 
 ```rust
@@ -208,8 +272,10 @@ oxideav-pict = { version = "0.0", default-features = false }
 
 ## What's not yet in
 
-* **Pattern fills (`PnPat`, `BkPixPat`, `PnPixPat`, `FillPixPat`).**
-  Solid-colour ink only — patterns return `Unsupported`.
+* **PixPat (multi-colour pattern) opcodes** (`BkPixPat 0x0012`,
+  `PnPixPat 0x0013`, `FillPixPat 0x0014`). The monochrome
+  `BkPat` / `PnPat` / `FillPat` slots landed in round 8; PixPat needs
+  a PixMap-aware skip to parse the per-cell colour table.
 * **Text glyphs.** `LongText` / `DH/DV/DHDVText` are walked past but
   not rasterised — a TrueType engine is a separate round.
 * **CompressedQuickTime decode.** The opcode is parsed (length-prefixed

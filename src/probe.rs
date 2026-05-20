@@ -70,6 +70,10 @@ pub struct PictProbe {
     pub comment_count: u32,
     /// How many `ClipRgn` opcodes (each one *replaces* the active clip).
     pub clip_rgn_count: u32,
+    /// How many pattern-set opcodes (`PnPat`, `BkPat`, `FillPat`) appear.
+    /// Inside Macintosh §A-3 monochrome 8×8 patterns; counted once per
+    /// occurrence regardless of which slot they target.
+    pub pattern_set_count: u32,
     /// How many `CompressedQuickTime` (`0x8200`) opcodes appear. Each
     /// carries an embedded QuickTime image (typically JPEG) the
     /// decoder currently skips.
@@ -180,6 +184,7 @@ pub fn probe_pict(bytes: &[u8]) -> Result<PictProbe> {
         text_count: 0,
         comment_count: 0,
         clip_rgn_count: 0,
+        pattern_set_count: 0,
         compressed_quicktime_count: 0,
         uncompressed_quicktime_count: 0,
         end_pic_seen: false,
@@ -422,6 +427,16 @@ fn probe_v2_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             r.skip(n)?;
             Ok(OpStep::Continue)
         }
+        OP_BK_PAT | OP_PN_PAT | OP_FILL_PAT => {
+            // Monochrome 8×8 pattern payload (round 8 — workspace round
+            // 81). The decoder mirror reads the same 8 bytes into the
+            // drawing-state's `back_pat` / `pen_pat` / `fill_pat` slot;
+            // the probe just records the occurrence so callers can spot
+            // patterned PICTs without rasterising.
+            r.skip(8)?;
+            p.pattern_set_count += 1;
+            Ok(OpStep::Continue)
+        }
         OP_BK_PIX_PAT | OP_PN_PIX_PAT | OP_FILL_PIX_PAT => Err(PictError::unsupported(
             "PixPat opcodes (BkPixPat / PnPixPat / FillPixPat) need a PixMap-aware skip",
         )),
@@ -494,8 +509,11 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             p.clip_rgn_count += 1;
             Ok(OpStep::Continue)
         }
-        0x02 => {
+        0x02 | 0x09 | 0x0A => {
+            // BkPat / PnPat / FillPat (v1 opcodes 0x02 / 0x09 / 0x0A) —
+            // 8-byte monochrome 8×8 pattern payload.
             r.skip(8)?;
+            p.pattern_set_count += 1;
             Ok(OpStep::Continue)
         }
         0x07 | 0x0B => {
@@ -590,8 +608,9 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
 /// bytes per Inside Macintosh §A-3. Mirrors the same table used by
 /// the decoder.
 fn fixed_operand_size(opcode: u16) -> Option<usize> {
+    // OP_BK_PAT / OP_PN_PAT / OP_FILL_PAT have dedicated arms in
+    // `probe_v2_opcode` that bump `pattern_set_count`.
     Some(match opcode {
-        OP_BK_PAT | OP_PN_PAT | OP_FILL_PAT => 8,
         OP_TX_FONT | OP_TX_MODE | OP_TX_SIZE | OP_PN_MODE | OP_PN_LOC_HFRAC | OP_CH_EXTRA => 2,
         OP_TX_FACE => 1,
         OP_SP_EXTRA => 4,

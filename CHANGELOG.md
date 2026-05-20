@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 8: monochrome pattern opcodes (`PnPat 0x0009 / v1 0x09`,
+  `BkPat 0x0002 / v1 0x02`, `FillPat 0x000A / v1 0x0A`) are now decoded
+  and folded into the rasteriser. Each is an 8-byte 8×8 on/off bitmap
+  per Inside Macintosh: Imaging With QuickDraw §A-3; on-bits select
+  the current foreground colour and off-bits select the background.
+  Frame / paint verbs consult `PnPat`, fill verbs consult `FillPat`,
+  erase verbs consult `BkPat` with the inverted on=bg / off=fg
+  convention. Invert verbs ignore patterns.
+- Round 8: new `state::Pattern` public type — 8-byte monochrome bitmap
+  with `Pattern::BLACK` (`[0xFF; 8]`, `qd.black` — solid fg) and
+  `Pattern::WHITE` (`[0x00; 8]`, `qd.white` — solid bg) constants plus
+  `is_solid_fg` / `is_solid_bg` / `sample(x, y)` helpers. The default
+  state matches Mac defaults (PnPat = FillPat = BLACK, BkPat = WHITE)
+  so PICTs that never emit a pattern opcode behave identically to the
+  round-7 solid-colour pipeline.
+- Round 8: `state::PictState` gains `pen_pat`, `back_pat`, `fill_pat`
+  fields tracking the current pattern slot for each verb family.
+- Round 8: `raster::fill_rect_pattern`, `fill_oval_pattern`,
+  `fill_round_rect_pattern`, `fill_polygon_pattern`,
+  `frame_rect_pattern_thick` patterned-fill primitives. All-ones and
+  all-zeros patterns short-circuit to the existing solid-colour
+  primitives so default-pattern PICTs are byte-identical to round 7.
+- Round 8: `ops::build_pn_pat` / `build_bk_pat` / `build_fill_pat`
+  opcode-bytes helpers plus `PictBuilder::pen_pattern` /
+  `bg_pattern` / `fill_pattern` chainable methods on the v2 builder.
+- Round 8: `PictProbe::pattern_set_count` field — number of pattern
+  opcodes (`PnPat` + `BkPat` + `FillPat`) observed during the walk.
+  Recognised on both v1 and v2 streams.
+- Round 8: `tests/synth_v2_round8.rs` — 17 round-trip tests covering
+  pen-pattern paint of rect / oval / region with horizontal /
+  vertical / 50%-grey stipples, fill-pattern routing (fill verb
+  consults FillPat not PnPat), background-pattern erase using the
+  inverted on=bg convention, frame outline stippling, hand-assembled
+  v1 streams for `0x09` (PnPat) and `0x02` (BkPat), probe
+  `pattern_set_count` accounting on v1 and v2 streams, pen-pattern
+  persistence across multiple draws, and solid-pattern collapse
+  byte-equality vs no-pattern.
+
 - Round 7: `probe_pict` — read-only opcode-stream walker returning a
   `PictProbe` (version, picFrame, width/height, has_launch_stub,
   per-category opcode counts, termination cause, terminated_at). No

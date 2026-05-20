@@ -36,7 +36,7 @@
 // module instead of one-off allows.
 #![allow(clippy::too_many_arguments)]
 
-use crate::state::Rgba;
+use crate::state::{Pattern, Rgba};
 
 /// A row-major RGBA8 canvas. Origin at (0, 0); y grows downward.
 pub struct Canvas {
@@ -756,6 +756,276 @@ pub fn frame_oval_thick(
     walk_ellipse(top, left, bottom, right, |x, y| {
         stamp_pen(canvas, x, y, pen_h, pen_v, c);
     });
+}
+
+// ---------------------------------------------------------------------------
+// Patterned-fill primitives (round 8 / workspace round 81).
+//
+// QuickDraw stippling: a `1` bit in the 8×8 `Pattern` selects the
+// foreground colour, a `0` bit selects the background colour (Inside
+// Macintosh: Imaging With QuickDraw §A-3 — `PnPat` / `BkPat` / `FillPat`
+// opcodes). The texture tiles every 8 pixels on both axes. Sampling
+// uses *canvas-local* coordinates so the tile origin lines up with the
+// picture-frame top-left — this matches the behaviour real Mac apps see
+// when the GrafPort origin is `(0, 0)`, the universal case for PICT
+// files (no `setOrigin` recorded).
+//
+// Each primitive degrades to its solid-colour counterpart when the
+// pattern is all-ones (foreground everywhere) or all-zeros (background
+// everywhere) — `Pattern::is_solid_fg` / `is_solid_bg` provide the
+// cheap check.
+// ---------------------------------------------------------------------------
+
+#[inline]
+fn plot_pattern_pixel(canvas: &mut Canvas, x: i32, y: i32, pat: Pattern, fg: Rgba, bg: Rgba) {
+    if pat.sample(x, y) {
+        canvas.put(x, y, fg);
+    } else {
+        canvas.put(x, y, bg);
+    }
+}
+
+/// Patterned-fill rectangle. `right` / `bottom` exclusive. Same shape
+/// as [`fill_rect`] but every cell is stippled via `pat` between `fg`
+/// (on bits) and `bg` (off bits). Falls back to the solid-colour
+/// path when the pattern collapses.
+pub fn fill_rect_pattern(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    if pat.is_solid_fg() {
+        fill_rect(canvas, top, left, bottom, right, fg);
+        return;
+    }
+    if pat.is_solid_bg() {
+        fill_rect(canvas, top, left, bottom, right, bg);
+        return;
+    }
+    for y in top..bottom {
+        for x in left..right {
+            plot_pattern_pixel(canvas, x, y, pat, fg, bg);
+        }
+    }
+}
+
+/// Patterned-fill ellipse. Same boundary as [`fill_oval`] but every
+/// span is stippled via `pat`.
+pub fn fill_oval_pattern(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    if pat.is_solid_fg() {
+        fill_oval(canvas, top, left, bottom, right, fg);
+        return;
+    }
+    if pat.is_solid_bg() {
+        fill_oval(canvas, top, left, bottom, right, bg);
+        return;
+    }
+    let h = (bottom - top) as usize;
+    let mut min = vec![i32::MAX; h];
+    let mut max = vec![i32::MIN; h];
+    walk_ellipse(top, left, bottom, right, |x, y| {
+        let row = y - top;
+        if row < 0 || (row as usize) >= h {
+            return;
+        }
+        let r = row as usize;
+        if x < min[r] {
+            min[r] = x;
+        }
+        if x > max[r] {
+            max[r] = x;
+        }
+    });
+    for (i, (lo, hi)) in min.iter().zip(max.iter()).enumerate() {
+        if *lo == i32::MAX {
+            continue;
+        }
+        let y = top + i as i32;
+        for x in *lo..=*hi {
+            plot_pattern_pixel(canvas, x, y, pat, fg, bg);
+        }
+    }
+}
+
+/// Patterned-fill round rectangle. Reuses the inner-rect + four-corner
+/// quarter-oval shape from [`fill_round_rect`] but every span is
+/// stippled.
+pub fn fill_round_rect_pattern(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    oval_w: i32,
+    oval_h: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    if pat.is_solid_fg() {
+        fill_round_rect(canvas, top, left, bottom, right, oval_w, oval_h, fg);
+        return;
+    }
+    if pat.is_solid_bg() {
+        fill_round_rect(canvas, top, left, bottom, right, oval_w, oval_h, bg);
+        return;
+    }
+    // Slow path: materialise the rounded mask via the solid-colour
+    // primitive into a scratch single-colour canvas, then re-plot per-
+    // pixel using the pattern. Two passes, no duplicated geometry
+    // logic.
+    let w = (right - left) as u32;
+    let h = (bottom - top) as u32;
+    if w == 0 || h == 0 {
+        return;
+    }
+    let marker = Rgba {
+        r: 1,
+        g: 2,
+        b: 3,
+        a: 4,
+    };
+    let mut scratch = Canvas::new(w, h, Rgba::new(0, 0, 0, 0));
+    fill_round_rect(
+        &mut scratch,
+        0,
+        0,
+        h as i32,
+        w as i32,
+        oval_w,
+        oval_h,
+        marker,
+    );
+    for sy in 0..h {
+        for sx in 0..w {
+            let off = ((sy * w + sx) * 4) as usize;
+            if scratch.data[off] != marker.r || scratch.data[off + 1] != marker.g {
+                continue;
+            }
+            plot_pattern_pixel(canvas, left + sx as i32, top + sy as i32, pat, fg, bg);
+        }
+    }
+}
+
+/// Patterned-fill polygon. Reuses the active-edge-list scan converter
+/// from [`fill_polygon`] but every span is stippled.
+pub fn fill_polygon_pattern(
+    canvas: &mut Canvas,
+    vertices: &[(i32, i32)],
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+) {
+    if pat.is_solid_fg() {
+        fill_polygon(canvas, vertices, fg);
+        return;
+    }
+    if pat.is_solid_bg() {
+        fill_polygon(canvas, vertices, bg);
+        return;
+    }
+    // Same scratch-canvas trick: materialise then re-plot. Cheaper
+    // than duplicating the active-edge-list machinery and still O(n)
+    // in the polygon bounding box.
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for &(x, y) in vertices {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+    if min_x > max_x || min_y > max_y {
+        return;
+    }
+    let w = (max_x - min_x + 2).max(1) as u32;
+    let h = (max_y - min_y + 2).max(1) as u32;
+    let marker = Rgba {
+        r: 1,
+        g: 2,
+        b: 3,
+        a: 4,
+    };
+    let mut scratch = Canvas::new(w, h, Rgba::new(0, 0, 0, 0));
+    let shifted: Vec<(i32, i32)> = vertices
+        .iter()
+        .map(|&(x, y)| (x - min_x, y - min_y))
+        .collect();
+    fill_polygon(&mut scratch, &shifted, marker);
+    for sy in 0..h {
+        for sx in 0..w {
+            let off = ((sy * w + sx) * 4) as usize;
+            if scratch.data[off] != marker.r || scratch.data[off + 1] != marker.g {
+                continue;
+            }
+            plot_pattern_pixel(canvas, min_x + sx as i32, min_y + sy as i32, pat, fg, bg);
+        }
+    }
+}
+
+/// Patterned-frame rectangle with a `pen_h × pen_v` brush. Each stamped
+/// pen pixel respects the pattern's stipple at that coordinate.
+pub fn frame_rect_pattern_thick(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    if pat.is_solid_fg() {
+        frame_rect_thick(canvas, top, left, bottom, right, pen_h, pen_v, fg);
+        return;
+    }
+    if pat.is_solid_bg() {
+        frame_rect_thick(canvas, top, left, bottom, right, pen_h, pen_v, bg);
+        return;
+    }
+    let ph = pen_h.max(1);
+    let pv = pen_v.max(1);
+    // Top + bottom strips.
+    for dy in 0..pv {
+        for x in left..right {
+            plot_pattern_pixel(canvas, x, top + dy, pat, fg, bg);
+            plot_pattern_pixel(canvas, x, bottom - 1 - dy, pat, fg, bg);
+        }
+    }
+    // Left + right strips, excluding the corners we already drew.
+    for y in (top + pv)..(bottom - pv) {
+        for dx in 0..ph {
+            plot_pattern_pixel(canvas, left + dx, y, pat, fg, bg);
+            plot_pattern_pixel(canvas, right - 1 - dx, y, pat, fg, bg);
+        }
+    }
 }
 
 #[cfg(test)]
