@@ -286,16 +286,23 @@ fn probe_eof_without_end_pic() {
 
 #[test]
 fn probe_unsupported_opcode_preserves_prior_counts() {
-    // FrameRect, then a known-unsupported PixPat opcode (BkPixPat
-    // 0x0012). The probe records the FrameRect, then terminates with
-    // ProbeTermination::Unsupported.
+    // FrameRect, then a reserved-with-no-known-handler opcode (0x0017,
+    // marked "Reserved for Apple use" with "Not determined" data size
+    // in Inside Macintosh §A-3 Table A-2). The probe records the
+    // FrameRect, then terminates with ProbeTermination::Unsupported
+    // because the walker has no rule for stepping past 0x0017.
+    //
+    // Round 91 note: this slot used to hold a `0x0012 BkPixPat` smoke
+    // test back when PixPat was an unsupported opcode. PixPat is now
+    // fully decoded (`tests/synth_v2_round91.rs`), so the test moves to
+    // an opcode that's *still* genuinely unsupported.
     let mut body = Vec::new();
     body.extend_from_slice(&0x0030u16.to_be_bytes());
     body.extend_from_slice(&0i16.to_be_bytes());
     body.extend_from_slice(&0i16.to_be_bytes());
     body.extend_from_slice(&4i16.to_be_bytes());
     body.extend_from_slice(&4i16.to_be_bytes());
-    body.extend_from_slice(&0x0012u16.to_be_bytes()); // BkPixPat
+    body.extend_from_slice(&0x0017u16.to_be_bytes()); // Reserved, undefined size
     let mut buf = Vec::new();
     buf.extend_from_slice(&0u16.to_be_bytes());
     buf.extend_from_slice(&0i16.to_be_bytes());
@@ -312,7 +319,10 @@ fn probe_unsupported_opcode_preserves_prior_counts() {
     assert!(!p.end_pic_seen);
     match &p.termination {
         ProbeTermination::Unsupported(msg) => {
-            assert!(msg.contains("PixPat"), "got: {msg}");
+            assert!(
+                msg.contains("0x0017") || msg.contains("unsupported"),
+                "got: {msg}"
+            );
         }
         other => panic!("expected Unsupported, got {other:?}"),
     }

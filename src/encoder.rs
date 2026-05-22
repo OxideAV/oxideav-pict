@@ -499,6 +499,142 @@ pub fn build_direct_bits_rect_op(
 }
 
 // ---------------------------------------------------------------------------
+// PixPat opcode-bytes builders (round 91 — colour 8×8 pixel pattern).
+// ---------------------------------------------------------------------------
+
+/// Which PixPat slot to emit — `BkPixPat 0x0012`, `PnPixPat 0x0013` or
+/// `FillPixPat 0x0014`. Mirrors the three monochrome `BkPat / PnPat /
+/// FillPat` opcodes, just with a multi-colour 8×8 tile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixPatSlot {
+    /// Background pattern — consumed by erase verbs.
+    Background,
+    /// Pen pattern — consumed by frame / paint verbs.
+    Pen,
+    /// Fill pattern — consumed by fill verbs.
+    Fill,
+}
+
+impl PixPatSlot {
+    /// PICT opcode word for this slot.
+    pub fn opcode(self) -> u16 {
+        match self {
+            PixPatSlot::Background => 0x0012,
+            PixPatSlot::Pen => 0x0013,
+            PixPatSlot::Fill => 0x0014,
+        }
+    }
+}
+
+/// Build the bytes for a single PICT v2 PixPat opcode (`0x0012` /
+/// `0x0013` / `0x0014`) carrying a **colour-pixmap** (`patType=1`)
+/// 8×8 pixel pattern. Inside Macintosh: Imaging With QuickDraw §A-3
+/// Listing A-1.
+///
+/// * `slot` — selects `BkPixPat` / `PnPixPat` / `FillPixPat`.
+/// * `fallback` — the 8-byte monochrome `Pat1Data` field; classic
+///   QuickDraw consults this when the colour pixmap can't be honoured
+///   (typically on b/w screens). Round-trips through the decoder as
+///   the `Pattern` portion of the resulting `PictPattern::ColourPixmap`.
+/// * `pixels` — 8 rows × 8 columns of RGBA, row-major. The on-disk
+///   representation packs them into 8 bpp indexed pixels against a
+///   ColorTable holding every distinct colour seen (≤ 64 entries).
+///
+/// The emitted PixData uses unpacked 8 bpp (Inside Macintosh §A-3 PixData
+/// case `rowBytes < 8`: 8 row bytes × 8 rows = 64 bytes flat — no
+/// PackBits prefix). pixelSize = 8, cmpCount = 1, cmpSize = 8;
+/// packType = 0 (default = no packing) per §4.
+///
+/// Returns `InvalidData` if more than 256 distinct colours are present
+/// (the indexed PixData uses an 8 bpp palette, capping at 256 entries).
+/// 64 distinct colours is the theoretical maximum for an 8×8 tile, so
+/// this can't fire in practice.
+pub fn build_pix_pat_op(
+    slot: PixPatSlot,
+    fallback: [u8; 8],
+    pixels: &[[u8; 4]; 64],
+) -> Result<Vec<u8>> {
+    // Build a deduplicated palette + per-cell indices.
+    let mut palette: Vec<[u8; 4]> = Vec::with_capacity(64);
+    let mut indices = [0u8; 64];
+    for (i, px) in pixels.iter().enumerate() {
+        let idx = match palette.iter().position(|p| p == px) {
+            Some(j) => j,
+            None => {
+                if palette.len() >= 256 {
+                    return Err(PictError::invalid(format!(
+                        "build_pix_pat_op: palette overflowed 256 entries at cell {i}"
+                    )));
+                }
+                palette.push(*px);
+                palette.len() - 1
+            }
+        };
+        indices[i] = idx as u8;
+    }
+
+    let mut buf: Vec<u8> = Vec::with_capacity(2 + 10 + 46 + 8 + palette.len() * 8 + 64);
+
+    // Opcode word + patType + Pat1Data.
+    write_u16(&mut buf, slot.opcode());
+    write_u16(&mut buf, 1); // patType = 1 (colour-pixmap)
+    buf.extend_from_slice(&fallback);
+
+    // PixMap (sans baseAddr) — 46 bytes.
+    // rowBytes (PixMap flag set + 8 byte row stride).
+    let row_bytes_raw = 8u16; // 8 cols × 8 bpp = 8 bytes per row
+    write_u16(&mut buf, row_bytes_raw | 0x8000);
+    // bounds: 0,0,8,8.
+    write_i16(&mut buf, 0);
+    write_i16(&mut buf, 0);
+    write_i16(&mut buf, 8);
+    write_i16(&mut buf, 8);
+    // pmVersion, packType, packSize.
+    write_u16(&mut buf, 0);
+    write_u16(&mut buf, 0); // packType = 0 (no packing — used because rowBytes < 8 means unpacked PixData)
+    write_u32(&mut buf, 0);
+    // hRes / vRes = 72 dpi.
+    write_u32(&mut buf, 0x00480000);
+    write_u32(&mut buf, 0x00480000);
+    // pixelType = 0 (indexed), pixelSize = 8, cmpCount = 1, cmpSize = 8.
+    write_u16(&mut buf, 0);
+    write_u16(&mut buf, 8);
+    write_u16(&mut buf, 1);
+    write_u16(&mut buf, 8);
+    // planeBytes, pmTable, pmReserved.
+    write_u32(&mut buf, 0);
+    write_u32(&mut buf, 0);
+    write_u32(&mut buf, 0);
+
+    // ColorTable: ctSeed (4) + ctFlags (2) + ctSize (2) + (ctSize + 1) entries.
+    write_u32(&mut buf, 0); // ctSeed (synth)
+    write_u16(&mut buf, 0); // ctFlags (clear → PixMap, not device)
+    let ct_size = (palette.len() as i16) - 1;
+    write_i16(&mut buf, ct_size);
+    for (i, rgba) in palette.iter().enumerate() {
+        write_u16(&mut buf, i as u16); // value (= index)
+                                       // RGBColor: 16-bit per channel, high byte = colour data.
+        write_u16(&mut buf, ((rgba[0] as u16) << 8) | rgba[0] as u16);
+        write_u16(&mut buf, ((rgba[1] as u16) << 8) | rgba[1] as u16);
+        write_u16(&mut buf, ((rgba[2] as u16) << 8) | rgba[2] as u16);
+    }
+
+    // PixData: row_bytes (8) < 8 is false, but per Inside Macintosh §A-3
+    // PixData pseudocode, the "unpacked" path applies when rowBytes < 8.
+    // We hit rowBytes = 8 exactly, so the "packed" path applies — we
+    // emit a per-row byteCount + PackBits-encoded row.
+    for y in 0..8 {
+        let row = &indices[y * 8..(y + 1) * 8];
+        let enc = packbits::encode(row);
+        // row_bytes = 8 ≤ 250, so the byteCount prefix is 1 byte.
+        buf.push(enc.len() as u8);
+        buf.extend_from_slice(&enc);
+    }
+
+    Ok(buf)
+}
+
+// ---------------------------------------------------------------------------
 // 1-bpp BitMap encoders (BitsRect / PackBitsRect).
 // ---------------------------------------------------------------------------
 

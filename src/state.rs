@@ -124,6 +124,91 @@ impl Default for Pattern {
     }
 }
 
+/// QuickDraw multi-colour 8×8 pixel pattern.
+///
+/// Inside Macintosh: Imaging With QuickDraw §A-3 Listing A-1 — the
+/// `BkPixPat` (`0x0012`), `PnPixPat` (`0x0013`) and `FillPixPat`
+/// (`0x0014`) opcodes each carry a `PixPat` record whose `patType=1`
+/// (colour-pixmap) variant carries:
+///
+/// 1. `PatType: word`     — type=1 for colour-pixmap variant.
+/// 2. `Pat1Data: Pattern` — 8-byte monochrome fallback.
+/// 3. `PixMap: PixMap`    — pixel-map header sans baseAddr (matches
+///    Listing A-2 convention).
+/// 4. `ColorTable`        — palette consumed by indexed-pixel PixData.
+/// 5. `PixData: PixData`  — per-row PackBits / raw pixel bytes per §A-3.
+///
+/// The decoder resolves the indexed-pixel PixData against the
+/// `ColorTable` and stores the result as an 8×8 [`Rgba`] grid here.
+/// Patterns whose `PixMap.bounds` doesn't match `8×8` are treated as
+/// the `Pat1Data` fallback only (a future round can wire up arbitrary
+/// pattern tile sizes — Inside Macintosh §A-3 nominally permits them,
+/// though every real-world PICT we've audited carries an 8×8 tile).
+///
+/// Sampling semantics mirror [`Pattern::sample`]: the tile wraps on
+/// `(x mod 8, y mod 8)`, with the most-significant byte/row mapping to
+/// top-left. Stippling cells take their fully-resolved RGB directly from
+/// `pixels`; the current foreground / background colour state is NOT
+/// consulted (PixPat is *colour-explicit*, unlike monochrome `Pattern`
+/// which selects between fg / bg per cell).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PixPattern {
+    /// 8-byte monochrome fallback (the `Pat1Data` field of the on-disk
+    /// PixPat record). Used by callers that want a black/white render
+    /// of the pattern without consulting the colour grid.
+    pub fallback: Pattern,
+    /// 8 rows × 8 columns of RGBA, row-major.
+    pub pixels: [Rgba; 64],
+}
+
+impl PixPattern {
+    /// Sample the pattern at picture-frame coordinates `(x, y)`. The
+    /// 8×8 tile wraps modulo 8 along both axes; the QuickDraw origin
+    /// corresponds to cell `[0][0]`.
+    #[inline]
+    pub fn sample(&self, x: i32, y: i32) -> Rgba {
+        let row = y.rem_euclid(8) as usize;
+        let col = x.rem_euclid(8) as usize;
+        self.pixels[row * 8 + col]
+    }
+}
+
+/// Tagged pattern slot — either the legacy monochrome `Pattern` or the
+/// colour-pixmap `PixPattern`. Tracked separately from the monochrome
+/// [`Pattern`] state so encoders / inspectors can round-trip the slot
+/// without lossy collapse to the `Pat1Data` fallback.
+///
+/// The colour variant is boxed because a `PixPattern` is 264 bytes
+/// while `Pattern` is 8 — the size discrepancy would otherwise inflate
+/// every `PictPattern` consumer 33×.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PictPattern {
+    /// Monochrome 8×8 stipple — `PnPat 0x0009 / BkPat 0x0002 /
+    /// FillPat 0x000A` opcodes (or the `Pat1Data` fallback of a
+    /// PixPat record).
+    Mono(Pattern),
+    /// Multi-colour 8×8 pixel pattern — `PnPixPat 0x0013 / BkPixPat
+    /// 0x0012 / FillPixPat 0x0014` opcodes, `patType=1` variant.
+    ColourPixmap(Box<PixPattern>),
+}
+
+impl PictPattern {
+    /// The monochrome representation. Returns the `Pattern` directly
+    /// for `Mono`, or the `Pat1Data` fallback for `ColourPixmap`.
+    pub fn mono(&self) -> Pattern {
+        match self {
+            PictPattern::Mono(p) => *p,
+            PictPattern::ColourPixmap(pp) => pp.fallback,
+        }
+    }
+}
+
+impl Default for PictPattern {
+    fn default() -> Self {
+        PictPattern::Mono(Pattern::default())
+    }
+}
+
 /// QuickDraw `Rect` (top, left, bottom, right) — same layout we read
 /// off disk. Stored as i32 internally so the rasteriser can use
 /// signed arithmetic without risking i16 overflow on out-of-bounds
@@ -192,6 +277,20 @@ pub struct PictState {
     /// Default = `Pattern::BLACK` (solid foreground), the `qd.black`
     /// default. Honoured by fill verbs (low-nibble `4`).
     pub fill_pat: Pattern,
+    /// Active multi-colour pen pattern (set by `PnPixPat`, opcode
+    /// `0x0013`). When `Some`, overrides `pen_pat` for frame / paint
+    /// verbs — every cell renders the resolved per-cell RGBA directly
+    /// instead of selecting between current fg / bg per the monochrome
+    /// stipple convention. Set back to `None` on the next plain `PnPat`
+    /// opcode (round 91 mirrors classic QuickDraw's "set most-recent
+    /// pattern" semantics).
+    pub pen_pix_pat: Option<PixPattern>,
+    /// Active multi-colour background pattern (`BkPixPat 0x0012`).
+    /// Overrides `back_pat` for erase verbs when `Some`.
+    pub back_pix_pat: Option<PixPattern>,
+    /// Active multi-colour fill pattern (`FillPixPat 0x0014`). Overrides
+    /// `fill_pat` for fill verbs when `Some`.
+    pub fill_pix_pat: Option<PixPattern>,
 }
 
 impl Default for PictState {
@@ -211,6 +310,9 @@ impl Default for PictState {
             pen_pat: Pattern::BLACK,
             back_pat: Pattern::WHITE,
             fill_pat: Pattern::BLACK,
+            pen_pix_pat: None,
+            back_pix_pat: None,
+            fill_pix_pat: None,
         }
     }
 }
@@ -269,6 +371,34 @@ mod tests {
             assert!(pat.sample(8, y)); // wraps to col 0
             assert!(!pat.sample(9, y)); // wraps to col 1
         }
+    }
+
+    #[test]
+    fn pix_pattern_sample_wraps() {
+        let mut pixels = [Rgba::BLACK; 64];
+        // Top-left cell = red so we can spot wrapping.
+        pixels[0] = Rgba::new(0xFF, 0, 0, 0xFF);
+        // Bottom-right cell = green.
+        pixels[63] = Rgba::new(0, 0xFF, 0, 0xFF);
+        let pp = PixPattern {
+            fallback: Pattern::BLACK,
+            pixels,
+        };
+        assert_eq!(pp.sample(0, 0).r, 0xFF);
+        assert_eq!(pp.sample(8, 8).r, 0xFF, "wraps modulo 8");
+        assert_eq!(pp.sample(7, 7).g, 0xFF, "bottom-right is green");
+        assert_eq!(pp.sample(-1, -1).g, 0xFF, "negative coords wrap");
+    }
+
+    #[test]
+    fn pict_pattern_mono_unwrap() {
+        let p = PictPattern::Mono(Pattern([0xAA; 8]));
+        assert_eq!(p.mono(), Pattern([0xAA; 8]));
+        let cp = PictPattern::ColourPixmap(Box::new(PixPattern {
+            fallback: Pattern([0x55; 8]),
+            pixels: [Rgba::BLACK; 64],
+        }));
+        assert_eq!(cp.mono(), Pattern([0x55; 8]));
     }
 
     #[test]

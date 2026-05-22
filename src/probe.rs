@@ -74,6 +74,12 @@ pub struct PictProbe {
     /// Inside Macintosh §A-3 monochrome 8×8 patterns; counted once per
     /// occurrence regardless of which slot they target.
     pub pattern_set_count: u32,
+    /// How many multi-colour pattern-set opcodes (`PnPixPat 0x0013`,
+    /// `BkPixPat 0x0012`, `FillPixPat 0x0014`) appear. Inside Macintosh
+    /// §A-3 Listing A-1; counted once per occurrence regardless of
+    /// slot or sub-type (`patType=1` colour-pixmap and `patType=2`
+    /// dither both count).
+    pub pix_pattern_set_count: u32,
     /// How many `CompressedQuickTime` (`0x8200`) opcodes appear. Each
     /// carries an embedded QuickTime image (typically JPEG) the
     /// decoder currently skips.
@@ -185,6 +191,7 @@ pub fn probe_pict(bytes: &[u8]) -> Result<PictProbe> {
         comment_count: 0,
         clip_rgn_count: 0,
         pattern_set_count: 0,
+        pix_pattern_set_count: 0,
         compressed_quicktime_count: 0,
         uncompressed_quicktime_count: 0,
         end_pic_seen: false,
@@ -437,9 +444,15 @@ fn probe_v2_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             p.pattern_set_count += 1;
             Ok(OpStep::Continue)
         }
-        OP_BK_PIX_PAT | OP_PN_PIX_PAT | OP_FILL_PIX_PAT => Err(PictError::unsupported(
-            "PixPat opcodes (BkPixPat / PnPixPat / FillPixPat) need a PixMap-aware skip",
-        )),
+        OP_BK_PIX_PAT | OP_PN_PIX_PAT | OP_FILL_PIX_PAT => {
+            // PixPat — variable-size colour pattern (Inside Macintosh
+            // §A-3 Listing A-1). Walk the same record layout the
+            // decoder consumes to keep the probe in sync; the read
+            // bytes are discarded.
+            skip_pix_pat(r)?;
+            p.pix_pattern_set_count += 1;
+            Ok(OpStep::Continue)
+        }
         OP_SHORT_COMMENT => {
             r.skip(2)?;
             p.comment_count += 1;
@@ -744,6 +757,57 @@ fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<()> {
         _ => unreachable!(),
     }
     Ok(())
+}
+
+/// Skip a PixPat opcode payload (`BkPixPat 0x0012` / `PnPixPat 0x0013` /
+/// `FillPixPat 0x0014`) without resolving the colour grid. Mirrors the
+/// decoder's `decode_pix_pat` byte walk per Inside Macintosh §A-3
+/// Listing A-1.
+fn skip_pix_pat(r: &mut Reader<'_>) -> Result<()> {
+    let pat_type = r.read_u16()?;
+    // Pat1Data (8-byte fallback).
+    r.skip(8)?;
+    match pat_type {
+        1 => {
+            // colour-pixmap sub-type.
+            let rb_raw = r.read_u16()?;
+            let row_bytes = (rb_raw & 0x3FFF) as usize;
+            let bounds = r.read_rect()?;
+            let height = (bounds.2 - bounds.0).max(0) as usize;
+            // pmVersion (2) + packType (2) + packSize (4) + hRes (4) +
+            // vRes (4) + pixelType (2) + pixelSize (2) + cmpCount (2) +
+            // cmpSize (2) + planeBytes (4) + pmTable (4) +
+            // pmReserved (4) = 36 bytes.
+            r.skip(36)?;
+            // ColorTable: ctSeed (4) + ctFlags (2) + ctSize (2) + entries.
+            let _ct_seed = r.read_u32()?;
+            let _ct_flags = r.read_i16()?;
+            let ct_size = r.read_i16()?;
+            let n_entries = ((ct_size as i32) + 1).max(0) as usize;
+            r.skip(n_entries * 8)?; // ColorSpec = value(2) + RGB(6)
+                                    // PixData.
+            if row_bytes < 8 {
+                r.skip(row_bytes * height)?;
+            } else {
+                for _ in 0..height {
+                    let bc = if row_bytes > 250 {
+                        r.read_u16()? as usize
+                    } else {
+                        r.read_u8()? as usize
+                    };
+                    r.skip(bc)?;
+                }
+            }
+            Ok(())
+        }
+        2 => {
+            // ditherPat: 6-byte RGBColor.
+            r.skip(6)
+        }
+        other => Err(PictError::unsupported(format!(
+            "PixPat patType={other} (only 1=colourPixmap, 2=ditherPat per IM §A-3 Listing A-1)"
+        ))),
+    }
 }
 
 fn skip_raster_opcode_v1(r: &mut Reader<'_>, opcode: u16) -> Result<()> {

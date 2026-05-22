@@ -42,13 +42,15 @@ use crate::image::{PictImage, PictPixelFormat};
 use crate::opcodes::*;
 use crate::packbits;
 use crate::raster::{
-    fill_arc, fill_oval_pattern, fill_polygon_pattern, fill_rect, fill_rect_pattern,
-    fill_round_rect_pattern, frame_arc, frame_oval_thick, frame_polygon, frame_rect,
-    frame_rect_pattern_thick, frame_round_rect, line_thick as draw_line_thick, Canvas,
+    fill_arc, fill_oval_pattern, fill_oval_pix_pattern, fill_polygon_pattern,
+    fill_polygon_pix_pattern, fill_rect, fill_rect_pattern, fill_rect_pix_pattern,
+    fill_round_rect_pattern, fill_round_rect_pix_pattern, frame_arc, frame_oval_thick,
+    frame_polygon, frame_rect, frame_rect_pattern_thick, frame_rect_pix_pattern_thick,
+    frame_round_rect, line_thick as draw_line_thick, Canvas,
 };
 use crate::reader::Reader;
 use crate::region::{parse_region, Region};
-use crate::state::{Pattern, PictState, RectI32, Rgba};
+use crate::state::{Pattern, PictState, PixPattern, RectI32, Rgba};
 
 /// Decode a complete PICT byte stream into a single rasterised
 /// [`PictImage`].
@@ -243,20 +245,32 @@ fn dispatch_v2_opcode(
         }
         OP_PAINT_RGN => {
             let rgn = parse_region(r)?;
-            paint_region_pattern(canvas, state, &rgn, state.pen_pat, state.fg, state.bg);
+            if let Some(pp) = &state.pen_pix_pat {
+                paint_region_pix_pattern(canvas, state, &rgn, pp);
+            } else {
+                paint_region_pattern(canvas, state, &rgn, state.pen_pat, state.fg, state.bg);
+            }
             Ok(true)
         }
         OP_FILL_RGN => {
             let rgn = parse_region(r)?;
-            paint_region_pattern(canvas, state, &rgn, state.fill_pat, state.fg, state.bg);
+            if let Some(pp) = &state.fill_pix_pat {
+                paint_region_pix_pattern(canvas, state, &rgn, pp);
+            } else {
+                paint_region_pattern(canvas, state, &rgn, state.fill_pat, state.fg, state.bg);
+            }
             Ok(true)
         }
         OP_ERASE_RGN => {
             let rgn = parse_region(r)?;
-            // Erase: stipple on-bits map to *background*, off-bits to
-            // foreground — the BkPat inversion convention from Inside
-            // Macintosh §A-3.
-            paint_region_pattern(canvas, state, &rgn, state.back_pat, state.bg, state.fg);
+            if let Some(pp) = &state.back_pix_pat {
+                paint_region_pix_pattern(canvas, state, &rgn, pp);
+            } else {
+                // Erase: stipple on-bits map to *background*, off-bits to
+                // foreground — the BkPat inversion convention from Inside
+                // Macintosh §A-3.
+                paint_region_pattern(canvas, state, &rgn, state.back_pat, state.bg, state.fg);
+            }
             Ok(true)
         }
         OP_INVERT_RGN => {
@@ -311,11 +325,15 @@ fn dispatch_v2_opcode(
         }
         OP_PN_PAT => {
             // PnPat (0x0009): 8-byte monochrome 8×8 pattern, applied by
-            // frame / paint verbs. Inside Macintosh §A-3.
+            // frame / paint verbs. Inside Macintosh §A-3. Clears the
+            // colour `pen_pix_pat` slot — a subsequent mono PnPat
+            // overrides any previously-set PnPixPat (classic QuickDraw
+            // "most recent pattern wins" semantics).
             let bytes = r.read_bytes(8)?;
             let mut p = [0u8; 8];
             p.copy_from_slice(bytes);
             state.pen_pat = Pattern(p);
+            state.pen_pix_pat = None;
             Ok(true)
         }
         OP_BK_PAT => {
@@ -324,6 +342,7 @@ fn dispatch_v2_opcode(
             let mut p = [0u8; 8];
             p.copy_from_slice(bytes);
             state.back_pat = Pattern(p);
+            state.back_pix_pat = None;
             Ok(true)
         }
         OP_FILL_PAT => {
@@ -333,6 +352,7 @@ fn dispatch_v2_opcode(
             let mut p = [0u8; 8];
             p.copy_from_slice(bytes);
             state.fill_pat = Pattern(p);
+            state.fill_pix_pat = None;
             Ok(true)
         }
         // Pen-position-affecting ops.
@@ -500,12 +520,35 @@ fn dispatch_v2_opcode(
             Ok(true)
         }
         OP_BK_PIX_PAT | OP_PN_PIX_PAT | OP_FILL_PIX_PAT => {
-            // PixPat is variable-size and needs a partial PixMap
-            // parse to skip safely. We don't implement patterns so
-            // this stays Unsupported for now.
-            Err(PictError::unsupported(
-                "PixPat opcodes (BkPixPat / PnPixPat / FillPixPat) need a PixMap-aware skip",
-            ))
+            // PixPat — multi-colour 8×8 pixel pattern. Inside Macintosh
+            // §A-3 Listing A-1: `patType` (word), `Pat1Data` (8-byte
+            // monochrome fallback), then either a `ditherPat` payload
+            // (patType=2) or a `colourPixmap` payload (patType=1):
+            // PixMap (sans baseAddr) + ColorTable + PixData.
+            //
+            // The monochrome `Pat1Data` is always stored in the
+            // corresponding mono slot so that callers / code paths
+            // which consult only the monochrome `pen_pat` / `back_pat` /
+            // `fill_pat` (e.g. `paint_region_pattern`) still pick up a
+            // reasonable fallback. The colour `*_pix_pat` slot is set
+            // additionally for `patType=1` payloads.
+            let (pat1, colour) = decode_pix_pat(r)?;
+            match opcode {
+                OP_PN_PIX_PAT => {
+                    state.pen_pat = pat1;
+                    state.pen_pix_pat = colour;
+                }
+                OP_BK_PIX_PAT => {
+                    state.back_pat = pat1;
+                    state.back_pix_pat = colour;
+                }
+                OP_FILL_PIX_PAT => {
+                    state.fill_pat = pat1;
+                    state.fill_pix_pat = colour;
+                }
+                _ => unreachable!("opcode filtered above"),
+            }
+            Ok(true)
         }
         OP_SHORT_COMMENT => {
             r.skip(2)?;
@@ -626,59 +669,86 @@ fn read_rgb16(r: &mut Reader<'_>) -> Result<(u16, u16, u16)> {
 /// `0x30..=0x34`) to the canvas. Inside Macintosh §2 / §A-3 ties each
 /// verb to a distinct pattern slot:
 ///
-/// * `frame` / `paint` use the **pen pattern** (`PnPat`).
-/// * `erase` uses the **background pattern** (`BkPat`), inverted —
-///   on-bits select the background colour, off-bits select the
-///   foreground.
-/// * `fill` uses the **fill pattern** (`FillPat`).
+/// * `frame` / `paint` use the **pen pattern** (`PnPat` / `PnPixPat`).
+/// * `erase` uses the **background pattern** (`BkPat` / `BkPixPat`),
+///   inverted for the monochrome path — on-bits select the background
+///   colour, off-bits select the foreground.
+/// * `fill` uses the **fill pattern** (`FillPat` / `FillPixPat`).
 /// * `invert` ignores patterns entirely.
+///
+/// When a colour `*_pix_pat` is set, every cell renders the resolved
+/// per-cell RGBA directly from the 8×8 grid (fg/bg are ignored).
 fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
     let (ph, pv) = state.pen_size;
     match opcode & 0x000F {
-        0 => frame_rect_pattern_thick(
-            canvas,
-            top,
-            left,
-            bottom,
-            right,
-            ph,
-            pv,
-            state.pen_pat,
-            state.fg,
-            state.bg,
-        ),
-        1 => fill_rect_pattern(
-            canvas,
-            top,
-            left,
-            bottom,
-            right,
-            state.pen_pat,
-            state.fg,
-            state.bg,
-        ),
-        2 => fill_rect_pattern(
-            canvas,
-            top,
-            left,
-            bottom,
-            right,
-            state.back_pat,
-            state.bg,
-            state.fg,
-        ),
+        0 => {
+            if let Some(pp) = &state.pen_pix_pat {
+                frame_rect_pix_pattern_thick(canvas, top, left, bottom, right, ph, pv, pp);
+            } else {
+                frame_rect_pattern_thick(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    ph,
+                    pv,
+                    state.pen_pat,
+                    state.fg,
+                    state.bg,
+                );
+            }
+        }
+        1 => {
+            if let Some(pp) = &state.pen_pix_pat {
+                fill_rect_pix_pattern(canvas, top, left, bottom, right, pp);
+            } else {
+                fill_rect_pattern(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    state.pen_pat,
+                    state.fg,
+                    state.bg,
+                );
+            }
+        }
+        2 => {
+            if let Some(pp) = &state.back_pix_pat {
+                fill_rect_pix_pattern(canvas, top, left, bottom, right, pp);
+            } else {
+                fill_rect_pattern(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    state.back_pat,
+                    state.bg,
+                    state.fg,
+                );
+            }
+        }
         3 => invert_rect(canvas, top, left, bottom, right),
-        4 => fill_rect_pattern(
-            canvas,
-            top,
-            left,
-            bottom,
-            right,
-            state.fill_pat,
-            state.fg,
-            state.bg,
-        ),
+        4 => {
+            if let Some(pp) = &state.fill_pix_pat {
+                fill_rect_pix_pattern(canvas, top, left, bottom, right, pp);
+            } else {
+                fill_rect_pattern(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    state.fill_pat,
+                    state.fg,
+                    state.bg,
+                );
+            }
+        }
         _ => {}
     }
 }
@@ -688,48 +758,66 @@ fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: R
     let (ow, oh) = state.oval_size;
     match opcode & 0x000F {
         0 => frame_round_rect(canvas, top, left, bottom, right, ow, oh, state.fg),
-        1 => fill_round_rect_pattern(
-            canvas,
-            top,
-            left,
-            bottom,
-            right,
-            ow,
-            oh,
-            state.pen_pat,
-            state.fg,
-            state.bg,
-        ),
-        2 => fill_round_rect_pattern(
-            canvas,
-            top,
-            left,
-            bottom,
-            right,
-            ow,
-            oh,
-            state.back_pat,
-            state.bg,
-            state.fg,
-        ),
+        1 => {
+            if let Some(pp) = &state.pen_pix_pat {
+                fill_round_rect_pix_pattern(canvas, top, left, bottom, right, ow, oh, pp);
+            } else {
+                fill_round_rect_pattern(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    ow,
+                    oh,
+                    state.pen_pat,
+                    state.fg,
+                    state.bg,
+                );
+            }
+        }
+        2 => {
+            if let Some(pp) = &state.back_pix_pat {
+                fill_round_rect_pix_pattern(canvas, top, left, bottom, right, ow, oh, pp);
+            } else {
+                fill_round_rect_pattern(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    ow,
+                    oh,
+                    state.back_pat,
+                    state.bg,
+                    state.fg,
+                );
+            }
+        }
         3 => {
             // Approximate invert as "frame for outline + nothing for
             // interior" — true invert needs per-pixel toggle and we
             // don't have an alpha pipeline. Round 2: just frame.
             frame_round_rect(canvas, top, left, bottom, right, ow, oh, state.fg)
         }
-        4 => fill_round_rect_pattern(
-            canvas,
-            top,
-            left,
-            bottom,
-            right,
-            ow,
-            oh,
-            state.fill_pat,
-            state.fg,
-            state.bg,
-        ),
+        4 => {
+            if let Some(pp) = &state.fill_pix_pat {
+                fill_round_rect_pix_pattern(canvas, top, left, bottom, right, ow, oh, pp);
+            } else {
+                fill_round_rect_pattern(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    ow,
+                    oh,
+                    state.fill_pat,
+                    state.fg,
+                    state.bg,
+                );
+            }
+        }
         _ => {}
     }
 }
@@ -739,37 +827,55 @@ fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
     let (ph, pv) = state.pen_size;
     match opcode & 0x000F {
         0 => frame_oval_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
-        1 => fill_oval_pattern(
-            canvas,
-            top,
-            left,
-            bottom,
-            right,
-            state.pen_pat,
-            state.fg,
-            state.bg,
-        ),
-        2 => fill_oval_pattern(
-            canvas,
-            top,
-            left,
-            bottom,
-            right,
-            state.back_pat,
-            state.bg,
-            state.fg,
-        ),
+        1 => {
+            if let Some(pp) = &state.pen_pix_pat {
+                fill_oval_pix_pattern(canvas, top, left, bottom, right, pp);
+            } else {
+                fill_oval_pattern(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    state.pen_pat,
+                    state.fg,
+                    state.bg,
+                );
+            }
+        }
+        2 => {
+            if let Some(pp) = &state.back_pix_pat {
+                fill_oval_pix_pattern(canvas, top, left, bottom, right, pp);
+            } else {
+                fill_oval_pattern(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    state.back_pat,
+                    state.bg,
+                    state.fg,
+                );
+            }
+        }
         3 => frame_oval_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
-        4 => fill_oval_pattern(
-            canvas,
-            top,
-            left,
-            bottom,
-            right,
-            state.fill_pat,
-            state.fg,
-            state.bg,
-        ),
+        4 => {
+            if let Some(pp) = &state.fill_pix_pat {
+                fill_oval_pix_pattern(canvas, top, left, bottom, right, pp);
+            } else {
+                fill_oval_pattern(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    state.fill_pat,
+                    state.fg,
+                    state.bg,
+                );
+            }
+        }
         _ => {}
     }
 }
@@ -796,10 +902,28 @@ fn apply_arc_verb(
 fn apply_poly_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, verts: &[(i32, i32)]) {
     match opcode & 0x000F {
         0 => frame_polygon(canvas, verts, state.fg),
-        1 => fill_polygon_pattern(canvas, verts, state.pen_pat, state.fg, state.bg),
-        2 => fill_polygon_pattern(canvas, verts, state.back_pat, state.bg, state.fg),
+        1 => {
+            if let Some(pp) = &state.pen_pix_pat {
+                fill_polygon_pix_pattern(canvas, verts, pp);
+            } else {
+                fill_polygon_pattern(canvas, verts, state.pen_pat, state.fg, state.bg);
+            }
+        }
+        2 => {
+            if let Some(pp) = &state.back_pix_pat {
+                fill_polygon_pix_pattern(canvas, verts, pp);
+            } else {
+                fill_polygon_pattern(canvas, verts, state.back_pat, state.bg, state.fg);
+            }
+        }
         3 => frame_polygon(canvas, verts, state.fg),
-        4 => fill_polygon_pattern(canvas, verts, state.fill_pat, state.fg, state.bg),
+        4 => {
+            if let Some(pp) = &state.fill_pix_pat {
+                fill_polygon_pix_pattern(canvas, verts, pp);
+            } else {
+                fill_polygon_pattern(canvas, verts, state.fill_pat, state.fg, state.bg);
+            }
+        }
         _ => {}
     }
 }
@@ -872,6 +996,29 @@ fn paint_region_pattern(
                 } else {
                     canvas.put(cx, cy, bg);
                 }
+            }
+        }
+    }
+}
+
+/// Paint a region's interior using a colour pix-pattern. Each pixel
+/// inside the region takes its colour straight from the 8×8 tile.
+fn paint_region_pix_pattern(canvas: &mut Canvas, state: &PictState, rgn: &Region, pp: &PixPattern) {
+    let bb_w = rgn.width().max(0);
+    let bb_h = rgn.height().max(0);
+    if bb_w == 0 || bb_h == 0 {
+        return;
+    }
+    if rgn.mask.is_none() {
+        let (top, left, bottom, right) = rect_to_canvas(state, rgn.bbox);
+        fill_rect_pix_pattern(canvas, top, left, bottom, right, pp);
+        return;
+    }
+    for y in rgn.bbox.top..rgn.bbox.bottom {
+        for x in rgn.bbox.left..rgn.bbox.right {
+            if rgn.contains(x, y) {
+                let (cx, cy) = to_canvas(state, x, y);
+                canvas.put(cx, cy, pp.sample(cx, cy));
             }
         }
     }
@@ -1565,6 +1712,203 @@ fn decode_dbr_32bpp_planar_packbits(
 }
 
 // ---------------------------------------------------------------------------
+// PixPat decoder (BkPixPat / PnPixPat / FillPixPat opcode payload).
+// ---------------------------------------------------------------------------
+
+/// Pattern-type constants per Inside Macintosh §A-3 Listing A-1.
+const PAT_TYPE_COLOUR_PIXMAP: u16 = 1;
+const PAT_TYPE_DITHER: u16 = 2;
+
+/// Decode a PixPat record payload (the bytes that follow a `BkPixPat`
+/// `0x0012`, `PnPixPat` `0x0013` or `FillPixPat` `0x0014` opcode word).
+///
+/// Returns `(Pat1Data, Option<PixPattern>)`:
+///
+/// * The 8-byte monochrome `Pat1Data` field is always extracted —
+///   classic QuickDraw uses it as a fall-through when the colour
+///   pixel-pattern can't be honoured.
+/// * `Some(PixPattern)` is returned for a `patType=1` colour-pixmap
+///   payload that was successfully resolved against its embedded
+///   `ColorTable`.
+/// * `None` is returned for the `patType=2` dither sub-type, which
+///   needs a separate implementation round (see crate `README` for the
+///   followup; the bytes are still consumed so the surrounding opcode
+///   walk doesn't desynchronise).
+///
+/// Layout per Inside Macintosh: Imaging With QuickDraw §A-3 Listing A-1:
+///
+/// ```text
+/// PatType:    word                      (2 bytes; 1 = colour pixmap, 2 = dither)
+/// Pat1Data:   Pattern                   (8 bytes — monochrome fallback)
+///
+/// IF PatType = 1 (colour pixmap):
+///   PixMap:     PixMap (sans baseAddr)  (rowBytes, bounds, pmVersion, packType, packSize,
+///                                        hRes, vRes, pixelType, pixelSize, cmpCount, cmpSize,
+///                                        planeBytes, pmTable, pmReserved = 46 bytes)
+///   ColorTable: ColorTable              (8 bytes header + 8 bytes per ColorSpec entry,
+///                                        ctSize is the count minus 1)
+///   PixData:    PixData                 (per-row packed/raw bytes per §A-3)
+///
+/// IF PatType = 2 (dither):
+///   RGB:        RGBColor                (6 bytes — desired R/G/B; tile is computed at draw
+///                                        time by the QuickDraw dither engine. Round 91 stops
+///                                        short of implementing this; the bytes are skipped
+///                                        and the caller falls back to Pat1Data.)
+/// ```
+///
+/// The `PixMap` is the same record laid out in DirectBitsRect — minus
+/// the 4-byte `baseAddr` placeholder. Inside Macintosh's Listing A-2
+/// (BitsRect / PackBitsRect) uses the same "sans-baseAddr" convention
+/// for embedded PixMaps. (DirectBitsRect / DirectBitsRgn explicitly
+/// retain the placeholder because they pre-date the convention; see
+/// §A-3 "Opcodes $009A (DirectBitsRect) and $009B (DirectBitsRgn) …
+/// store the baseAddr field … set to $000000FF".)
+fn decode_pix_pat(r: &mut Reader<'_>) -> Result<(Pattern, Option<PixPattern>)> {
+    let pat_type = r.read_u16()?;
+    // Pat1Data — always present regardless of sub-type.
+    let pat1_bytes = r.read_bytes(8)?;
+    let mut pat1 = [0u8; 8];
+    pat1.copy_from_slice(pat1_bytes);
+    let pat1 = Pattern(pat1);
+
+    match pat_type {
+        PAT_TYPE_COLOUR_PIXMAP => {
+            // PixMap (sans baseAddr) — 46 bytes.
+            let row_bytes_raw = r.read_u16()?;
+            // Top bit of rowBytes flags PixMap vs BitMap. PixPat always
+            // expects PixMap; reject BitMap-flag PixPat as malformed.
+            if row_bytes_raw & 0x8000 == 0 && row_bytes_raw > 0 {
+                return Err(PictError::invalid(format!(
+                    "PixPat PixMap rowBytes={row_bytes_raw:#06X} top bit clear (BitMap?)"
+                )));
+            }
+            let row_bytes = (row_bytes_raw & 0x3FFF) as usize;
+            let bounds = r.read_rect()?;
+            let _pm_version = r.read_u16()?;
+            let _pack_type = r.read_u16()?;
+            let _pack_size = r.read_u32()?;
+            let _h_res = r.read_u32()?;
+            let _v_res = r.read_u32()?;
+            let _pixel_type = r.read_u16()?;
+            let pixel_size = r.read_u16()?;
+            let _cmp_count = r.read_u16()?;
+            let _cmp_size = r.read_u16()?;
+            let _plane_bytes = r.read_u32()?;
+            let _pm_table = r.read_u32()?;
+            let _pm_reserved = r.read_u32()?;
+
+            let width = (bounds.3 - bounds.1).max(0) as usize;
+            let height = (bounds.2 - bounds.0).max(0) as usize;
+
+            // ColorTable.
+            let ct_seed = r.read_u32()?;
+            let _ct_flags = r.read_i16()?;
+            let ct_size = r.read_i16()?; // entries = ct_size + 1
+            if !(0..=255).contains(&ct_size) {
+                return Err(PictError::invalid(format!(
+                    "PixPat ColorTable ctSize out of range: {ct_size}"
+                )));
+            }
+            let n_entries = (ct_size as usize) + 1;
+            let mut palette: Vec<Rgba> = Vec::with_capacity(n_entries);
+            for _ in 0..n_entries {
+                let _value = r.read_u16()?;
+                let r16 = r.read_u16()?;
+                let g16 = r.read_u16()?;
+                let b16 = r.read_u16()?;
+                palette.push(Rgba::from_rgb16(r16, g16, b16));
+            }
+
+            // PixData — per Inside Macintosh §A-3 ("PixData"):
+            //   IF rowBytes < 8: data unpacked, rowBytes * height bytes.
+            //   ELSE: per-row PackBits with byteCount prefix (1 byte if
+            //         rowBytes <= 250, else 2 bytes).
+            let mut pix_data: Vec<u8> = vec![0u8; row_bytes * height];
+            if row_bytes < 8 {
+                let raw = r.read_bytes(row_bytes * height)?;
+                pix_data.copy_from_slice(raw);
+            } else {
+                for y in 0..height {
+                    let _bc = if row_bytes > 250 {
+                        r.read_u16()? as usize
+                    } else {
+                        r.read_u8()? as usize
+                    };
+                    let dst = &mut pix_data[y * row_bytes..(y + 1) * row_bytes];
+                    crate::packbits::decode_into(r, dst)?;
+                }
+            }
+
+            // Resolve indexed-pixel PixData against the palette into an
+            // 8×8 RGBA grid. We only honour the 8×8 case (the universal
+            // QuickDraw tile size); non-8×8 patterns fall back to Pat1
+            // for round 91 — see crate README for the follow-up.
+            if width != 8 || height != 8 {
+                return Ok((pat1, None));
+            }
+
+            let mut pixels = [Rgba::BLACK; 64];
+            for y in 0..8 {
+                for x in 0..8 {
+                    let idx = read_indexed_pixel(&pix_data, x, y, row_bytes, pixel_size)?;
+                    pixels[y * 8 + x] = if (idx as usize) < palette.len() {
+                        palette[idx as usize]
+                    } else {
+                        // Out-of-range index → fall back to Pat1's
+                        // foreground/background interpretation for that
+                        // cell. Choose foreground (the "ink") since the
+                        // colour PixPat normally describes the same
+                        // visual texture as Pat1Data.
+                        if pat1.sample(x as i32, y as i32) {
+                            Rgba::BLACK
+                        } else {
+                            Rgba::WHITE
+                        }
+                    };
+                }
+            }
+            let _ = ct_seed; // unused; retained in read order.
+
+            Ok((pat1, Some(PixPattern { fallback: pat1, pixels })))
+        }
+        PAT_TYPE_DITHER => {
+            // Dither sub-type — 6-byte RGBColor follows. Decoder
+            // skips it for round 91; round-92+ work will compute the
+            // dither tile against the active GDevice palette.
+            r.skip(6)?;
+            Ok((pat1, None))
+        }
+        other => Err(PictError::unsupported(format!(
+            "PixPat patType={other} (only 1=colourPixmap, 2=ditherPat are documented in IM §A-3 Listing A-1)"
+        ))),
+    }
+}
+
+/// Read one indexed pixel from PixData at column `x`, row `y`.
+///
+/// Supports the four indexed pixelSize values Inside Macintosh §4
+/// enumerates: 1, 2, 4, 8 bits per pixel. The bit order within a byte
+/// is MSB-first per QuickDraw convention.
+fn read_indexed_pixel(
+    pix_data: &[u8],
+    x: usize,
+    y: usize,
+    row_bytes: usize,
+    pixel_size: u16,
+) -> Result<u8> {
+    let row = &pix_data[y * row_bytes..(y + 1) * row_bytes];
+    match pixel_size {
+        1 => Ok((row[x >> 3] >> (7 - (x & 7))) & 0x01),
+        2 => Ok((row[x >> 2] >> ((3 - (x & 3)) * 2)) & 0x03),
+        4 => Ok((row[x >> 1] >> ((1 - (x & 1)) * 4)) & 0x0F),
+        8 => Ok(row[x]),
+        other => Err(PictError::unsupported(format!(
+            "PixPat indexed pixelSize={other} (expected 1/2/4/8)"
+        ))),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PICT v1 opcode walker.
 // ---------------------------------------------------------------------------
 
@@ -1610,6 +1954,7 @@ fn dispatch_v1_opcode(
             let mut p = [0u8; 8];
             p.copy_from_slice(bytes);
             state.back_pat = Pattern(p);
+            state.back_pix_pat = None;
             Ok(true)
         }
         0x09 => {
@@ -1618,6 +1963,7 @@ fn dispatch_v1_opcode(
             let mut p = [0u8; 8];
             p.copy_from_slice(bytes);
             state.pen_pat = Pattern(p);
+            state.pen_pix_pat = None;
             Ok(true)
         }
         0x0A => {
@@ -1626,6 +1972,7 @@ fn dispatch_v1_opcode(
             let mut p = [0u8; 8];
             p.copy_from_slice(bytes);
             state.fill_pat = Pattern(p);
+            state.fill_pix_pat = None;
             Ok(true)
         }
         0x07 => {

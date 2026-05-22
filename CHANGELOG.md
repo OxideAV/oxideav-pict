@@ -9,6 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 91: **PixPat (multi-colour 8×8 pixel pattern) opcodes** —
+  `BkPixPat 0x0012`, `PnPixPat 0x0013`, `FillPixPat 0x0014` — are now
+  decoded per Inside Macintosh: Imaging With QuickDraw §A-3 Listing
+  A-1. The `patType=1` colour-pixmap sub-type's `PixMap` (sans
+  baseAddr) + `ColorTable` + indexed-pixel `PixData` is parsed,
+  resolved into an 8×8 RGBA grid, and folded onto the rasteriser via
+  the new `paint_region_pix_pattern` / `fill_rect_pix_pattern` /
+  `fill_oval_pix_pattern` / `fill_round_rect_pix_pattern` /
+  `fill_polygon_pix_pattern` / `frame_rect_pix_pattern_thick`
+  primitives. Frame / paint verbs consult the pen-pix-pat slot, erase
+  consults the back-pix-pat slot, fill consults the fill-pix-pat slot
+  (PixPat is colour-explicit — fg / bg state is not consulted, unlike
+  monochrome `Pattern`). A subsequent mono `PnPat / BkPat / FillPat`
+  clears the corresponding colour slot per classic "most-recent wins"
+  QuickDraw semantics.
+- Round 91: new `state::PixPattern` public type — 8-byte `Pat1Data`
+  fallback + `[Rgba; 64]` colour grid + `sample(x, y)` helper
+  (wraps modulo 8 on both axes, matching `Pattern::sample`).
+- Round 91: new `state::PictPattern` public enum — `Mono(Pattern)`
+  vs `ColourPixmap(Box<PixPattern>)`; `mono()` helper returns the
+  monochrome representation regardless of variant.
+- Round 91: `state::PictState` gains `pen_pix_pat`, `back_pix_pat`,
+  `fill_pix_pat: Option<PixPattern>` fields tracking the active
+  colour-pattern slot. All three default to `None` so PICTs that never
+  emit a PixPat opcode behave identically to round 8.
+- Round 91: `encoder::PixPatSlot` enum (`Background` / `Pen` / `Fill`)
+  + `encoder::build_pix_pat_op` — emits the bytes for a single PixPat
+  opcode (`0x0012` / `0x0013` / `0x0014`) with `patType=1` colour
+  pixmap. Dedupes the input RGBA tile into a ColorTable (≤ 256
+  entries; theoretical max for an 8×8 tile is 64), emits an 8-bpp
+  indexed PixMap header, and PackBits-encodes each row of the indexed
+  PixData. Default PackType = no packing per Inside Macintosh §A-3.
+- Round 91: `PictBuilder::pen_pix_pattern` / `bg_pix_pattern` /
+  `fill_pix_pattern` chainable builder methods on the v2 builder.
+- Round 91: `PictProbe::pix_pattern_set_count` field — number of
+  PixPat opcodes observed during the walk. The probe walks the same
+  byte layout as the decoder (delegating to a `skip_pix_pat` helper)
+  so it stays in sync with the decode path.
+- Round 91: `tests/synth_v2_round91.rs` — 12 round-trip tests covering
+  pen-pix-pat paint of rect / oval / round-rect / polygon / region with
+  RGBA tiles; fill / erase verb routing through the matching colour
+  slots; palette-dedup correctness on a 4-colour tile; pen-pix-pat →
+  pen-pat fallback ordering; probe `pix_pattern_set_count` accounting;
+  `build_pix_pat_op` opcode-word emission for each slot; uniform
+  solid-colour pix-pat ignoring active fg.
+- Round 91: existing `tests/probe.rs::probe_unsupported_opcode_preserves_prior_counts`
+  smoke test repointed from `0x0012 BkPixPat` (now supported) to
+  `0x0017` (reserved, undefined size per §A-3 Table A-2) so it still
+  exercises the "unsupported opcode preserves prior counts" path.
+
 - Round 8: monochrome pattern opcodes (`PnPat 0x0009 / v1 0x09`,
   `BkPat 0x0002 / v1 0x02`, `FillPat 0x000A / v1 0x0A`) are now decoded
   and folded into the rasteriser. Each is an 8-byte 8×8 on/off bitmap

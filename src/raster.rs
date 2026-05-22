@@ -36,7 +36,7 @@
 // module instead of one-off allows.
 #![allow(clippy::too_many_arguments)]
 
-use crate::state::{Pattern, Rgba};
+use crate::state::{Pattern, PixPattern, Rgba};
 
 /// A row-major RGBA8 canvas. Origin at (0, 0); y grows downward.
 pub struct Canvas {
@@ -1024,6 +1024,192 @@ pub fn frame_rect_pattern_thick(
         for dx in 0..ph {
             plot_pattern_pixel(canvas, left + dx, y, pat, fg, bg);
             plot_pattern_pixel(canvas, right - 1 - dx, y, pat, fg, bg);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PixPattern variants (round 91 — PixPat / colour 8×8 tile).
+//
+// Each helper mirrors the matching `*_pattern` primitive but renders
+// each cell from the colour-pixmap tile directly (no fg / bg
+// substitution). The tile wraps modulo 8 along both axes; the
+// QuickDraw origin maps to cell `[0][0]`.
+// ---------------------------------------------------------------------------
+
+#[inline]
+fn plot_pix_pattern(canvas: &mut Canvas, x: i32, y: i32, pp: &PixPattern) {
+    canvas.put(x, y, pp.sample(x, y));
+}
+
+/// Colour-pixmap rectangle fill.
+pub fn fill_rect_pix_pattern(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pp: &PixPattern,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    for y in top..bottom {
+        for x in left..right {
+            plot_pix_pattern(canvas, x, y, pp);
+        }
+    }
+}
+
+/// Colour-pixmap ellipse fill.
+pub fn fill_oval_pix_pattern(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pp: &PixPattern,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    let h = (bottom - top) as usize;
+    let mut min = vec![i32::MAX; h];
+    let mut max = vec![i32::MIN; h];
+    walk_ellipse(top, left, bottom, right, |x, y| {
+        let row = y - top;
+        if row < 0 || (row as usize) >= h {
+            return;
+        }
+        let r = row as usize;
+        if x < min[r] {
+            min[r] = x;
+        }
+        if x > max[r] {
+            max[r] = x;
+        }
+    });
+    for (i, (lo, hi)) in min.iter().zip(max.iter()).enumerate() {
+        if *lo == i32::MAX {
+            continue;
+        }
+        let y = top + i as i32;
+        for x in *lo..=*hi {
+            plot_pix_pattern(canvas, x, y, pp);
+        }
+    }
+}
+
+/// Colour-pixmap round-rectangle fill.
+pub fn fill_round_rect_pix_pattern(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    oval_w: i32,
+    oval_h: i32,
+    pp: &PixPattern,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    // Render via the marker-pixel trick used by `fill_round_rect_pattern`:
+    // rasterise the shape onto a scratch canvas in a marker colour, then
+    // re-plot from the colour tile wherever the marker is present.
+    let w = (right - left) as u32;
+    let h = (bottom - top) as u32;
+    let marker = Rgba {
+        r: 1,
+        g: 2,
+        b: 3,
+        a: 4,
+    };
+    let mut scratch = Canvas::new(w.max(1), h.max(1), Rgba::new(0, 0, 0, 0));
+    fill_round_rect(
+        &mut scratch,
+        0,
+        0,
+        h as i32,
+        w as i32,
+        oval_w,
+        oval_h,
+        marker,
+    );
+    for sy in 0..h {
+        for sx in 0..w {
+            let off = ((sy * w + sx) * 4) as usize;
+            if scratch.data[off] != marker.r || scratch.data[off + 1] != marker.g {
+                continue;
+            }
+            plot_pix_pattern(canvas, left + sx as i32, top + sy as i32, pp);
+        }
+    }
+}
+
+/// Colour-pixmap polygon fill.
+pub fn fill_polygon_pix_pattern(canvas: &mut Canvas, vertices: &[(i32, i32)], pp: &PixPattern) {
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for &(x, y) in vertices {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+    if min_x > max_x || min_y > max_y {
+        return;
+    }
+    let w = (max_x - min_x + 2).max(1) as u32;
+    let h = (max_y - min_y + 2).max(1) as u32;
+    let marker = Rgba {
+        r: 1,
+        g: 2,
+        b: 3,
+        a: 4,
+    };
+    let mut scratch = Canvas::new(w, h, Rgba::new(0, 0, 0, 0));
+    let shifted: Vec<(i32, i32)> = vertices
+        .iter()
+        .map(|&(x, y)| (x - min_x, y - min_y))
+        .collect();
+    fill_polygon(&mut scratch, &shifted, marker);
+    for sy in 0..h {
+        for sx in 0..w {
+            let off = ((sy * w + sx) * 4) as usize;
+            if scratch.data[off] != marker.r || scratch.data[off + 1] != marker.g {
+                continue;
+            }
+            plot_pix_pattern(canvas, min_x + sx as i32, min_y + sy as i32, pp);
+        }
+    }
+}
+
+/// Colour-pixmap frame-rect with a `pen_h × pen_v` brush.
+pub fn frame_rect_pix_pattern_thick(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pp: &PixPattern,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    let ph = pen_h.max(1);
+    let pv = pen_v.max(1);
+    for dy in 0..pv {
+        for x in left..right {
+            plot_pix_pattern(canvas, x, top + dy, pp);
+            plot_pix_pattern(canvas, x, bottom - 1 - dy, pp);
+        }
+    }
+    for y in (top + pv)..(bottom - pv) {
+        for dx in 0..ph {
+            plot_pix_pattern(canvas, left + dx, y, pp);
+            plot_pix_pattern(canvas, right - 1 - dx, y, pp);
         }
     }
 }

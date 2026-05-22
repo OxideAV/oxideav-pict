@@ -648,6 +648,51 @@ impl PictBuilder {
         self
     }
 
+    /// Push a `PnPixPat` opcode (colour pen pattern). The 8×8 RGBA tile
+    /// is row-major; `fallback` is the monochrome `Pat1Data` that
+    /// classic QuickDraw consults when the colour pattern can't be
+    /// rendered (e.g. on a b/w device). Inside Macintosh §A-3 Listing
+    /// A-1.
+    pub fn pen_pix_pattern(
+        &mut self,
+        fallback: [u8; 8],
+        pixels: &[[u8; 4]; 64],
+    ) -> Result<&mut Self> {
+        let bytes =
+            crate::encoder::build_pix_pat_op(crate::encoder::PixPatSlot::Pen, fallback, pixels)?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
+    /// Push a `BkPixPat` opcode (colour background pattern). See
+    /// [`pen_pix_pattern`](Self::pen_pix_pattern).
+    pub fn bg_pix_pattern(
+        &mut self,
+        fallback: [u8; 8],
+        pixels: &[[u8; 4]; 64],
+    ) -> Result<&mut Self> {
+        let bytes = crate::encoder::build_pix_pat_op(
+            crate::encoder::PixPatSlot::Background,
+            fallback,
+            pixels,
+        )?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
+    /// Push a `FillPixPat` opcode (colour fill pattern). See
+    /// [`pen_pix_pattern`](Self::pen_pix_pattern).
+    pub fn fill_pix_pattern(
+        &mut self,
+        fallback: [u8; 8],
+        pixels: &[[u8; 4]; 64],
+    ) -> Result<&mut Self> {
+        let bytes =
+            crate::encoder::build_pix_pat_op(crate::encoder::PixPatSlot::Fill, fallback, pixels)?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
     /// Push a `DirectBitsRect` raster opcode at picture-frame
     /// destination `(top, left, bottom, right)`. The raster's width
     /// and height are derived from the rect; `data` must be RGBA8

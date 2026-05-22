@@ -116,10 +116,74 @@ assert!(Pattern::WHITE.is_solid_bg());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-PixPat (multi-colour pattern) opcodes — `BkPixPat 0x0012`,
-`PnPixPat 0x0013`, `FillPixPat 0x0014` — still return `Unsupported`
-because they need a PixMap-aware skip; the monochrome stipple is the
-common case for archival PICTs and is now landed.
+## PixPat (round 91 — multi-colour 8×8 pixel pattern)
+
+The three colour pattern slots from Inside Macintosh: Imaging With
+QuickDraw §A-3 Listing A-1 are honoured by the rasteriser:
+
+* **`PnPixPat` (`0x0013`)** — colour pen pattern. Consumed by `frame`
+  and `paint` verbs of rect / round-rect / oval / poly / region.
+* **`BkPixPat` (`0x0012`)** — colour background pattern. Consumed by
+  `erase` verbs. (Unlike monochrome `BkPat`, the colour-pixmap variant
+  emits the tile's RGB directly — no fg / bg substitution.)
+* **`FillPixPat` (`0x0014`)** — colour fill pattern. Consumed by `fill`
+  verbs (low-nibble `4`).
+
+A subsequent mono `PnPat / BkPat / FillPat` clears the corresponding
+colour slot (classic "most-recent-pattern-wins" QuickDraw semantics).
+PixPat is a v2-only feature — v1 PICTs have no PixPat opcodes per
+§A-3 Table A-3.
+
+The on-disk record (`patType=1` colour-pixmap sub-type) carries:
+
+1. `PatType: word` — type=1 here; type=2 (ditherPat) falls back to the
+   monochrome `Pat1Data` for round 91.
+2. `Pat1Data: Pattern` (8 bytes) — monochrome fallback.
+3. `PixMap` (sans baseAddr — matches the Listing A-2 BitsRect /
+   PackBitsRect convention) — pixelType, pixelSize, cmpCount, cmpSize
+   describe the indexed palette format.
+4. `ColorTable` — `ctSeed` (4) + `ctFlags` (2) + `ctSize` (2) +
+   `(ctSize + 1)` × `ColorSpec` (8 each = value:2 + RGB:6).
+5. `PixData` — per-row PackBits / raw indexed-pixel bytes per §A-3.
+
+```rust
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::parse_pict;
+
+// Horizontal red / green stripe tile.
+let mut tile = [[0u8; 4]; 64];
+for y in 0..8 {
+    for x in 0..8 {
+        tile[y * 8 + x] = if y % 2 == 0 {
+            [0xFF, 0, 0, 0xFF]
+        } else {
+            [0, 0xFF, 0, 0xFF]
+        };
+    }
+}
+
+let mut b = PictBuilder::new(0, 0, 16, 16);
+b.pen_pix_pattern([0xFF; 8], &tile)?;
+b.rect(Verb::Paint, 0, 0, 16, 16);
+let img = parse_pict(&b.finish())?;
+// Row 0 (even row of the tile) → red.
+assert_eq!(&img.data[0..4], &[0xFF, 0, 0, 0xFF]);
+// Row 1 (odd row) → green.
+assert_eq!(&img.data[16 * 4..16 * 4 + 4], &[0, 0xFF, 0, 0xFF]);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The `ditherPat` sub-type (`patType=2`, carries a single `RGBColor`
+that QuickDraw expands into a halftone tile against the current
+`GDevice`) is parsed-and-skipped for round 91 — the decoder still
+folds the `Pat1Data` monochrome fallback onto the rasteriser so the
+opcode stream doesn't desynchronise. Implementing the dither-tile
+expansion is the round-92 follow-up.
+
+Tile sizes other than 8×8 also fall back to `Pat1Data`. Inside
+Macintosh §A-3 nominally permits arbitrary `bounds` rectangles in the
+PixMap record, but every real-world PICT we've audited carries an 8×8
+tile (matching the `PixPat` record's 8-byte `Pat1Data` field).
 
 ```rust
 use oxideav_pict::{parse_pict, PictPixelFormat};
@@ -154,6 +218,8 @@ emit, and a builder-with-raster path:
 | `PictBuilder::raster` | drawing + raster combined | round 5 — appends a `DirectBitsRect` raster onto a builder so callers can mix drawing primitives + raster in the same v2 stream |
 | `PictBuilder::pen_pattern` / `bg_pattern` / `fill_pattern` | pattern-set opcodes | round 8 — emits `PnPat` / `BkPat` / `FillPat`; honoured by the decoder's stipple path |
 | `build_pn_pat` / `build_bk_pat` / `build_fill_pat` | pattern opcode bytes | round 8 — public helpers for the raw `0x0009` / `0x0002` / `0x000A` opcode bytes |
+| `PictBuilder::pen_pix_pattern` / `bg_pix_pattern` / `fill_pix_pattern` | colour pattern-set opcodes | round 91 — emits `PnPixPat 0x0013` / `BkPixPat 0x0012` / `FillPixPat 0x0014` with a fully-resolved 8×8 RGBA tile; honoured by the decoder's colour-pattern path |
+| `build_pix_pat_op` | colour pattern opcode bytes | round 91 — public helper for the raw `0x0012` / `0x0013` / `0x0014` opcode bytes (PixPat record with `patType=1` colour pixmap, indexed 8 bpp PixData + ColorTable, PackBits row encoding) |
 | `build_direct_bits_rect_op` | DirectBitsRect opcode bytes | round 5 — public helper for the raw `0x009A` opcode bytes (no stub / header / OpEndPic) |
 
 ```rust
@@ -272,10 +338,15 @@ oxideav-pict = { version = "0.0", default-features = false }
 
 ## What's not yet in
 
-* **PixPat (multi-colour pattern) opcodes** (`BkPixPat 0x0012`,
-  `PnPixPat 0x0013`, `FillPixPat 0x0014`). The monochrome
-  `BkPat` / `PnPat` / `FillPat` slots landed in round 8; PixPat needs
-  a PixMap-aware skip to parse the per-cell colour table.
+* **Dithered PixPat sub-type** (`PixPat patType=2`). The `patType=1`
+  colour-pixmap variant landed in round 91; the `patType=2` dither
+  sub-type (carries a single `RGBColor` that QuickDraw expands into a
+  halftone tile against the current `GDevice`) is parsed-and-skipped
+  and the decoder falls back to `Pat1Data`. Implementing the
+  dither-tile expansion is a future round.
+* **Non-8×8 PixPat tiles.** Inside Macintosh §A-3 nominally permits
+  arbitrary `bounds` in the PixMap; round 91 honours 8×8 only and
+  falls back to the monochrome `Pat1Data` for other tile sizes.
 * **Text glyphs.** `LongText` / `DH/DV/DHDVText` are walked past but
   not rasterised — a TrueType engine is a separate round.
 * **CompressedQuickTime decode.** The opcode is parsed (length-prefixed
