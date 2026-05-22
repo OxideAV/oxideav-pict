@@ -60,8 +60,8 @@ pub const CODEC_ID_STR: &str = "pict";
 
 pub use decoder::parse_pict;
 pub use encoder::{
-    build_clip_rgn_rect, build_direct_bits_rect_op, build_pix_pat_op, encode_pict,
-    encode_pict_bits_rect, encode_pict_bits_rgn, encode_pict_pack_bits_rect,
+    build_clip_rgn_rect, build_direct_bits_rect_op, build_pix_pat_dither_op, build_pix_pat_op,
+    encode_pict, encode_pict_bits_rect, encode_pict_bits_rgn, encode_pict_pack_bits_rect,
     encode_pict_pack_bits_rgn, encode_pict_v1, encode_pict_v1_with, encode_pict_v2,
     encode_pict_v2_with_clip, pixel_data_sizes, PackType, PixPatSlot,
 };

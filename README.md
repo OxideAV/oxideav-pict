@@ -173,17 +173,64 @@ assert_eq!(&img.data[16 * 4..16 * 4 + 4], &[0, 0xFF, 0, 0xFF]);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-The `ditherPat` sub-type (`patType=2`, carries a single `RGBColor`
-that QuickDraw expands into a halftone tile against the current
-`GDevice`) is parsed-and-skipped for round 91 — the decoder still
-folds the `Pat1Data` monochrome fallback onto the rasteriser so the
-opcode stream doesn't desynchronise. Implementing the dither-tile
-expansion is the round-92 follow-up.
+Tile sizes other than 8×8 fall back to `Pat1Data`. Inside Macintosh
+§A-3 nominally permits arbitrary `bounds` rectangles in the PixMap
+record, but every real-world PICT we've audited carries an 8×8 tile
+(matching the `PixPat` record's 8-byte `Pat1Data` field).
 
-Tile sizes other than 8×8 also fall back to `Pat1Data`. Inside
-Macintosh §A-3 nominally permits arbitrary `bounds` rectangles in the
-PixMap record, but every real-world PICT we've audited carries an 8×8
-tile (matching the `PixPat` record's 8-byte `Pat1Data` field).
+## Dithered PixPat (round 95 — `patType=2`)
+
+The `ditherPat` sub-type (Inside Macintosh §A-3 Listing A-1 with
+`patType = 2`) carries only the target `RGBColor` plus the 8-byte
+`Pat1Data` monochrome fallback — the actual 8×8 tile is computed by
+Color QuickDraw's `MakeRGBPat` (§4-90) at draw time against the active
+`GDevice` palette. Quoting §4: *"For an RGB pixel pattern, the
+RGBColor record that you specify to the MakeRGBPat procedure defines
+the image; there is no image data."*
+
+Our rasteriser draws to a true-colour RGBA canvas (no indexed
+`GDevice` in the loop), so the spec contract — *"approximates the
+color you specify in the myColor parameter"* — reduces to **emitting
+the target RGB at every cell**. This satisfies both the §4 colour-
+approximation requirement (zero approximation error on a 24-bit
+canvas) and the §A-3 luminance guarantee (*"QuickDraw draws pixel
+patterns created with the MakeRGBPat procedure as bit patterns having
+approximately the same luminance as the pixel patterns"*) by
+construction.
+
+The decoded tile is surfaced on `state::PictState`'s `pen_pix_pat` /
+`back_pix_pat` / `fill_pix_pat` slots identically to the `patType=1`
+colour-pixmap variant — so every verb routing already wired up for
+colour-pixmap (paint / fill / erase across rect / oval / round-rect /
+poly / region) carries the dither sub-type for free. A
+`PictPattern::DitheredPixmap` enum variant on `state.rs` preserves the
+target RGB + `Pat1Data` round-trip when external inspectors need to
+distinguish dither from colour-pixmap (e.g. for re-emission against a
+different GDevice).
+
+```rust
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::parse_pict;
+
+let mut b = PictBuilder::new(0, 0, 8, 8);
+// Wrong fg confirms the dither tile overrides the state-machine fg.
+b.fg_color(0x00, 0xFF, 0x00); // green — should NOT appear
+b.pen_dither_pix_pattern([0xFF; 8], [0xC0, 0x00, 0xC0]); // purple
+b.rect(Verb::Paint, 0, 0, 8, 8);
+let img = parse_pict(&b.finish())?;
+assert_eq!(&img.data[0..4], &[0xC0, 0x00, 0xC0, 0xFF]);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Encoder side: `build_pix_pat_dither_op(slot, fallback, [r, g, b])`
+emits the 18-byte payload (opcode word + `patType=2` + 8-byte
+`Pat1Data` + 6-byte `RGBColor`). The PICT v2 opcode word is
+`0x0012` / `0x0013` / `0x0014` per the `PixPatSlot` enum.
+`PictBuilder::{pen,bg,fill}_dither_pix_pattern` are the chainable
+convenience wrappers. The 16-bit-per-channel on-disk `RGBColor`
+replicates the 8-bit input across both bytes (`high8 = low8 =
+channel`) so the decoder's `Rgba::from_rgb16` high-byte selection
+round-trips bit-exact.
 
 ```rust
 use oxideav_pict::{parse_pict, PictPixelFormat};
@@ -220,6 +267,8 @@ emit, and a builder-with-raster path:
 | `build_pn_pat` / `build_bk_pat` / `build_fill_pat` | pattern opcode bytes | round 8 — public helpers for the raw `0x0009` / `0x0002` / `0x000A` opcode bytes |
 | `PictBuilder::pen_pix_pattern` / `bg_pix_pattern` / `fill_pix_pattern` | colour pattern-set opcodes | round 91 — emits `PnPixPat 0x0013` / `BkPixPat 0x0012` / `FillPixPat 0x0014` with a fully-resolved 8×8 RGBA tile; honoured by the decoder's colour-pattern path |
 | `build_pix_pat_op` | colour pattern opcode bytes | round 91 — public helper for the raw `0x0012` / `0x0013` / `0x0014` opcode bytes (PixPat record with `patType=1` colour pixmap, indexed 8 bpp PixData + ColorTable, PackBits row encoding) |
+| `PictBuilder::pen_dither_pix_pattern` / `bg_dither_pix_pattern` / `fill_dither_pix_pattern` | dither pattern-set opcodes | round 95 — emits `PnPixPat 0x0013` / `BkPixPat 0x0012` / `FillPixPat 0x0014` with a `patType=2` ditherPat record (target `RGBColor` + `Pat1Data` only) |
+| `build_pix_pat_dither_op` | dither pattern opcode bytes | round 95 — public helper for the 18-byte raw payload (opcode word + patType=2 + Pat1Data + RGBColor) |
 | `build_direct_bits_rect_op` | DirectBitsRect opcode bytes | round 5 — public helper for the raw `0x009A` opcode bytes (no stub / header / OpEndPic) |
 
 ```rust
@@ -338,12 +387,6 @@ oxideav-pict = { version = "0.0", default-features = false }
 
 ## What's not yet in
 
-* **Dithered PixPat sub-type** (`PixPat patType=2`). The `patType=1`
-  colour-pixmap variant landed in round 91; the `patType=2` dither
-  sub-type (carries a single `RGBColor` that QuickDraw expands into a
-  halftone tile against the current `GDevice`) is parsed-and-skipped
-  and the decoder falls back to `Pat1Data`. Implementing the
-  dither-tile expansion is a future round.
 * **Non-8×8 PixPat tiles.** Inside Macintosh §A-3 nominally permits
   arbitrary `bounds` in the PixMap; round 91 honours 8×8 only and
   falls back to the monochrome `Pat1Data` for other tile sizes.

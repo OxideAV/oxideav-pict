@@ -634,6 +634,47 @@ pub fn build_pix_pat_op(
     Ok(buf)
 }
 
+/// Build the bytes for a single PICT v2 PixPat opcode (`0x0012` /
+/// `0x0013` / `0x0014`) carrying a **dither** (`patType=2`) sub-type
+/// record. Inside Macintosh: Imaging With QuickDraw §A-3 Listing A-1.
+///
+/// * `slot` — selects `BkPixPat` / `PnPixPat` / `FillPixPat`.
+/// * `fallback` — the 8-byte monochrome `Pat1Data` field; classic
+///   QuickDraw consults this when the colour pattern can't be honoured
+///   (typically on b/w screens).
+/// * `rgb` — the target `RGBColor` (R, G, B) the dither tile should
+///   approximate. Each channel is replicated to 16-bit precision on
+///   disk (`high8 = low8 = channel`), the format Color QuickDraw
+///   stores for true 24-bit colour input.
+///
+/// The on-disk layout per Listing A-1 patType=2 branch:
+///
+/// ```text
+/// opcode-word: 2 bytes ($0012 / $0013 / $0014)
+/// PatType:     word    (= 2, "ditherPat")
+/// Pat1Data:    Pattern (8 bytes — monochrome fallback)
+/// RGB:         RGBColor (6 bytes — desired RGB at 16-bit precision)
+/// ```
+///
+/// Total opcode payload: 18 bytes (16 + opcode word).
+pub fn build_pix_pat_dither_op(slot: PixPatSlot, fallback: [u8; 8], rgb: [u8; 3]) -> Vec<u8> {
+    let mut buf: Vec<u8> = Vec::with_capacity(18);
+    write_u16(&mut buf, slot.opcode());
+    write_u16(&mut buf, 2); // patType = 2 (ditherPat)
+    buf.extend_from_slice(&fallback);
+    // RGBColor: 16-bit per channel, replicate the 8-bit input across
+    // both bytes so `high8 = colour data, low8 = colour data` — same
+    // convention Color QuickDraw uses when storing 8-bit input as a
+    // 16-bit `RGBColor`.
+    let r16 = ((rgb[0] as u16) << 8) | rgb[0] as u16;
+    let g16 = ((rgb[1] as u16) << 8) | rgb[1] as u16;
+    let b16 = ((rgb[2] as u16) << 8) | rgb[2] as u16;
+    write_u16(&mut buf, r16);
+    write_u16(&mut buf, g16);
+    write_u16(&mut buf, b16);
+    buf
+}
+
 // ---------------------------------------------------------------------------
 // 1-bpp BitMap encoders (BitsRect / PackBitsRect).
 // ---------------------------------------------------------------------------

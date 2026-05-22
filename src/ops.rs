@@ -693,6 +693,46 @@ impl PictBuilder {
         Ok(self)
     }
 
+    /// Push a `PnPixPat` opcode (dither pen pattern, `patType=2`).
+    /// Inside Macintosh: Imaging With QuickDraw §A-3 Listing A-1.
+    ///
+    /// `rgb` is the target colour the dither tile should approximate;
+    /// `fallback` is the monochrome `Pat1Data` for 1-bpp consumers.
+    /// Round 95 — see [`PixPattern::from_dither_rgb`] for the decode
+    /// behaviour on a true-colour canvas.
+    ///
+    /// [`PixPattern::from_dither_rgb`]: crate::state::PixPattern::from_dither_rgb
+    pub fn pen_dither_pix_pattern(&mut self, fallback: [u8; 8], rgb: [u8; 3]) -> &mut Self {
+        let bytes =
+            crate::encoder::build_pix_pat_dither_op(crate::encoder::PixPatSlot::Pen, fallback, rgb);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `BkPixPat` opcode (dither background pattern,
+    /// `patType=2`). See [`pen_dither_pix_pattern`](Self::pen_dither_pix_pattern).
+    pub fn bg_dither_pix_pattern(&mut self, fallback: [u8; 8], rgb: [u8; 3]) -> &mut Self {
+        let bytes = crate::encoder::build_pix_pat_dither_op(
+            crate::encoder::PixPatSlot::Background,
+            fallback,
+            rgb,
+        );
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `FillPixPat` opcode (dither fill pattern, `patType=2`).
+    /// See [`pen_dither_pix_pattern`](Self::pen_dither_pix_pattern).
+    pub fn fill_dither_pix_pattern(&mut self, fallback: [u8; 8], rgb: [u8; 3]) -> &mut Self {
+        let bytes = crate::encoder::build_pix_pat_dither_op(
+            crate::encoder::PixPatSlot::Fill,
+            fallback,
+            rgb,
+        );
+        self.push(&bytes);
+        self
+    }
+
     /// Push a `DirectBitsRect` raster opcode at picture-frame
     /// destination `(top, left, bottom, right)`. The raster's width
     /// and height are derived from the rect; `data` must be RGBA8

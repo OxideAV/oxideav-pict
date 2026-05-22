@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 95: **Dithered PixPat sub-type (`patType=2`)** — decoded per
+  Inside Macintosh: Imaging With QuickDraw §A-3 Listing A-1 (on-disk
+  layout) + §4 ("Color QuickDraw → Pixel Patterns") + §4-90
+  (`MakeRGBPat` algorithmic contract). The on-disk record carries only
+  a 6-byte target `RGBColor` plus the 8-byte `Pat1Data` monochrome
+  fallback; Color QuickDraw's `MakeRGBPat` expands the 8×8 tile at draw
+  time against the active `GDevice` palette. Our true-colour RGBA
+  canvas satisfies the §4 *"approximates the color"* contract with zero
+  approximation error by emitting the target RGB at every cell (§A-3
+  luminance guarantee preserved by construction; §4-90's *"this
+  implementation opted for a fast pattern selection rather than the
+  best possible pattern selection"* confirms the bit-pattern is
+  implementation-defined).
+- Round 95: `state::PixPattern::from_dither_rgb(rgb, fallback)`
+  constructor — builds an 8×8 tile populated uniformly with the target
+  colour, preserving the `Pat1Data` fallback verbatim for 1-bpp
+  consumers.
+- Round 95: `state::PictPattern::DitheredPixmap { rgb, fallback,
+  pixels }` enum variant — round-trips the target RGB + `Pat1Data` so
+  external inspectors can distinguish `patType=2` from `patType=1`
+  (e.g. for re-emission against a different GDevice). `mono()` returns
+  `fallback`.
+- Round 95: `encoder::build_pix_pat_dither_op(slot, fallback, [r, g,
+  b])` — emits the 18-byte on-disk payload (opcode word + `patType=2`
+  + 8-byte `Pat1Data` + 6-byte `RGBColor`). The 8-bit input is
+  replicated to 16-bit (`high8 = low8`) so the decoder's
+  `Rgba::from_rgb16` high-byte selection round-trips bit-exact.
+- Round 95: `PictBuilder::pen_dither_pix_pattern` /
+  `bg_dither_pix_pattern` / `fill_dither_pix_pattern` chainable
+  builder methods — convenience wrappers around
+  `build_pix_pat_dither_op` for each of the three slot variants.
+- Round 95: `tests/synth_v2_round95.rs` — 10 round-trip tests
+  covering: paint verb routing through the pen-dither slot; fill /
+  erase verb routing through the matching slots; mono `PnPat`
+  clearing the colour slot (most-recent-wins semantics); opcode-word
+  emission for each slot via `build_pix_pat_dither_op`; probe
+  `pix_pattern_set_count` accounting for `patType=2` opcodes; 16-bit
+  RGB high-byte round-trip; solid-black target edge case; mixed
+  colour-pixmap + dither slot precedence.
 - Round 91: **PixPat (multi-colour 8×8 pixel pattern) opcodes** —
   `BkPixPat 0x0012`, `PnPixPat 0x0013`, `FillPixPat 0x0014` — are now
   decoded per Inside Macintosh: Imaging With QuickDraw §A-3 Listing

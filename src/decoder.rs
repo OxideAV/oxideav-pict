@@ -1727,13 +1727,18 @@ const PAT_TYPE_DITHER: u16 = 2;
 /// * The 8-byte monochrome `Pat1Data` field is always extracted —
 ///   classic QuickDraw uses it as a fall-through when the colour
 ///   pixel-pattern can't be honoured.
-/// * `Some(PixPattern)` is returned for a `patType=1` colour-pixmap
-///   payload that was successfully resolved against its embedded
-///   `ColorTable`.
-/// * `None` is returned for the `patType=2` dither sub-type, which
-///   needs a separate implementation round (see crate `README` for the
-///   followup; the bytes are still consumed so the surrounding opcode
-///   walk doesn't desynchronise).
+/// * `Some(PixPattern)` is returned for both colour sub-types:
+///   * `patType=1` — colour-pixmap payload successfully resolved
+///     against its embedded `ColorTable`.
+///   * `patType=2` — dither sub-type, expanded via
+///     [`PixPattern::from_dither_rgb`] (round 95): the on-disk record
+///     carries a single `RGBColor` that Color QuickDraw's `MakeRGBPat`
+///     expands at draw time. Our true-colour canvas renders the
+///     target RGB exactly at every cell — see
+///     [`PixPattern::from_dither_rgb`] for the spec citation.
+/// * `None` is returned only when the colour pixmap's tile bounds
+///   aren't 8×8 (non-standard PixMap dimensions fall back to the
+///   `Pat1Data` monochrome stipple).
 ///
 /// Layout per Inside Macintosh: Imaging With QuickDraw §A-3 Listing A-1:
 ///
@@ -1872,11 +1877,37 @@ fn decode_pix_pat(r: &mut Reader<'_>) -> Result<(Pattern, Option<PixPattern>)> {
             Ok((pat1, Some(PixPattern { fallback: pat1, pixels })))
         }
         PAT_TYPE_DITHER => {
-            // Dither sub-type — 6-byte RGBColor follows. Decoder
-            // skips it for round 91; round-92+ work will compute the
-            // dither tile against the active GDevice palette.
-            r.skip(6)?;
-            Ok((pat1, None))
+            // Dither sub-type — `RGBColor` (6 bytes: r16, g16, b16)
+            // follows. Inside Macintosh §A-3 Listing A-1.
+            //
+            // Per Inside Macintosh §4 ("Color QuickDraw" → "Pixel
+            // Patterns"), the on-disk record carries **only** the
+            // target colour; the 8×8 tile itself is computed at draw
+            // time by `MakeRGBPat` against the active `GDevice`
+            // palette — *"For an RGB pixel pattern, the RGBColor
+            // record that you specify to the MakeRGBPat procedure
+            // defines the image; there is no image data."* — and
+            // the §4.90 MakeRGBPat description states *"this
+            // implementation opted for a fast pattern selection
+            // rather than the best possible pattern selection"*,
+            // confirming the bit-pattern is implementation-defined.
+            //
+            // Our rasteriser draws to a true-colour RGBA canvas
+            // (no indexed `GDevice` in the loop), so the spec
+            // contract — *"approximates the color you specify in
+            // the myColor parameter"* — reduces to "emit the target
+            // RGB at every cell." This satisfies both the §4
+            // colour-approximation requirement (zero approximation
+            // error on a 24-bit canvas) and the §A-3 luminance
+            // guarantee (*"QuickDraw draws pixel patterns created
+            // with the MakeRGBPat procedure as bit patterns having
+            // approximately the same luminance as the pixel
+            // patterns"*) by construction.
+            let r16 = r.read_u16()?;
+            let g16 = r.read_u16()?;
+            let b16 = r.read_u16()?;
+            let rgb = Rgba::from_rgb16(r16, g16, b16);
+            Ok((pat1, Some(PixPattern::from_dither_rgb(rgb, pat1))))
         }
         other => Err(PictError::unsupported(format!(
             "PixPat patType={other} (only 1=colourPixmap, 2=ditherPat are documented in IM §A-3 Listing A-1)"

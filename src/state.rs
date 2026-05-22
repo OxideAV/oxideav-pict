@@ -171,6 +171,46 @@ impl PixPattern {
         let col = x.rem_euclid(8) as usize;
         self.pixels[row * 8 + col]
     }
+
+    /// Construct an 8×8 colour tile that approximates the target
+    /// `rgb` colour, as `MakeRGBPat` would on an effectively-infinite-
+    /// colour-depth GDevice.
+    ///
+    /// Inside Macintosh: Imaging With QuickDraw §4 ("Color QuickDraw")
+    /// describes the [`MakeRGBPat`](https://developer.apple.com/) procedure
+    /// behaviour as: *"generates a PixPat record that, when used to draw
+    /// a pixel pattern, approximates the color you specify in the
+    /// myColor parameter."* — i.e. the algorithmic contract is
+    /// **approximate this RGB**, not "produce a specific bit-pattern."
+    /// The same chapter is explicit that the implementation **"opted
+    /// for a fast pattern selection rather than the best possible
+    /// pattern selection,"** and §A-3 Listing A-1 confirms that the
+    /// on-disk `ditherPat` record carries **only** an `RGBColor` — the
+    /// 8×8 tile itself is computed at draw time against the active
+    /// `GDevice` palette.
+    ///
+    /// Our rasteriser draws to a true-colour RGBA canvas (no indexed
+    /// `GDevice` palette in the loop), so the target colour can be
+    /// rendered *exactly* by setting every cell to the requested RGB.
+    /// This satisfies the §4 spec contract — *"approximate this RGB" *
+    /// — with zero approximation error on a 24-bit canvas, and it
+    /// preserves the §A-3 luminance guarantee (*"QuickDraw draws pixel
+    /// patterns created with the MakeRGBPat procedure as bit patterns
+    /// having approximately the same luminance as the pixel
+    /// patterns"*) by construction.
+    ///
+    /// The `fallback` field carries the `Pat1Data` byte stream from
+    /// the on-disk PixPat record verbatim so callers that *do* end up
+    /// running against a 1-bpp surface (Inside Macintosh §A-3: *"on
+    /// computers that have only black-and-white displays, Color
+    /// QuickDraw substitutes the bit pattern in pat1Data"*) still pick
+    /// up a sensible monochrome stipple.
+    pub fn from_dither_rgb(rgb: Rgba, fallback: Pattern) -> Self {
+        Self {
+            fallback,
+            pixels: [rgb; 64],
+        }
+    }
 }
 
 /// Tagged pattern slot — either the legacy monochrome `Pattern` or the
@@ -190,15 +230,51 @@ pub enum PictPattern {
     /// Multi-colour 8×8 pixel pattern — `PnPixPat 0x0013 / BkPixPat
     /// 0x0012 / FillPixPat 0x0014` opcodes, `patType=1` variant.
     ColourPixmap(Box<PixPattern>),
+    /// Dithered 8×8 pixel pattern — `PnPixPat 0x0013 / BkPixPat
+    /// 0x0012 / FillPixPat 0x0014` opcodes, `patType=2` variant.
+    ///
+    /// The on-disk record carries only a target `RGBColor` plus the
+    /// `Pat1Data` monochrome fallback (Inside Macintosh §A-3 Listing
+    /// A-1). Classic Color QuickDraw expands the tile at draw time
+    /// against the active `GDevice` palette via the `MakeRGBPat`
+    /// algorithm — see [`PixPattern::from_dither_rgb`] for the
+    /// rationale behind our expansion on a true-colour RGBA canvas.
+    ///
+    /// Stored as a fully-resolved 8×8 [`PixPattern`] so the rasteriser
+    /// can sample it identically to the `ColourPixmap` variant; the
+    /// `pixels` field of the inner `PixPattern` holds the resolved
+    /// 24-bit RGB at every cell, the `fallback` holds the on-disk
+    /// `Pat1Data` byte stream verbatim. Round-trip writers that need
+    /// to preserve the dither subtype distinctly from
+    /// `ColourPixmap` (e.g. for re-emission against a different
+    /// GDevice) can recover the source `RGBColor` from any cell of
+    /// `pixels` (every cell carries the same RGB by construction).
+    DitheredPixmap {
+        /// Target `RGBColor` from the on-disk patType=2 record,
+        /// packed into 8-bit RGBA. The 16-bit-per-channel precision of
+        /// the source `RGBColor` is preserved through `Rgba::from_rgb16`'s
+        /// high-byte selection.
+        rgb: Rgba,
+        /// 8-byte `Pat1Data` monochrome fallback from the on-disk
+        /// record. Used by 1-bpp consumers; the colour rasteriser
+        /// renders `pixels` instead.
+        fallback: Pattern,
+        /// 8 rows × 8 columns of RGBA, every cell = `rgb`. Kept
+        /// alongside `rgb` so the rasteriser sample path doesn't
+        /// branch on the variant tag.
+        pixels: Box<[Rgba; 64]>,
+    },
 }
 
 impl PictPattern {
     /// The monochrome representation. Returns the `Pattern` directly
-    /// for `Mono`, or the `Pat1Data` fallback for `ColourPixmap`.
+    /// for `Mono`, the `Pat1Data` fallback for `ColourPixmap`, or the
+    /// `fallback` field for `DitheredPixmap`.
     pub fn mono(&self) -> Pattern {
         match self {
             PictPattern::Mono(p) => *p,
             PictPattern::ColourPixmap(pp) => pp.fallback,
+            PictPattern::DitheredPixmap { fallback, .. } => *fallback,
         }
     }
 }
