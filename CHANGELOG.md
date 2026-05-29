@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/OxideAV/oxideav-pict/compare/v0.0.2...v0.0.3) - 2026-05-29
+
+### Other
+
+- round 186: indexed PixMap variant of BitsRect / PackBitsRect families
+- round 95: dithered PixPat sub-type (patType=2)
+- round 91: PixPat (multi-colour 8×8 pixel pattern) opcodes
+- round 8: monochrome pattern opcodes (PnPat / BkPat / FillPat)
+- round 7: read-only probe_pict() introspection API
+
 ### Added
 
 - Round 186: **Indexed PixMap variant of `BitsRect 0x0090` / `BitsRgn
