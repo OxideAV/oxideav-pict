@@ -33,10 +33,10 @@ colour (white) and returned as the decoded `PictImage`.
 | `0x0030`-`0x006C` | Frame / Paint / Erase / Invert / Fill of Rect / RoundRect / Oval / Arc | **rasterise via in-crate kernel** |
 | `0x0070`-`0x0074` | Frame / Paint / Erase / Invert / Fill Poly | **rasterise via even-odd scanline** |
 | `0x0080`-`0x0084` | Frame / Paint / Erase / Invert / Fill Rgn | **rasterise (rect bbox + per-row inversion mask)** |
-| `0x0090` | **BitsRect**        | **decode -> RGBA** (1-bpp BitMap, raw rows) |
-| `0x0091` | **BitsRgn**         | **decode -> RGBA** (BitsRect + clip region) |
-| `0x0098` | **PackBitsRect**    | **decode -> RGBA** (1-bpp BitMap, PackBits-RLE rows) |
-| `0x0099` | **PackBitsRgn**     | **decode -> RGBA** (PackBitsRect + clip region) |
+| `0x0090` | **BitsRect**        | **decode -> RGBA** (1-bpp BitMap, raw rows OR indexed PixMap, raw rows when `rowBytes` high bit is set; round 186) |
+| `0x0091` | **BitsRgn**         | **decode -> RGBA** (BitsRect + clip region; indexed PixMap also honoured; round 186) |
+| `0x0098` | **PackBitsRect**    | **decode -> RGBA** (1-bpp BitMap, PackBits-RLE rows OR indexed 1/2/4/8-bit PixMap, PackBits rows; round 186) |
+| `0x0099` | **PackBitsRgn**     | **decode -> RGBA** (PackBitsRect + clip region; indexed PixMap also honoured; round 186) |
 | `0x009A` | **DirectBitsRect**  | **decode -> RGBA** (16-bit A1R5G5B5 / 32-bit XRGB|ARGB; packType 0/1 raw, 2 packed 24bpp, 3 u16-PackBits, 4 component-separated PackBits) |
 | `0x009B` | **DirectBitsRgn**   | **decode -> RGBA** (DirectBitsRect + clip region) |
 | `0x00A0` | ShortComment        | fixed-size skip         |
@@ -385,6 +385,37 @@ oxideav-pict = "0.0"
 oxideav-pict = { version = "0.0", default-features = false }
 ```
 
+## Indexed PixMaps (round 186 — `BitsRect` / `PackBitsRect` / region variants)
+
+Inside Macintosh §A-3 footnote `§` ("The first word following the
+opcode is rowBytes. If the high bit of rowBytes is set, then it is a
+pixel map containing multiple bits per pixel; if it is not set, it is
+a bitmap containing 1 bit per pixel") routes four opcodes through two
+on-disk record families:
+
+* `rowBytes` high bit **clear** → 1-bpp BitMap (round 1).
+* `rowBytes` high bit **set** → indexed 1/2/4/8-bit PixMap with an
+  embedded `ColorTable` (round 186).
+
+The indexed variant carries a full 46-byte PixMap header — same
+layout the `PixPat` round-91 decoder already reads, minus the
+`baseAddr` placeholder which is exclusive to `DirectBitsRect`
+(`0x009A`) / `DirectBitsRgn` (`0x009B`) per §A-3 footnote `§`. The
+ColorTable then provides `(ctSize + 1)` `RGBColor` entries; each
+PixData index is folded into RGBA via `Rgba::from_rgb16` (high byte).
+Out-of-range indices map to `Rgba::BLACK` (§4 *"empty entries in the
+ctTable array are drawn as black"*). PixData layout follows §A-3
+"PixData": raw rows when `rowBytes < 8` (narrow-row carve-out) or
+when the opcode is the unpacked `BitsRect` / `BitsRgn` family;
+otherwise per-row `byteCount`-prefixed PackBits at the `rowBytes`-byte
+width.
+
+The probe surfaces `PictProbe::indexed_raster_count` — bumped once
+per indexed-PixMap `BitsRect` / `BitsRgn` / `PackBitsRect` /
+`PackBitsRgn` so callers can spot indexed rasters without paying the
+decode cost. `DirectBitsRect 0x009A` / `DirectBitsRgn 0x009B` are
+always direct (never indexed) and remain in `raster_count` only.
+
 ## What's not yet in
 
 * **Non-8×8 PixPat tiles.** Inside Macintosh §A-3 nominally permits
@@ -398,9 +429,9 @@ oxideav-pict = { version = "0.0", default-features = false }
   `oxideav-mjpeg`'s `decode_jpeg` exposed publicly.
 * **Multi-image PICTs.** Each subsequent raster blits onto the same
   canvas — no separate per-image surfaces.
-* **8-bit-indexed PixMaps.** `DirectBitsRect` (`0x009A`) only; the
-  indexed-colour `PackBitsRect`-as-PixMap path with a colour table
-  is a future round.
+* **Indexed-PixMap encoder.** Round 186 added a decoder; an encoder
+  emitting `PackBitsRect` / `BitsRect` indexed-PixMap on disk is a
+  follow-up (round 1 emits BitMap only).
 
 ## License
 

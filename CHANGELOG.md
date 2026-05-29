@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 186: **Indexed PixMap variant of `BitsRect 0x0090` / `BitsRgn
+  0x0091` / `PackBitsRect 0x0098` / `PackBitsRgn 0x0099`** — decoded
+  per Inside Macintosh: Imaging With QuickDraw §A-3 footnote `§`
+  (rowBytes high-bit dispatch) + Listing A-2 / A-3 (record layout).
+  The rowBytes word's high bit (clear for round-1 1-bpp BitMap, set
+  for indexed PixMap) selects between the two on-disk record families;
+  the indexed variant carries a full 46-byte PixMap header (no
+  `baseAddr` placeholder — that's exclusive to `DirectBitsRect`
+  `0x009A` / `DirectBitsRgn` `0x009B` per §A-3 footnote `§`) plus an
+  embedded `ColorTable` (`ctSeed(4) + ctFlags(2) + ctSize(2)` followed
+  by `(ctSize+1) × { value(2) + r(2) + g(2) + b(2) }`), then the
+  standard `srcRect / dstRect / mode` trailer, then PixData. Pixel
+  sizes 1 / 2 / 4 / 8 are honoured per §4 ("Color QuickDraw and
+  PixMaps"); palette entries are read as 16-bit-per-channel `RGBColor`
+  and folded into RGBA via the high byte (`Rgba::from_rgb16`).
+  Out-of-range PixData indices map to `Rgba::BLACK` per §4 *"empty
+  entries … are drawn as black"*. PixData is raw rows when
+  `rowBytes < 8` (§A-3 "PixData" narrow-row carve-out) or when the
+  opcode is the unpacked `BitsRect` / `BitsRgn` family; otherwise
+  per-row `byteCount`-prefixed PackBits at the rowBytes-byte width.
+  The `BitsRgn 0x0091` / `PackBitsRgn 0x0099` indexed variants emit a
+  `Region` after the `mode` word that the rasteriser honours as a
+  transient blit mask (same path as the round-1 BitMap region
+  variant).
+- Round 186: `probe::PictProbe::indexed_raster_count` field —
+  bumps once per indexed-PixMap `BitsRect` / `BitsRgn` / `PackBitsRect`
+  / `PackBitsRgn` so a thumbnail UI can distinguish indexed-vs-direct
+  rasters before paying the decode cost. `DirectBitsRect 0x009A` /
+  `DirectBitsRgn 0x009B` are never counted here (they're always
+  direct, not indexed); they remain in `raster_count` only. The
+  probe's v1 + v2 walkers both update the field — `0x90 / 0x91 / 0x98
+  / 0x99` opcodes route through a shared per-variant skipper that
+  parses the PixMap header + ColorTable accurately.
+- Round 186: 6 synthesis tests (`tests/synth_v2_round186.rs`) that
+  hand-build indexed-PixMap PICTs byte-by-byte against the §A-3
+  listings — `PackBitsRect 4-bpp narrow raw rows`, `PackBitsRect 8-bpp
+  PackBits-encoded rows`, `BitsRect 8-bpp unpacked rows`,
+  `PackBitsRgn 8-bpp clip-full-frame`, `BitsRect oob-palette-index →
+  black`, `PackBitsRect 1-bpp two-entry palette`. No dependence on
+  the (round-1) BitMap encoders — the helpers go straight from
+  little-Endian RGB samples to the §A-3 wire bytes via local
+  `put_u16` / `put_i16` / `put_u32` writers.
+
 - Round 95: **Dithered PixPat sub-type (`patType=2`)** — decoded per
   Inside Macintosh: Imaging With QuickDraw §A-3 Listing A-1 (on-disk
   layout) + §4 ("Color QuickDraw → Pixel Patterns") + §4-90

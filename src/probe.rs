@@ -54,6 +54,15 @@ pub struct PictProbe {
     /// How many raster-producing opcodes (`BitsRect`, `PackBitsRect`,
     /// `DirectBitsRect`, region variants for each) appear in the stream.
     pub raster_count: u32,
+    /// How many of [`Self::raster_count`] use the indexed PixMap variant
+    /// (rowBytes high-bit set) of `BitsRect 0x0090` / `BitsRgn 0x0091` /
+    /// `PackBitsRect 0x0098` / `PackBitsRgn 0x0099`. Lets a probe caller
+    /// know the raster pipeline will produce indexed RGBA against an
+    /// embedded `ColorTable` rather than mono-from-BitMap or
+    /// direct-from-PixMap. `DirectBitsRect 0x009A` /
+    /// `DirectBitsRgn 0x009B` (always direct, always PixMap) are counted
+    /// in [`Self::raster_count`] only.
+    pub indexed_raster_count: u32,
     /// How many drawing-primitive opcodes (line / rect / round-rect /
     /// oval / arc / poly / region verbs) appear in the stream. The
     /// *same-as-last* variants (`OP_FRAME_SAME_RECT` etc) are counted
@@ -185,6 +194,7 @@ pub fn probe_pict(bytes: &[u8]) -> Result<PictProbe> {
         height,
         has_launch_stub,
         raster_count: 0,
+        indexed_raster_count: 0,
         drawing_count: 0,
         same_shape_count: 0,
         text_count: 0,
@@ -476,8 +486,11 @@ fn probe_v2_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             // need pixel bytes — so we have to either skip the payload
             // or stop. We stop counting raster bytes and forward the
             // request to the existing decode path via a thin walker.
-            skip_raster_opcode_v2(r, opcode)?;
+            let indexed = skip_raster_opcode_v2(r, opcode)?;
             p.raster_count += 1;
+            if indexed {
+                p.indexed_raster_count += 1;
+            }
             Ok(OpStep::Continue)
         }
         OP_COMPRESSED_QUICKTIME => {
@@ -594,8 +607,11 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             Ok(OpStep::Continue)
         }
         0x90 | 0x91 | 0x98 | 0x99 | 0x9A | 0x9B => {
-            skip_raster_opcode_v1(r, opcode)?;
+            let indexed = skip_raster_opcode_v1(r, opcode)?;
             p.raster_count += 1;
+            if indexed {
+                p.indexed_raster_count += 1;
+            }
             Ok(OpStep::Continue)
         }
         0xA0 => {
@@ -637,13 +653,21 @@ fn fixed_operand_size(opcode: u16) -> Option<usize> {
 /// Skip a v2 raster opcode payload (BitsRect / BitsRgn / PackBitsRect
 /// / PackBitsRgn / DirectBitsRect / DirectBitsRgn) without decoding
 /// pixels. Returns `Err` only on truncation.
-fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<()> {
-    let is_pixmap = matches!(opcode, OP_DIRECT_BITS_RECT | OP_DIRECT_BITS_RGN);
+/// Skip the body of a v2 raster opcode (`0x0090..=0x009B`). Returns
+/// `true` when the opcode used the indexed PixMap variant (rowBytes
+/// high-bit set) of `BitsRect` / `BitsRgn` / `PackBitsRect` /
+/// `PackBitsRgn`. `DirectBitsRect 0x009A` and `DirectBitsRgn 0x009B`
+/// always carry a PixMap (and an explicit baseAddr placeholder per §A-3
+/// footnote `§`) but they are *direct*, not indexed — they return `false`.
+fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<bool> {
+    let is_direct_pixmap = matches!(opcode, OP_DIRECT_BITS_RECT | OP_DIRECT_BITS_RGN);
     let with_rgn = matches!(opcode, OP_BITS_RGN | OP_PACK_BITS_RGN | OP_DIRECT_BITS_RGN);
+    let mut indexed_pixmap = false;
     let row_bytes;
     let height;
     let pack_type;
-    if is_pixmap {
+    let pixel_size_for_indexed;
+    if is_direct_pixmap {
         // DirectBits PixMap header: baseAddr (4) + rowBytes (2) +
         // bounds (8) + pmVersion (2) + packType (2) + packSize (4) +
         // hRes (4) + vRes (4) + pixelType (2) + pixelSize (2) +
@@ -672,18 +696,54 @@ fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<()> {
         let _pm_table = r.read_u32()?;
         let _pm_reserved = r.read_u32()?;
         let _ = (pixel_size, cmp_count, cmp_size);
+        pixel_size_for_indexed = 0;
     } else {
-        // BitMap header: rowBytes (2) + bounds (8) = 10 bytes total
+        // BitMap-or-indexed-PixMap header. The first word is `rowBytes`;
+        // the high bit selects between BitMap (legacy 1-bpp, §A-3
+        // footnote `§`) and indexed PixMap (rowBytes-high-bit-set, §A-3
+        // Listing A-2).
         let rb_raw = r.read_u16()?;
         if rb_raw & 0x8000 != 0 {
-            return Err(PictError::invalid(
-                "BitsRect / PackBitsRect rowBytes top bit is set (looks like a PixMap)",
-            ));
+            // Indexed PixMap path. The PixMap (sans baseAddr — Bits /
+            // PackBits opcodes don't carry the §A-3 footnote-§ baseAddr
+            // placeholder) is 46 bytes (rowBytes already consumed → 44
+            // more) followed by an embedded ColorTable.
+            indexed_pixmap = true;
+            row_bytes = (rb_raw & 0x3FFF) as usize;
+            let bounds = r.read_rect()?;
+            height = (bounds.2 - bounds.0).max(0) as usize;
+            let _pm_version = r.read_u16()?;
+            pack_type = r.read_u16()?;
+            let _pack_size = r.read_u32()?;
+            let _h_res = r.read_u32()?;
+            let _v_res = r.read_u32()?;
+            let _pixel_type = r.read_u16()?;
+            let pixel_size = r.read_u16()?;
+            let _cmp_count = r.read_u16()?;
+            let _cmp_size = r.read_u16()?;
+            let _plane_bytes = r.read_u32()?;
+            let _pm_table = r.read_u32()?;
+            let _pm_reserved = r.read_u32()?;
+            // ColorTable: ctSeed(4) + ctFlags(2) + ctSize(2) + entries.
+            let _ct_seed = r.read_u32()?;
+            let _ct_flags = r.read_i16()?;
+            let ct_size = r.read_i16()?;
+            if !(0..=255).contains(&ct_size) {
+                return Err(PictError::invalid(format!(
+                    "raster-opcode indexed ColorTable ctSize out of range: {ct_size}"
+                )));
+            }
+            let n_entries = (ct_size as usize) + 1;
+            r.skip(n_entries * 8)?;
+            pixel_size_for_indexed = pixel_size;
+        } else {
+            // Legacy 1-bpp BitMap path.
+            row_bytes = rb_raw as usize;
+            let bounds = r.read_rect()?;
+            height = (bounds.2 - bounds.0).max(0) as usize;
+            pack_type = 0;
+            pixel_size_for_indexed = 0;
         }
-        row_bytes = rb_raw as usize;
-        let bounds = r.read_rect()?;
-        height = (bounds.2 - bounds.0).max(0) as usize;
-        pack_type = 0; // BitMap rows are always raw
     }
 
     // Shared trailer: srcRect (8) + dstRect (8) + mode (2).
@@ -700,15 +760,27 @@ fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<()> {
         r.skip(rgn_size - 2)?;
     }
 
-    // Pixel-data payload. For BitsRect / PackBitsRect (BitMap path)
-    // we cover both raw and per-row PackBits cases.
+    // Pixel-data payload.
     match opcode {
+        OP_BITS_RECT | OP_BITS_RGN if !indexed_pixmap => {
+            // 1-bpp BitMap: raw rows.
+            r.skip(row_bytes * height)?;
+        }
         OP_BITS_RECT | OP_BITS_RGN => {
-            // Raw rows: row_bytes per row, height rows.
+            // Indexed PixMap on a `BitsRect` / `BitsRgn` opcode →
+            // unpacked rows per §A-3 footnote `§` ("the difference
+            // between version 2 and version 1 formats is that the
+            // pixel map replaces the bitmap, a color table has been
+            // added, and pixData replaces bitData") — `Bits…` is the
+            // unpacked family, `PackBits…` is the packed family.
+            let _ = pixel_size_for_indexed; // pixel_size resolution
+                                            // happens in the decoder.
             r.skip(row_bytes * height)?;
         }
         OP_PACK_BITS_RECT | OP_PACK_BITS_RGN => {
             // Per-row PackBits when row_bytes >= 8, raw rows otherwise.
+            // Applies to both BitMap and indexed-PixMap sub-variants of
+            // `PackBitsRect` / `PackBitsRgn` per §A-3 "PixData".
             if row_bytes < 8 {
                 r.skip(row_bytes * height)?;
             } else {
@@ -756,7 +828,7 @@ fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<()> {
         }
         _ => unreachable!(),
     }
-    Ok(())
+    Ok(indexed_pixmap)
 }
 
 /// Skip a PixPat opcode payload (`BkPixPat 0x0012` / `PnPixPat 0x0013` /
@@ -810,10 +882,11 @@ fn skip_pix_pat(r: &mut Reader<'_>) -> Result<()> {
     }
 }
 
-fn skip_raster_opcode_v1(r: &mut Reader<'_>, opcode: u16) -> Result<()> {
+fn skip_raster_opcode_v1(r: &mut Reader<'_>, opcode: u16) -> Result<bool> {
     // The v1 raster opcodes 0x90/0x91/0x98/0x99/0x9A/0x9B have the
     // exact same byte layout as their v2 counterparts — only the
-    // opcode width (1 byte vs 2 bytes) differs.
+    // opcode width (1 byte vs 2 bytes) differs. Returns the
+    // indexed-PixMap flag the v2 helper detects.
     let v2_equivalent = match opcode {
         0x90 => OP_BITS_RECT,
         0x91 => OP_BITS_RGN,

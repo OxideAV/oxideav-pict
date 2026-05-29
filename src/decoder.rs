@@ -1215,19 +1215,28 @@ fn finalise_canvas(canvas: Canvas, _state: &PictState) -> Result<PictImage> {
 
 /// `PackBitsRect` (`0x0098`).
 ///
-/// Carries a *BitMap* (1-bit). Layout per Inside Macintosh §A-3:
-///   2 bytes rowBytes (top bit clear)
-///   8 bytes bounds
-///   8 bytes srcRect
-///   8 bytes dstRect
-///   2 bytes mode
-///   per-row data (raw if rowBytes < 8, else byteCount + PackBits).
+/// Two on-disk layouts share this opcode (Inside Macintosh §A-3 footnote
+/// `§` and Listing A-2):
+///
+/// * **BitMap** (`rowBytes` high bit clear) — 1-bit-per-pixel monochrome
+///   `rowBytes(2) + bounds(8) + srcRect(8) + dstRect(8) + mode(2)` plus
+///   per-row data (raw if `rowBytes < 8`, else `byteCount`-prefixed
+///   PackBits). Round 1 default.
+/// * **PixMap** (`rowBytes` high bit set) — indexed 1/2/4/8-bit pixels
+///   resolved against an embedded `ColorTable`. Layout
+///   `PixMap(46) + ColorTable + srcRect(8) + dstRect(8) + mode(2)` plus
+///   per-row PixData (raw if `rowBytes < 8`, else PackBits at the
+///   `rowBytes`-byte width). Round 186 (this opcode).
 fn decode_pack_bits_rect(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32)> {
     let row_bytes_raw = r.read_u16()?;
     if row_bytes_raw & 0x8000 != 0 {
-        return Err(PictError::invalid(
-            "PackBitsRect rowBytes top bit is set (looks like a PixMap, not a BitMap)",
-        ));
+        // Indexed PixMap variant. Note the high-bit reading is the only
+        // way to disambiguate the two record families at this offset —
+        // §A-3 footnote `§` ("The first word following the opcode is
+        // rowBytes. If the high bit of rowBytes is set, then it is a
+        // pixel map …").
+        return decode_indexed_pixmap_payload(r, row_bytes_raw, /* packed= */ true, false)
+            .map(|(s, d, _)| (s, d));
     }
     let row_bytes = row_bytes_raw as usize;
     let bounds = r.read_rect()?;
@@ -1284,20 +1293,30 @@ fn expand_1bpp_to_rgba(bitmap: &[u8], width: u32, height: u32, row_bytes: usize)
     rgba
 }
 
-/// v2 `BitsRect` (`0x0090`) — same layout as PackBitsRect but every
-/// row is raw (no PackBits, no per-row byteCount). `BitsRgn` (0x91)
-/// adds a clipping region after the rects; round 42 honours it as a
-/// transient mask for this blit (returned alongside the raster +
-/// destination rect).
+/// v2 `BitsRect` (`0x0090`) — same opcode-record family as
+/// `PackBitsRect`. `BitsRgn` (`0x0091`) adds a clipping region after the
+/// rects; round 42 honours it as a transient mask for this blit
+/// (returned alongside the raster + destination rect).
+///
+/// As with `PackBitsRect`, the high bit of `rowBytes` selects between
+/// 1-bpp BitMap (round 1) and indexed PixMap (round 186) layouts. Per
+/// §A-3 footnote `¶` the BitMap variant is restricted to
+/// `rowBytes < 8` (the un-packed CopyBits path); when `rowBytes ≥ 8`
+/// QuickDraw emitters always pick the packed `PackBitsRect` family.
 fn decode_bits_rect_v2(
     r: &mut Reader<'_>,
     with_region: bool,
 ) -> Result<(RasterSub, RectI32, Option<Region>)> {
     let row_bytes_raw = r.read_u16()?;
     if row_bytes_raw & 0x8000 != 0 {
-        return Err(PictError::invalid(
-            "BitsRect rowBytes top bit is set (PixMap)",
-        ));
+        // Indexed PixMap variant — same record layout as PackBitsRect /
+        // PackBitsRgn but every row is raw.
+        return decode_indexed_pixmap_payload(
+            r,
+            row_bytes_raw,
+            /* packed= */ false,
+            with_region,
+        );
     }
     let row_bytes = row_bytes_raw as usize;
     let bounds = r.read_rect()?;
@@ -1331,13 +1350,22 @@ fn decode_bits_rect_v2(
 }
 
 /// `PackBitsRgn` (`0x0099`) — same as PackBitsRect plus a Region
-/// clipping path inserted just before the per-row pixel data.
+/// clipping path inserted just before the per-row pixel data. The
+/// BitMap-vs-PixMap split (`rowBytes` high bit) mirrors `PackBitsRect`.
 fn decode_pack_bits_rgn(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32, Region)> {
     let row_bytes_raw = r.read_u16()?;
     if row_bytes_raw & 0x8000 != 0 {
-        return Err(PictError::invalid(
-            "PackBitsRgn rowBytes top bit is set (looks like a PixMap)",
-        ));
+        let (img, dst, rgn) = decode_indexed_pixmap_payload(
+            r,
+            row_bytes_raw,
+            /* packed= */ true,
+            /* with_region= */ true,
+        )?;
+        // with_region=true guarantees rgn is Some; unwrap is safe.
+        let rgn = rgn.ok_or_else(|| {
+            PictError::invalid("PackBitsRgn indexed PixMap missing region payload")
+        })?;
+        return Ok((img, dst, rgn));
     }
     let row_bytes = row_bytes_raw as usize;
     let bounds = r.read_rect()?;
@@ -1376,6 +1404,184 @@ fn decode_pack_bits_rgn(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32, Regio
         RectI32::from_be(dst_rect.0, dst_rect.1, dst_rect.2, dst_rect.3),
         rgn,
     ))
+}
+
+/// Shared indexed-PixMap payload reader for `BitsRect 0x0090`,
+/// `BitsRgn 0x0091`, `PackBitsRect 0x0098` and `PackBitsRgn 0x0099` —
+/// all four opcodes share Listing A-2 / A-3 layouts that begin with a
+/// PixMap (sans baseAddr — the baseAddr placeholder is exclusive to
+/// `DirectBitsRect 0x009A` / `DirectBitsRgn 0x009B` per §A-3 footnote
+/// `§`) and an embedded `ColorTable`.
+///
+/// The caller has already consumed the `rowBytes` word and passes it in
+/// as `row_bytes_raw` (high bit set; the BitMap path falls through in
+/// the dedicated decoders above).
+///
+/// `packed=true` selects the per-row `byteCount`-prefixed PackBits path
+/// from `PackBitsRect 0x0098` / `PackBitsRgn 0x0099`. `packed=false`
+/// selects the raw-row path from `BitsRect 0x0090` / `BitsRgn 0x0091`.
+/// In both cases, the BitMap variant restricts itself to `rowBytes < 8`
+/// per §A-3 footnote `¶` — *"This data is unpacked. These opcodes can be
+/// used only when rowBytes is less than 8."* The indexed PixMap variant
+/// lifts that restriction.
+///
+/// `with_region=true` consumes a `Region` record after the `mode` word
+/// (the `0x0091` / `0x0099` family). Returned as `Some` so the caller's
+/// blit can apply the per-blit clip mask; `None` for the rectangle-only
+/// opcodes.
+///
+/// Layout per Inside Macintosh §A-3 Listing A-2 / A-3:
+///
+/// ```text
+/// PixMap (rest of, after rowBytes — 44 bytes):
+///     bounds(8) + pmVersion(2) + packType(2) + packSize(4) +
+///     hRes(4)  + vRes(4)       + pixelType(2) + pixelSize(2) +
+///     cmpCount(2) + cmpSize(2) + planeBytes(4) + pmTable(4) +
+///     pmReserved(4)
+/// ColorTable:
+///     ctSeed(4) + ctFlags(2) + ctSize(2) + (ctSize+1) × ColorSpec(8)
+///     where ColorSpec = value(2) + red(2) + green(2) + blue(2)
+/// srcRect(8) + dstRect(8) + mode(2)
+/// [maskRgn — only for `with_region=true` opcodes 0x0091 / 0x0099]
+/// PixData (per §A-3 "PixData"):
+///     IF rowBytes < 8 OR NOT packed: data unpacked, rowBytes * height bytes
+///     ELSE: per-row PackBits at the rowBytes-byte width, byteCount-prefixed
+/// ```
+///
+/// The decoded indexed pixels are resolved against the embedded
+/// `ColorTable` and surfaced as RGBA. Pixel sizes 1 / 2 / 4 / 8 are
+/// honoured per §4 ("Color QuickDraw and PixMaps"); other sizes return
+/// `PictError::unsupported`. Out-of-range palette indices fall back to
+/// black (the QuickDraw convention for unassigned colour entries on a
+/// truncated `ColorTable`).
+fn decode_indexed_pixmap_payload(
+    r: &mut Reader<'_>,
+    row_bytes_raw: u16,
+    packed: bool,
+    with_region: bool,
+) -> Result<(RasterSub, RectI32, Option<Region>)> {
+    // PixMap header — the `rowBytes` word was already consumed by the
+    // caller (it is the high-bit dispatch we just performed). The
+    // remaining 44 bytes match the §A-3 listing in `decode_pix_pat`.
+    let row_bytes = (row_bytes_raw & 0x3FFF) as usize;
+    let bounds = r.read_rect()?;
+    let _pm_version = r.read_u16()?;
+    let _pack_type_field = r.read_u16()?;
+    let _pack_size = r.read_u32()?;
+    let _h_res = r.read_u32()?;
+    let _v_res = r.read_u32()?;
+    let _pixel_type = r.read_u16()?;
+    let pixel_size = r.read_u16()?;
+    let _cmp_count = r.read_u16()?;
+    let _cmp_size = r.read_u16()?;
+    let _plane_bytes = r.read_u32()?;
+    let _pm_table = r.read_u32()?;
+    let _pm_reserved = r.read_u32()?;
+
+    // ColorTable. ctSize is the count minus 1 per §4 ("The ColorTable
+    // Record" — *"the number of entries in the ctTable array minus
+    // one"*).
+    let _ct_seed = r.read_u32()?;
+    let _ct_flags = r.read_i16()?;
+    let ct_size = r.read_i16()?;
+    if !(0..=255).contains(&ct_size) {
+        return Err(PictError::invalid(format!(
+            "indexed PixMap ColorTable ctSize out of range: {ct_size}"
+        )));
+    }
+    let n_entries = (ct_size as usize) + 1;
+    let mut palette: Vec<Rgba> = Vec::with_capacity(n_entries);
+    for _ in 0..n_entries {
+        // ColorSpec = value(2) + RGB(6). The `value` field is the
+        // colour-table entry's index when `ctFlags` bit 15 (the
+        // device-independent flag) is clear; QuickDraw real-world PICTs
+        // tend to leave it at the sequential entry number. We map by
+        // position (entry 0 → palette[0], entry 1 → palette[1], …) so
+        // the embedded `value` is read-only here.
+        let _value = r.read_u16()?;
+        let r16 = r.read_u16()?;
+        let g16 = r.read_u16()?;
+        let b16 = r.read_u16()?;
+        palette.push(Rgba::from_rgb16(r16, g16, b16));
+    }
+
+    let _src_rect = r.read_rect()?;
+    let dst_rect = r.read_rect()?;
+    let _mode = r.read_u16()?;
+    let rgn = if with_region {
+        Some(parse_region(r)?)
+    } else {
+        None
+    };
+
+    let width = (bounds.3 - bounds.1).max(0) as u32;
+    let height = (bounds.2 - bounds.0).max(0) as u32;
+
+    // PixData: raw rows when `rowBytes < 8` (§A-3 "PixData") or when the
+    // caller is a `BitsRect` / `BitsRgn` (unpacked opcodes; `packed=false`).
+    // Otherwise per-row PackBits at the rowBytes-byte width.
+    let mut pix_data = vec![0u8; row_bytes * height as usize];
+    if row_bytes < 8 || !packed {
+        if row_bytes > 0 && height > 0 {
+            let raw = r.read_bytes(row_bytes * height as usize)?;
+            pix_data.copy_from_slice(raw);
+        }
+    } else {
+        for y in 0..height as usize {
+            let _byte_count = if row_bytes > 250 {
+                r.read_u16()? as usize
+            } else {
+                r.read_u8()? as usize
+            };
+            let dst = &mut pix_data[y * row_bytes..(y + 1) * row_bytes];
+            packbits::decode_into(r, dst)?;
+        }
+    }
+
+    let rgba = resolve_indexed_pixmap(&pix_data, width, height, row_bytes, pixel_size, &palette)?;
+    Ok((
+        RasterSub {
+            width,
+            height,
+            data: rgba,
+        },
+        RectI32::from_be(dst_rect.0, dst_rect.1, dst_rect.2, dst_rect.3),
+        rgn,
+    ))
+}
+
+/// Resolve an indexed PixData buffer into a `width × height` RGBA
+/// surface against `palette`. Pixel sizes 1 / 2 / 4 / 8 are honoured.
+/// Out-of-range indices (e.g. a PixData entry larger than
+/// `palette.len()`) map to black (`Rgba::BLACK`) — the documented
+/// QuickDraw fallback for an empty palette slot per §4 ("Color
+/// QuickDraw and PixMaps" — *"Empty entries in the ctTable array are
+/// drawn as black"*).
+fn resolve_indexed_pixmap(
+    pix_data: &[u8],
+    width: u32,
+    height: u32,
+    row_bytes: usize,
+    pixel_size: u16,
+    palette: &[Rgba],
+) -> Result<Vec<u8>> {
+    let mut rgba = vec![0u8; (width as usize) * (height as usize) * 4];
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let idx = read_indexed_pixel(pix_data, x, y, row_bytes, pixel_size)?;
+            let c = if (idx as usize) < palette.len() {
+                palette[idx as usize]
+            } else {
+                Rgba::BLACK
+            };
+            let off = (y * width as usize + x) * 4;
+            rgba[off] = c.r;
+            rgba[off + 1] = c.g;
+            rgba[off + 2] = c.b;
+            rgba[off + 3] = c.a;
+        }
+    }
+    Ok(rgba)
 }
 
 /// `DirectBitsRgn` (`0x009B`) — same as DirectBitsRect plus a Region
