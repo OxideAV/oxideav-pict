@@ -44,6 +44,14 @@ colour (white) and returned as the decoded `PictImage`.
 | `0x8200` | CompressedQuickTime | length-prefixed skip (embedded JPEG/RLE/Animation decode is a future round) |
 | `0x8201` | UncompressedQuickTime | length-prefixed skip   |
 | `0x00FF` | OpEndPic            | terminate               |
+| `0x0024`-`0x0027`, `0x002F`, `0x0035`-`0x0037`, `0x003D`-`0x003F`, `0x0045`-`0x0047`, `0x004D`-`0x004F`, `0x0055`-`0x0057`, `0x005D`-`0x005F`, `0x0065`-`0x0067`, `0x006D`-`0x006F`, `0x0075`-`0x007F`, `0x0085`-`0x008F`, `0x0092`-`0x0097`, `0x009C`-`0x009F`, `0x00A2`-`0x00FE`, `0x0100`-`0x7FFF`, `0x8000`-`0x80FF`, `0x8100`-`0x81FF`, `0x8202`-`0xFFFF` | §A-3 **reserved-for-Apple-use** | published-size skip (fixed, u16-prefixed, u32-prefixed, polySize, rgnSize, or `2 × nn` per §A-3 page A-5 Note) — round 199 |
+
+§A-3 lists `0x0017`-`0x0019` as "Not determined" — those three remain
+a hard error rather than risk silently mis-skipping. All other
+reserved-for-Apple-use opcodes are walked past per the published
+payload size so a PICT carrying a private-extension opcode no longer
+aborts the rest of the picture. Probe callers can inspect
+`PictProbe::reserved_op_count` to count how many were stepped past.
 
 The PICT version stanza (`0x0011 0x02FF` for v2, `0x1101` for v1) is
 recognised. The 24-byte `headerOp` (`0x0C00`) payload that follows

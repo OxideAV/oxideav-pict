@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Round 199: **§A-3 reserved-for-Apple-use v2 opcode skip table** —
+  the decoder + probe now walk past every reserved entry in Inside
+  Macintosh: Imaging With QuickDraw §A-3 (Table A-2) using the
+  published payload size, instead of surfacing them as fatal
+  `unknown / unsupported v2 opcode 0xNNNN` errors. The new
+  `opcodes::reserved_v2_payload_size(opcode) -> Option<ReservedV2Skip>`
+  helper enumerates the published shape for every range:
+  - **Fixed** — `0x0035`-`0x0037`, `0x0045`-`0x0047`, `0x0055`-
+    `0x0057` (8 bytes), `0x0065`-`0x0067` (12), `0x006D`-`0x006F` (4),
+    `0x003D`-`0x003F`, `0x004D`-`0x004F`, `0x005D`-`0x005F`,
+    `0x007D`-`0x007F`, `0x0088`-`0x008F` (0), `0x0078`-`0x007C` "Not
+    yet implemented" same-poly slots (0), `0x00B0`-`0x00CF` (0),
+    `0x8000`-`0x80FF` (0), `0x0100`-`0x7FFF` `2 × nn` (per the §A-3
+    page A-5 Note — boundary rows `$0200`→4, `$0BFF`→22, `$0C01`→24,
+    `$7FFF`→254 all explicitly tabulated and confirmed by the synth
+    tests).
+  - **U16-prefixed** (16-bit data-length word + that many bytes) —
+    `0x0024`-`0x0027`, `0x002F`, `0x0092`-`0x0097`, `0x009C`-`0x009F`,
+    `0x00A2`-`0x00AF`.
+  - **U32-prefixed** (32-bit data-length word + that many bytes) —
+    `0x00D0`-`0x00FE`, `0x8100`-`0x81FF`, `0x8202`-`0xFFFF`.
+  - **Polygon-sized** (16-bit polySize-includes-itself word) —
+    `0x0075`-`0x0077`.
+  - **Region-sized** (same shape) — `0x0085`-`0x0087`.
+  The three `0x0017`-`0x0019` "Not determined" opcodes intentionally
+  remain a hard `Unsupported` error — §A-3 leaves their payload size
+  unspecified, so any picture that emits one is malformed and silent
+  mis-skip is the worse failure mode.
+- Round 199: `PictProbe::reserved_op_count: u32` — bumps once per
+  reserved-for-Apple-use opcode the walker steps past. Lets a probe
+  caller spot PICTs carrying private / Apple-internal extension
+  records without paying the full decode cost. Not bumped for the
+  "Not determined" range (which still terminates the probe as
+  `ProbeTermination::Unsupported`).
+- Round 199: 27 synthesis tests in `tests/synth_v2_round199.rs` that
+  hand-build minimal v2 PICTs carrying one reserved opcode per range
+  and assert the decoder finishes cleanly + the probe's
+  `reserved_op_count` matches. Boundary-row coverage (`0x0BFF`,
+  `0x0C01`, `0x7FFF`, `0xFFFF`), explicit "Not determined" rejection
+  (`0x0018`, `0x0017`), and truncated-payload `InvalidData` shape
+  (`0x00D1` declares 100 bytes, supplies 4) are all included. No
+  dependence on external PICT fixtures — every byte sequence is
+  traceable back to §A-3 Table A-2 + the page A-5 Note.
+
 ## [0.0.3](https://github.com/OxideAV/oxideav-pict/compare/v0.0.2...v0.0.3) - 2026-05-29
 
 ### Other

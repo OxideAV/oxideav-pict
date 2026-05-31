@@ -616,6 +616,14 @@ fn dispatch_v2_opcode(
             if let Some(n) = fixed_operand_size(opcode) {
                 r.skip(n)?;
                 Ok(true)
+            } else if let Some(skip) = reserved_v2_payload_size(opcode) {
+                // §A-3 reserved opcodes: known payload size, walked
+                // past without dispatch so the rest of the picture
+                // can render. Truncation inside the reserved payload
+                // is still surfaced as `InvalidData` via `Reader::
+                // read_*` / `skip`.
+                skip_reserved_v2_payload(r, skip)?;
+                Ok(true)
             } else {
                 Err(PictError::unsupported(format!(
                     "unknown / unsupported v2 opcode 0x{opcode:04X} at offset {} \
@@ -623,6 +631,40 @@ fn dispatch_v2_opcode(
                     r.pos - 2
                 )))
             }
+        }
+    }
+}
+
+/// Walk past a §A-3 reserved v2 opcode's payload. Mirrors the
+/// payload-shape spelled out by [`ReservedV2Skip`].
+fn skip_reserved_v2_payload(r: &mut Reader<'_>, skip: ReservedV2Skip) -> Result<()> {
+    match skip {
+        ReservedV2Skip::Fixed(n) => r.skip(n),
+        ReservedV2Skip::U16Prefixed => {
+            let n = r.read_u16()? as usize;
+            r.skip(n)
+        }
+        ReservedV2Skip::U32Prefixed => {
+            let n = r.read_u32()? as usize;
+            r.skip(n)
+        }
+        ReservedV2Skip::PolygonSized => {
+            let n = r.read_u16()? as usize;
+            if n < 2 {
+                return Err(PictError::invalid(format!(
+                    "reserved poly size {n} smaller than the 2-byte size word"
+                )));
+            }
+            r.skip(n - 2)
+        }
+        ReservedV2Skip::RegionSized => {
+            let n = r.read_u16()? as usize;
+            if n < 2 {
+                return Err(PictError::invalid(format!(
+                    "reserved rgn size {n} smaller than the 2-byte size word"
+                )));
+            }
+            r.skip(n - 2)
         }
     }
 }

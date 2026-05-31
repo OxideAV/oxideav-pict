@@ -95,6 +95,20 @@ pub struct PictProbe {
     pub compressed_quicktime_count: u32,
     /// How many `UncompressedQuickTime` (`0x8201`) opcodes appear.
     pub uncompressed_quicktime_count: u32,
+    /// How many §A-3 *reserved* v2 opcodes the walker stepped past
+    /// without dispatching — i.e. opcodes in the ranges Inside
+    /// Macintosh: Imaging With QuickDraw §A-3 (Table A-2) lists as
+    /// "Reserved for Apple use" with a known payload size
+    /// (`0x0024..=0x0027`, `0x002F`, `0x0035..=0x0037`, `0x003D..=
+    /// 0x003F`, …, `0x0078..=0x008F`, `0x0092..=0x0097`, `0x009C..=
+    /// 0x009F`, `0x00A2..=0x00FE`, `0x0100..=0x7FFF`, `0x8000..=
+    /// 0x80FF`, `0x8100..=0x81FF`, `0x8202..=0xFFFF`). The three
+    /// "Not determined" opcodes (`0x0017..=0x0019`) are *not* counted
+    /// here — they still terminate the probe as
+    /// [`ProbeTermination::Unsupported`] because their size is
+    /// undocumented. Useful for spotting PICTs that carry private /
+    /// Apple-internal extension records.
+    pub reserved_op_count: u32,
     /// `true` if the opcode walker observed an `OpEndPic` (`0x00FF` /
     /// `0xFF`) and terminated cleanly.
     pub end_pic_seen: bool,
@@ -204,6 +218,7 @@ pub fn probe_pict(bytes: &[u8]) -> Result<PictProbe> {
         pix_pattern_set_count: 0,
         compressed_quicktime_count: 0,
         uncompressed_quicktime_count: 0,
+        reserved_op_count: 0,
         end_pic_seen: false,
         termination: ProbeTermination::Eof,
         terminated_at: body_offset + r.pos,
@@ -509,12 +524,50 @@ fn probe_v2_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             if let Some(n) = fixed_operand_size(opcode) {
                 r.skip(n)?;
                 Ok(OpStep::Continue)
+            } else if let Some(skip) = reserved_v2_payload_size(opcode) {
+                probe_skip_reserved_v2(r, skip)?;
+                p.reserved_op_count += 1;
+                Ok(OpStep::Continue)
             } else {
                 Err(PictError::unsupported(format!(
                     "unknown / unsupported v2 opcode 0x{opcode:04X} at offset {}",
                     r.pos - 2
                 )))
             }
+        }
+    }
+}
+
+/// Mirror of `decoder::skip_reserved_v2_payload`. Kept local so the
+/// probe doesn't depend on the decoder's private surface.
+fn probe_skip_reserved_v2(r: &mut Reader<'_>, skip: ReservedV2Skip) -> Result<()> {
+    match skip {
+        ReservedV2Skip::Fixed(n) => r.skip(n),
+        ReservedV2Skip::U16Prefixed => {
+            let n = r.read_u16()? as usize;
+            r.skip(n)
+        }
+        ReservedV2Skip::U32Prefixed => {
+            let n = r.read_u32()? as usize;
+            r.skip(n)
+        }
+        ReservedV2Skip::PolygonSized => {
+            let n = r.read_u16()? as usize;
+            if n < 2 {
+                return Err(PictError::invalid(format!(
+                    "reserved poly size {n} smaller than the 2-byte size word"
+                )));
+            }
+            r.skip(n - 2)
+        }
+        ReservedV2Skip::RegionSized => {
+            let n = r.read_u16()? as usize;
+            if n < 2 {
+                return Err(PictError::invalid(format!(
+                    "reserved rgn size {n} smaller than the 2-byte size word"
+                )));
+            }
+            r.skip(n - 2)
         }
     }
 }
