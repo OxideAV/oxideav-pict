@@ -73,6 +73,24 @@ pattern opcodes too (`BkPat 0x02`, `PnPat 0x09`, `FillPat 0x0A`) — the
 same 8-byte monochrome pattern payload, just inside the 8-bit opcode
 wrapper.
 
+Round 205 closes the remaining gaps in the v1 dispatcher per Inside
+Macintosh §A-3 Table A-3: the **text / font / pen state opcodes**
+(`TxFont 0x03`, `TxFace 0x04`, `TxMode 0x05`, `SpExtra 0x06`,
+`PnMode 0x08`, `TxSize 0x0D`, `TxRatio 0x10`), the **text-glyph
+opcodes** (`LongText 0x28`, `DHText 0x29`, `DVText 0x2A`,
+`DHDVText 0x2B` — walked past, no glyph rasterisation), and the
+full **Same-shape opcode family** (`frameSameRect..fillSameRect
+0x38..0x3C`, `frameSameRRect..fillSameRRect 0x48..0x4C`,
+`frameSameOval..fillSameOval 0x58..0x5C`, `frameSameArc..fillSameArc
+0x68..0x6C`). The four shape *Same* arms reuse the existing v2
+`last_rect` / `last_rrect` / `last_oval` / `last_arc_rect` state
+slots, so a v1 picture using the §A-3 payload-elision optimisation
+now decodes identically to a v2 picture making the same calls.
+`frameSamePoly..fillSamePoly 0x78..0x7C` and `frameSameRgn..
+fillSameRgn 0x88..0x8C` are marked "(Not yet implemented)" in §A-3
+and accepted as zero-byte no-ops so a private-extension PICT
+carrying one doesn't poison the surrounding decode.
+
 ## Patterns (round 8)
 
 The three monochrome pattern slots in Inside Macintosh: Imaging With

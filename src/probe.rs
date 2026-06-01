@@ -595,16 +595,54 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             p.pattern_set_count += 1;
             Ok(OpStep::Continue)
         }
+        // §A-3 Table A-3 text / pen / font state opcodes — fixed
+        // payload sizes from the v1 opcode table, walked past without
+        // accounting (they do not paint pixels).
+        0x03 => {
+            // TxFont (Integer = 2 bytes)
+            r.skip(2)?;
+            Ok(OpStep::Continue)
+        }
+        0x04 => {
+            // TxFace (0..255 = 1 byte)
+            r.skip(1)?;
+            Ok(OpStep::Continue)
+        }
+        0x05 => {
+            // TxMode (Integer = 2 bytes)
+            r.skip(2)?;
+            Ok(OpStep::Continue)
+        }
+        0x06 => {
+            // SpExtra (Fixed = 4 bytes)
+            r.skip(4)?;
+            Ok(OpStep::Continue)
+        }
         0x07 | 0x0B => {
             r.skip(4)?;
+            Ok(OpStep::Continue)
+        }
+        0x08 => {
+            // PnMode (Integer = 2 bytes)
+            r.skip(2)?;
             Ok(OpStep::Continue)
         }
         0x0C => {
             r.skip(4)?;
             Ok(OpStep::Continue)
         }
+        0x0D => {
+            // TxSize (Integer = 2 bytes)
+            r.skip(2)?;
+            Ok(OpStep::Continue)
+        }
         0x0E | 0x0F => {
             r.skip(4)?;
+            Ok(OpStep::Continue)
+        }
+        0x10 => {
+            // TxRatio: numerator (Point=4) + denominator (Point=4) = 8.
+            r.skip(8)?;
             Ok(OpStep::Continue)
         }
         0x20 => {
@@ -627,14 +665,53 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             p.drawing_count += 1;
             Ok(OpStep::Continue)
         }
+        // §A-3 Table A-3 text opcodes — walked past identically to the
+        // decoder. Counted as drawing for probe purposes since a "label"
+        // qualifies as visible content per QuickDraw.
+        0x28 => {
+            r.skip(4)?;
+            let n = r.read_u8()? as usize;
+            r.skip(n)?;
+            p.drawing_count += 1;
+            Ok(OpStep::Continue)
+        }
+        0x29 | 0x2A => {
+            r.skip(1)?;
+            let n = r.read_u8()? as usize;
+            r.skip(n)?;
+            p.drawing_count += 1;
+            Ok(OpStep::Continue)
+        }
+        0x2B => {
+            r.skip(2)?;
+            let n = r.read_u8()? as usize;
+            r.skip(n)?;
+            p.drawing_count += 1;
+            Ok(OpStep::Continue)
+        }
         0x30..=0x34 | 0x40..=0x44 | 0x50..=0x54 => {
             r.skip(8)?;
             p.drawing_count += 1;
             Ok(OpStep::Continue)
         }
+        // §A-3 Table A-3 *Same*-shape opcodes: zero-byte payload, count
+        // as a same-shape repeat. Mirrors the v2 same-shape counting
+        // convention (`same_shape_count` is the canonical signal that a
+        // v1 / v2 stream is making heavy use of the state-machine
+        // payload-elision optimisation).
+        0x38..=0x3C | 0x48..=0x4C | 0x58..=0x5C => {
+            p.same_shape_count += 1;
+            Ok(OpStep::Continue)
+        }
         0x60..=0x64 => {
             r.skip(8 + 4)?;
             p.drawing_count += 1;
+            Ok(OpStep::Continue)
+        }
+        0x68..=0x6C => {
+            // frameSameArc..fillSameArc: 4-byte payload = start + arc.
+            r.skip(4)?;
+            p.same_shape_count += 1;
             Ok(OpStep::Continue)
         }
         0x70..=0x74 => {
@@ -646,6 +723,16 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             }
             r.skip(poly_size - 2)?;
             p.drawing_count += 1;
+            Ok(OpStep::Continue)
+        }
+        // §A-3 Table A-3 lists 0x78..0x7C (frameSamePoly..fillSamePoly)
+        // and 0x88..0x8C (frameSameRgn..fillSameRgn) as "(Not yet
+        // implemented)" with a 0-byte payload. They never actually
+        // appeared in QuickDraw output; we accept them as a no-op so a
+        // private-extension PICT carrying one doesn't poison the
+        // statistics gathered up to that point.
+        0x78..=0x7C | 0x88..=0x8C => {
+            p.same_shape_count += 1;
             Ok(OpStep::Continue)
         }
         0x80..=0x84 => {

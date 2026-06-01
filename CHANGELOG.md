@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 205: **v1 dispatcher state-machine + text + Same-shape opcode
+  coverage per §A-3 Table A-3.** Prior rounds wired the v1 (8-bit-
+  opcode) walker for the small shape verbs (`frameRect`..`fillPoly`/
+  `fillRgn`), the four pattern opcodes, and every raster opcode
+  (`BitsRect`/`BitsRgn`/`PackBitsRect`/`PackBitsRgn`/`DirectBitsRect`/
+  `DirectBitsRgn`), but several Table A-3 entries still triggered the
+  fatal `unknown / unsupported v1 opcode` error:
+  - **State / text setup opcodes** (walked past per the fixed payload
+    sizes in Table A-3): `TxFont 0x03` (2), `TxFace 0x04` (1),
+    `TxMode 0x05` (2), `SpExtra 0x06` (4), `PnMode 0x08` (2),
+    `TxSize 0x0D` (2), `TxRatio 0x10` (8).
+  - **Text-glyph opcodes** (walked past — no font rasteriser yet,
+    same as v2): `LongText 0x28` (5 + text), `DHText 0x29` (2 + text),
+    `DVText 0x2A` (2 + text), `DHDVText 0x2B` (3 + text).
+  - **Same-shape opcodes** (use the v2 `last_rect` / `last_rrect` /
+    `last_oval` / `last_arc_rect` state slots): `frameSameRect..
+    fillSameRect 0x38..0x3C`, `frameSameRRect..fillSameRRect 0x48..
+    0x4C`, `frameSameOval..fillSameOval 0x58..0x5C`, `frameSameArc..
+    fillSameArc 0x68..0x6C` (the arc family carries a 4-byte
+    `start + arc` payload; the other three families are zero-byte).
+    Routing reuses the verb-nibble convention via `opcode - 8` so
+    `apply_rect_verb` / `apply_rrect_verb` / `apply_oval_verb` /
+    `apply_arc_verb` need no v1-specific helpers.
+  - **"Not yet implemented" same-shape ranges** (§A-3 marks these
+    explicitly NYI with a 0-byte payload): `frameSamePoly..
+    fillSamePoly 0x78..0x7C`, `frameSameRgn..fillSameRgn 0x88..0x8C`.
+    Accepted as silent no-ops so a private-extension PICT carrying
+    one doesn't poison the decode.
+  When a `*Same*` opcode runs with no matching `last_*` slot
+  established (§A-3 leaves the behaviour implementation-defined), the
+  arm silently does nothing — matching QuickDraw's "no previous shape
+  to repeat" no-op semantics. The probe walker (`probe::probe_v1_opcode`)
+  is widened in lock-step: the new text opcodes increment
+  `PictProbe::drawing_count`; the new same-shape opcodes (including
+  the NYI poly / rgn ranges) increment `PictProbe::same_shape_count`.
+  A `0x35` byte (genuinely undefined in Table A-3) still surfaces the
+  `Unsupported` error — the dispatcher was widened, not replaced with
+  a catch-all fallback.
+- Round 205: 25 synthesis tests in `tests/synth_v1_round205.rs` that
+  hand-build minimal v1 PICTs (no launch stub, no v2 sentinel; just
+  the 10-byte picture record + `0x11 0x01` version stanza + opcode +
+  `paintRect` + `0xFF`) and assert: every state-opcode payload is
+  walked past with its §A-3 byte count; every text-opcode payload is
+  walked past with its variable count + text bytes; every same-shape
+  opcode family (rect / rrect / oval / arc) decodes cleanly with the
+  matching last-* slot established; the probe's `same_shape_count`
+  increments by exactly the number of *Same* opcodes (4 for one each
+  from the four implemented families, 2 for the NYI poly + rgn
+  pair); an orphan `paintSameRect` (no prior `paintRect`) is a
+  silent no-op; and a genuinely undefined `0x35` still rejects.
+  Every byte sequence is traceable back to §A-3 Table A-3 (book
+  pages A-18..A-21). No external implementation consulted.
+
 - Round 199: **§A-3 reserved-for-Apple-use v2 opcode skip table** —
   the decoder + probe now walk past every reserved entry in Inside
   Macintosh: Imaging With QuickDraw §A-3 (Table A-2) using the

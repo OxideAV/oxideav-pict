@@ -2254,10 +2254,40 @@ fn dispatch_v1_opcode(
             state.fill_pix_pat = None;
             Ok(true)
         }
+        // §A-3 Table A-3 text / pen / font state opcodes that we do not
+        // fully model in the rasteriser yet — payload sizes are walked
+        // past per the table so v1 PICTs carrying them no longer abort.
+        // Mirrors the v2 `fixed_operand_size` skip-table arm for the
+        // corresponding 16-bit opcodes (0x0003..=0x0010).
+        0x03 => {
+            // TxFont (Integer)
+            r.skip(2)?;
+            Ok(true)
+        }
+        0x04 => {
+            // TxFace (0..255)
+            r.skip(1)?;
+            Ok(true)
+        }
+        0x05 => {
+            // TxMode (Integer)
+            r.skip(2)?;
+            Ok(true)
+        }
+        0x06 => {
+            // SpExtra (Fixed)
+            r.skip(4)?;
+            Ok(true)
+        }
         0x07 => {
             let v = r.read_i16()?;
             let h = r.read_i16()?;
             state.pen_size = (h as i32, v as i32);
+            Ok(true)
+        }
+        0x08 => {
+            // PnMode (Integer)
+            r.skip(2)?;
             Ok(true)
         }
         0x0B => {
@@ -2273,6 +2303,11 @@ fn dispatch_v1_opcode(
             state.origin.1 -= dv as i32;
             Ok(true)
         }
+        0x0D => {
+            // TxSize (Integer)
+            r.skip(2)?;
+            Ok(true)
+        }
         0x0E => {
             let code = r.read_u32()?;
             state.fg = Rgba::from_pascal_colour(code);
@@ -2281,6 +2316,11 @@ fn dispatch_v1_opcode(
         0x0F => {
             let code = r.read_u32()?;
             state.bg = Rgba::from_pascal_colour(code);
+            Ok(true)
+        }
+        0x10 => {
+            // TxRatio: numerator (Point) + denominator (Point) = 8 bytes
+            r.skip(8)?;
             Ok(true)
         }
         0x20 => {
@@ -2331,6 +2371,30 @@ fn dispatch_v1_opcode(
             state.pen = (nx, ny);
             Ok(true)
         }
+        // §A-3 Table A-3 text opcodes — walked past identically to v2.
+        // No font rasteriser yet, so the operand bytes (count + glyph
+        // bytes, with the offset point varying per opcode) are skipped.
+        0x28 => {
+            // LongText: txLoc (Point=4) + count (byte) + text (count bytes).
+            r.skip(4)?;
+            let n = r.read_u8()? as usize;
+            r.skip(n)?;
+            Ok(true)
+        }
+        0x29 | 0x2A => {
+            // DHText / DVText: dh|dv (byte) + count (byte) + text.
+            r.skip(1)?;
+            let n = r.read_u8()? as usize;
+            r.skip(n)?;
+            Ok(true)
+        }
+        0x2B => {
+            // DHDVText: dh (byte) + dv (byte) + count (byte) + text.
+            r.skip(2)?;
+            let n = r.read_u8()? as usize;
+            r.skip(n)?;
+            Ok(true)
+        }
         0x30..=0x34 | 0x40..=0x44 | 0x50..=0x54 => {
             let rect = read_rect_op(r)?;
             match opcode {
@@ -2349,6 +2413,32 @@ fn dispatch_v1_opcode(
             }
             Ok(true)
         }
+        // §A-3 Table A-3 *Same* shape opcodes — no operand payload; reuse
+        // the corresponding last-* rect from the drawing-state machine.
+        // Verb-nibble mapping: low nibble of opcode - 8 = base verb (0x38
+        // → frame, 0x39 → paint, 0x3A → erase, 0x3B → invert, 0x3C →
+        // fill). When the matching last-* slot is empty (no prior verb
+        // of that family has executed), §A-3 leaves the behaviour
+        // implementation-defined; we silently do nothing — matching
+        // QuickDraw's "no previous shape to repeat" no-op semantics.
+        0x38..=0x3C => {
+            if let Some(rect) = state.last_rect {
+                apply_rect_verb(canvas, state, opcode - 8, rect);
+            }
+            Ok(true)
+        }
+        0x48..=0x4C => {
+            if let Some(rect) = state.last_rrect {
+                apply_rrect_verb(canvas, state, opcode - 8, rect);
+            }
+            Ok(true)
+        }
+        0x58..=0x5C => {
+            if let Some(rect) = state.last_oval {
+                apply_oval_verb(canvas, state, opcode - 8, rect);
+            }
+            Ok(true)
+        }
         0x60..=0x64 => {
             let rect = read_rect_op(r)?;
             let start = r.read_i16()? as i32;
@@ -2357,6 +2447,22 @@ fn dispatch_v1_opcode(
             apply_arc_verb(canvas, state, opcode, rect, start, arc);
             Ok(true)
         }
+        0x68..=0x6C => {
+            // frameSameArc..fillSameArc: 4-byte payload = start + arc;
+            // the rect is taken from the last-arc-rect state slot.
+            let start = r.read_i16()? as i32;
+            let arc = r.read_i16()? as i32;
+            if let Some(rect) = state.last_arc_rect {
+                apply_arc_verb(canvas, state, opcode - 8, rect, start, arc);
+            }
+            Ok(true)
+        }
+        // §A-3 Table A-3 lists frameSamePoly..fillSamePoly (0x78..0x7C)
+        // and frameSameRgn..fillSameRgn (0x88..0x8C) as "(Not yet
+        // implemented)" with a 0-byte payload. QuickDraw itself never
+        // emits these; we accept them as no-ops so a private-extension
+        // PICT carrying one keeps decoding.
+        0x78..=0x7C | 0x88..=0x8C => Ok(true),
         0x70..=0x74 => {
             let poly_size = r.read_u16()? as usize;
             if poly_size < 10 {
