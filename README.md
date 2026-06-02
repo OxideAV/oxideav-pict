@@ -296,6 +296,8 @@ emit, and a builder-with-raster path:
 | `PictBuilder::pen_dither_pix_pattern` / `bg_dither_pix_pattern` / `fill_dither_pix_pattern` | dither pattern-set opcodes | round 95 — emits `PnPixPat 0x0013` / `BkPixPat 0x0012` / `FillPixPat 0x0014` with a `patType=2` ditherPat record (target `RGBColor` + `Pat1Data` only) |
 | `build_pix_pat_dither_op` | dither pattern opcode bytes | round 95 — public helper for the 18-byte raw payload (opcode word + patType=2 + Pat1Data + RGBColor) |
 | `build_direct_bits_rect_op` | DirectBitsRect opcode bytes | round 5 — public helper for the raw `0x009A` opcode bytes (no stub / header / OpEndPic) |
+| `encode_pict_indexed_bits_rect` / `encode_pict_indexed_pack_bits_rect` | v2 + indexed PixMap BitsRect (`0x0090`) / PackBitsRect (`0x0098`) | round 211 — emits a `1/2/4/8`-bpp indexed PixMap with embedded ColorTable (no `baseAddr` per §A-3 footnote `§`); PackBits-RLE rows when `rowBytes >= 8`, raw otherwise |
+| `encode_pict_indexed_bits_rgn` / `encode_pict_indexed_pack_bits_rgn` | v2 + indexed PixMap BitsRgn (`0x0091`) / PackBitsRgn (`0x0099`) | round 211 — indexed-PixMap variant of the BitsRgn / PackBitsRgn family with a rectangular clip region attached after the rect/mode header |
 
 ```rust
 use oxideav_pict::{encode_pict, encode_pict_v2, encode_pict_v1,
@@ -442,6 +444,32 @@ per indexed-PixMap `BitsRect` / `BitsRgn` / `PackBitsRect` /
 decode cost. `DirectBitsRect 0x009A` / `DirectBitsRgn 0x009B` are
 always direct (never indexed) and remain in `raster_count` only.
 
+Round 211 closes the encoder side: `encode_pict_indexed_bits_rect` /
+`encode_pict_indexed_pack_bits_rect` (and the `*_rgn` region-clipped
+counterparts) emit a v2 PICT stream containing one indexed PixMap at
+the chosen `IndexedPixelSize` (1 / 2 / 4 / 8 bpp). The encoder packs
+indices MSB-first to match the decoder's `read_indexed_pixel`, omits
+`baseAddr` (the BitsRect family drops it; only DirectBits* carries
+it), and replicates 8-bit ColorTable RGB across both bytes of the
+16-bit-per-channel on-disk `RGBColor` so `Rgba::from_rgb16`
+round-trips bit-exact.
+
+```rust
+use oxideav_pict::{encode_pict_indexed_pack_bits_rect, parse_pict, IndexedPixelSize};
+
+let palette = vec![[0xFF, 0, 0, 0xFF], [0, 0xFF, 0, 0xFF]];
+let indices: Vec<u8> = (0..64).map(|i| ((i / 8) & 1) as u8).collect();
+let pict = encode_pict_indexed_pack_bits_rect(
+    8, 8, &indices, &palette, IndexedPixelSize::EightBpp,
+)?;
+let img = parse_pict(&pict)?;
+assert_eq!(img.width, 8);
+// Row 0 (index 0) → red; row 1 (index 1) → green; …
+assert_eq!(&img.data[0..4], &[0xFF, 0, 0, 0xFF]);
+assert_eq!(&img.data[8 * 4..8 * 4 + 4], &[0, 0xFF, 0, 0xFF]);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 ## What's not yet in
 
 * **Non-8×8 PixPat tiles.** Inside Macintosh §A-3 nominally permits
@@ -455,9 +483,6 @@ always direct (never indexed) and remain in `raster_count` only.
   `oxideav-mjpeg`'s `decode_jpeg` exposed publicly.
 * **Multi-image PICTs.** Each subsequent raster blits onto the same
   canvas — no separate per-image surfaces.
-* **Indexed-PixMap encoder.** Round 186 added a decoder; an encoder
-  emitting `PackBitsRect` / `BitsRect` indexed-PixMap on disk is a
-  follow-up (round 1 emits BitMap only).
 
 ## License
 

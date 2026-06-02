@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 211: **Indexed-PixMap encoder** — closes the round-186
+  decoder's encoder side. Four new public functions emit a v2 PICT
+  stream containing a single indexed-PixMap raster opcode (Inside
+  Macintosh §A-3 footnote `§`: "If the high bit of rowBytes is set,
+  then it is a pixel map containing multiple bits per pixel"):
+  - `encode_pict_indexed_bits_rect` → `BitsRect 0x0090` (raw PixData
+    rows).
+  - `encode_pict_indexed_pack_bits_rect` → `PackBitsRect 0x0098`
+    (per-row PackBits when `rowBytes >= 8`; raw rows otherwise per
+    §A-3 narrow-row carve-out).
+  - `encode_pict_indexed_bits_rgn` → `BitsRgn 0x0091` (BitsRect plus
+    a rectangular clip region inserted between the rect/mode header
+    and the PixData rows).
+  - `encode_pict_indexed_pack_bits_rgn` → `PackBitsRgn 0x0099`
+    (PackBitsRect with the same rectangular clip).
+
+  A new public `IndexedPixelSize` enum selects between 1 / 2 / 4 / 8
+  bpp; the per-row packer is MSB-first per QuickDraw convention,
+  matching the round-186 decoder's `read_indexed_pixel` switch. The
+  on-disk PixMap header omits the `baseAddr` placeholder (`BitsRect`-
+  family opcodes drop it — only `DirectBitsRect 0x009A` /
+  `DirectBitsRgn 0x009B` carry it per §A-3). Embedded ColorTable
+  layout reuses the round-91 `build_pix_pat_op` convention:
+  sequential `value` field, 16-bit-per-channel RGBColor entries with
+  the 8-bit input replicated to both bytes (`high8 = low8 =
+  channel`). Validation: dimensions / palette-size / pixel-size
+  combinations are checked up front, and `rowBytes` is capped at the
+  14-bit PICT v2 limit (`0x3FFE`).
+- Round 211: 15 synthesis tests in `tests/synth_v2_round211.rs`:
+  - 8-bpp `BitsRect` (4×4 / 8×8 / 16×4) and `PackBitsRect`
+    round-trips across the three rowBytes regimes (carve-out raw,
+    1-byte byteCount, 2-byte byteCount).
+  - One round-trip per indexed pixel size: 1-bpp (8×4 vertical
+    stripe), 2-bpp (4×4 quadrants), 4-bpp (8×2, 8 distinct palette
+    entries within the 16-entry cap), 8-bpp (full 256-entry palette).
+  - `BitsRgn` (full-frame clip) and `PackBitsRgn` (4×4 inset clip,
+    confirming outside-clip pixels remain canvas-default white).
+  - Probe coverage: confirms `PictProbe::indexed_raster_count` is
+    bumped (with `raster_count` as the rolling super-count).
+  - Validation: zero dims, size mismatch, empty palette, per-pixel-
+    size palette overflow (3 entries with 1-bpp, 5 with 2-bpp, 17
+    with 4-bpp).
 - Round 205: **v1 dispatcher state-machine + text + Same-shape opcode
   coverage per §A-3 Table A-3.** Prior rounds wired the v1 (8-bit-
   opcode) walker for the small shape verbs (`frameRect`..`fillPoly`/

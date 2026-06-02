@@ -26,6 +26,16 @@
 //! Cross-validation: every output produced by this module decodes
 //! cleanly via [`crate::decoder::parse_pict`] and the v2 outputs pass
 //! through ImageMagick's PICT delegate unchanged.
+//!
+//! Round 211 adds the **indexed-PixMap** variants of the four BitMap /
+//! PackBitsRect / region opcodes (Inside Macintosh §A-3 footnote `§`:
+//! "If the high bit of rowBytes is set, then it is a pixel map containing
+//! multiple bits per pixel"). The round-186 indexed decoder already
+//! consumes them; the encoder side now emits 1/2/4/8-bpp PixData rows
+//! plus the embedded ColorTable across all four
+//! `BitsRect`/`PackBitsRect`/`BitsRgn`/`PackBitsRgn` opcodes — closing
+//! the indexed-PixMap round-trip the README flagged as the next
+//! follow-up.
 
 use crate::error::{PictError, Result};
 use crate::packbits;
@@ -912,6 +922,371 @@ fn encode_pict_bitmap_with_region(
         out.push(0);
     }
     write_u16(&mut out, 0x00FF);
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Indexed-PixMap encoder (round 211 — `BitsRect` / `PackBitsRect` PixMap
+// variant per Inside Macintosh §A-3 footnote `§`).
+// ---------------------------------------------------------------------------
+
+/// 1, 2, 4 or 8 bits per pixel for an indexed PixMap. Inside Macintosh §4
+/// ("Color QuickDraw and PixMaps") enumerates exactly these four indexed
+/// pixel-size values; round-trip-pair to the decoder's
+/// `read_indexed_pixel` switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexedPixelSize {
+    /// 1 bit per pixel — 2-entry palette, 8 pixels per byte (MSB-first).
+    OneBpp,
+    /// 2 bits per pixel — 4-entry palette, 4 pixels per byte.
+    TwoBpp,
+    /// 4 bits per pixel — 16-entry palette, 2 pixels per byte.
+    FourBpp,
+    /// 8 bits per pixel — 256-entry palette, 1 pixel per byte. The most
+    /// common indexed colour-QuickDraw mode.
+    EightBpp,
+}
+
+impl IndexedPixelSize {
+    /// Pixel-size field as written into the PixMap header.
+    fn bits(self) -> u16 {
+        match self {
+            IndexedPixelSize::OneBpp => 1,
+            IndexedPixelSize::TwoBpp => 2,
+            IndexedPixelSize::FourBpp => 4,
+            IndexedPixelSize::EightBpp => 8,
+        }
+    }
+
+    /// Maximum palette entries this pixel size can address.
+    fn max_palette_entries(self) -> usize {
+        1 << self.bits()
+    }
+
+    /// `rowBytes` (header value) for a row of `width` pixels at this depth.
+    /// Per Inside Macintosh §4 the row stride rounds up to the next byte.
+    fn row_bytes(self, width: u32) -> usize {
+        let w = width as usize;
+        match self {
+            IndexedPixelSize::OneBpp => w.div_ceil(8),
+            IndexedPixelSize::TwoBpp => w.div_ceil(4),
+            IndexedPixelSize::FourBpp => w.div_ceil(2),
+            IndexedPixelSize::EightBpp => w,
+        }
+    }
+
+    /// Pack a row of u8 indices into the on-disk bit-stream for this depth.
+    /// MSB-first per QuickDraw convention. The output length matches
+    /// [`Self::row_bytes`]; out-of-range indices are silently masked to
+    /// the depth's bit width.
+    fn pack_row(self, indices: &[u8], row_bytes: usize) -> Vec<u8> {
+        let mut out = vec![0u8; row_bytes];
+        match self {
+            IndexedPixelSize::OneBpp => {
+                for (x, &v) in indices.iter().enumerate() {
+                    if v & 0x01 != 0 {
+                        out[x >> 3] |= 0x80 >> (x & 7);
+                    }
+                }
+            }
+            IndexedPixelSize::TwoBpp => {
+                for (x, &v) in indices.iter().enumerate() {
+                    let shift = (3 - (x & 3)) * 2;
+                    out[x >> 2] |= (v & 0x03) << shift;
+                }
+            }
+            IndexedPixelSize::FourBpp => {
+                for (x, &v) in indices.iter().enumerate() {
+                    let shift = (1 - (x & 1)) * 4;
+                    out[x >> 1] |= (v & 0x0F) << shift;
+                }
+            }
+            IndexedPixelSize::EightBpp => {
+                let n = indices.len().min(out.len());
+                out[..n].copy_from_slice(&indices[..n]);
+            }
+        }
+        out
+    }
+}
+
+/// Encode an indexed image (one byte per pixel index, row-major) as a v2
+/// PICT containing a single **`BitsRect`** (`0x0090`) opcode in its
+/// **indexed-PixMap** variant (Inside Macintosh §A-3 footnote `§`:
+/// "If the high bit of rowBytes is set, then it is a pixel map containing
+/// multiple bits per pixel").
+///
+/// PixData rows are emitted raw (no PackBits prefix) — the `BitsRect`
+/// opcode forces the unpacked PixData path regardless of `rowBytes`
+/// (matching the decoder's `decode_bits_rect_v2` / `packed=false` arm).
+/// For PackBits-RLE rows use [`encode_pict_indexed_pack_bits_rect`].
+///
+/// * `width` / `height` — picture-frame dimensions; must be non-zero.
+/// * `indices` — `width × height` bytes; each byte is a palette index in
+///   `0..palette.len()`. Indices outside that range are silently masked
+///   to the chosen pixel size's bit width on disk; the decoder treats
+///   out-of-range indices as black.
+/// * `palette` — `RGBA8` colour table; up to `pixel_size.max_palette_entries()`
+///   entries (`alpha` byte is ignored — QuickDraw ColorTable entries
+///   are opaque RGB only). At least one entry is required.
+/// * `pixel_size` — 1 / 2 / 4 / 8 bpp.
+///
+/// Returns `InvalidData` if:
+/// * dimensions are zero or `indices.len() != width × height`,
+/// * `palette` is empty or longer than `pixel_size.max_palette_entries()`,
+/// * `rowBytes` exceeds the 14-bit PICT v2 limit (`0x3FFE`).
+pub fn encode_pict_indexed_bits_rect(
+    width: u32,
+    height: u32,
+    indices: &[u8],
+    palette: &[[u8; 4]],
+    pixel_size: IndexedPixelSize,
+) -> Result<Vec<u8>> {
+    encode_pict_indexed_pixmap(width, height, indices, palette, pixel_size, false, None)
+}
+
+/// Encode an indexed image as a v2 PICT containing a single
+/// **`PackBitsRect`** (`0x0098`) opcode in its **indexed-PixMap** variant.
+///
+/// PixData rows are PackBits-RLE encoded when `rowBytes >= 8` (Inside
+/// Macintosh §A-3 narrow-row carve-out: rows narrower than 8 bytes ship
+/// raw with no byteCount prefix). The decoder is the matching
+/// `decode_pack_bits_rect` / `packed=true` arm.
+///
+/// See [`encode_pict_indexed_bits_rect`] for parameter semantics.
+pub fn encode_pict_indexed_pack_bits_rect(
+    width: u32,
+    height: u32,
+    indices: &[u8],
+    palette: &[[u8; 4]],
+    pixel_size: IndexedPixelSize,
+) -> Result<Vec<u8>> {
+    encode_pict_indexed_pixmap(width, height, indices, palette, pixel_size, true, None)
+}
+
+/// Encode an indexed image as a v2 PICT containing a single **`BitsRgn`**
+/// (`0x0091`) opcode in its **indexed-PixMap** variant — `BitsRect` plus a
+/// rectangular clip region inserted just before the per-row pixel data.
+///
+/// `clip` is `[top, left, bottom, right]` in picture-frame coords. See
+/// [`encode_pict_indexed_bits_rect`] for the rest of the parameter
+/// semantics.
+pub fn encode_pict_indexed_bits_rgn(
+    width: u32,
+    height: u32,
+    indices: &[u8],
+    palette: &[[u8; 4]],
+    pixel_size: IndexedPixelSize,
+    clip: [i16; 4],
+) -> Result<Vec<u8>> {
+    encode_pict_indexed_pixmap(
+        width,
+        height,
+        indices,
+        palette,
+        pixel_size,
+        false,
+        Some(clip),
+    )
+}
+
+/// Encode an indexed image as a v2 PICT containing a single
+/// **`PackBitsRgn`** (`0x0099`) opcode in its **indexed-PixMap** variant —
+/// `PackBitsRect` plus a rectangular clip region.
+pub fn encode_pict_indexed_pack_bits_rgn(
+    width: u32,
+    height: u32,
+    indices: &[u8],
+    palette: &[[u8; 4]],
+    pixel_size: IndexedPixelSize,
+    clip: [i16; 4],
+) -> Result<Vec<u8>> {
+    encode_pict_indexed_pixmap(
+        width,
+        height,
+        indices,
+        palette,
+        pixel_size,
+        true,
+        Some(clip),
+    )
+}
+
+fn validate_indexed_dims(
+    width: u32,
+    height: u32,
+    indices: &[u8],
+    palette: &[[u8; 4]],
+    pixel_size: IndexedPixelSize,
+) -> Result<()> {
+    if width == 0 || height == 0 {
+        return Err(PictError::invalid(
+            "encode_pict_indexed: width and height must be non-zero",
+        ));
+    }
+    let expected = width as usize * height as usize;
+    if indices.len() != expected {
+        return Err(PictError::invalid(format!(
+            "encode_pict_indexed: indices.len() = {} but width × height = {expected}",
+            indices.len()
+        )));
+    }
+    if palette.is_empty() {
+        return Err(PictError::invalid(
+            "encode_pict_indexed: palette must contain at least one entry",
+        ));
+    }
+    let cap = pixel_size.max_palette_entries();
+    if palette.len() > cap {
+        return Err(PictError::invalid(format!(
+            "encode_pict_indexed: palette has {} entries but pixelSize = {} bpp caps at {cap}",
+            palette.len(),
+            pixel_size.bits(),
+        )));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_pict_indexed_pixmap(
+    width: u32,
+    height: u32,
+    indices: &[u8],
+    palette: &[[u8; 4]],
+    pixel_size: IndexedPixelSize,
+    pack_bits: bool,
+    clip: Option<[i16; 4]>,
+) -> Result<Vec<u8>> {
+    validate_indexed_dims(width, height, indices, palette, pixel_size)?;
+
+    let row_bytes = pixel_size.row_bytes(width);
+    if row_bytes > 0x3FFE {
+        return Err(PictError::invalid(format!(
+            "encode_pict_indexed: rowBytes {row_bytes} exceeds the 14-bit limit"
+        )));
+    }
+
+    // Pack every row up front; we may reuse the buffer for both the
+    // payload-size estimate and the actual write.
+    let w = width as usize;
+    let h = height as usize;
+    let mut packed_rows: Vec<Vec<u8>> = Vec::with_capacity(h);
+    for y in 0..h {
+        let row = &indices[y * w..(y + 1) * w];
+        packed_rows.push(pixel_size.pack_row(row, row_bytes));
+    }
+
+    let opcode: u16 = match (pack_bits, clip.is_some()) {
+        (false, false) => 0x0090, // BitsRect
+        (true, false) => 0x0098,  // PackBitsRect
+        (false, true) => 0x0091,  // BitsRgn
+        (true, true) => 0x0099,   // PackBitsRgn
+    };
+
+    // Header: stub + picSize + picFrame + v2 sentinel + headerOp.
+    let mut out: Vec<u8> = Vec::with_capacity(560 + 80 + row_bytes * h + 4);
+    out.extend_from_slice(&[0u8; 512]);
+    write_u16(&mut out, 0); // picSize
+    write_i16(&mut out, 0);
+    write_i16(&mut out, 0);
+    write_i16(&mut out, height as i16);
+    write_i16(&mut out, width as i16);
+    write_u16(&mut out, 0x0011);
+    write_u16(&mut out, 0x02FF);
+    write_u16(&mut out, 0x0C00);
+    out.extend_from_slice(&[0u8; 24]);
+
+    // Opcode + indexed PixMap header.
+    write_u16(&mut out, opcode);
+
+    // BitsRect / PackBitsRect / *Rgn variants of the indexed PixMap do
+    // NOT carry a baseAddr field — Inside Macintosh §A-3 footnote `§`:
+    // "PixMap data structure (excluding baseAddr) is included as data".
+    // Only DirectBitsRect / DirectBitsRgn (0x009A / 0x009B) carry baseAddr.
+    write_u16(&mut out, (row_bytes as u16) | 0x8000); // rowBytes + PixMap flag
+    write_i16(&mut out, 0);
+    write_i16(&mut out, 0);
+    write_i16(&mut out, height as i16);
+    write_i16(&mut out, width as i16);
+    // pmVersion, packType, packSize.
+    write_u16(&mut out, 0);
+    write_u16(&mut out, 0); // packType = 0 (indexed PixData is per-row, not pmHeader-packed)
+    write_u32(&mut out, 0);
+    // hRes / vRes = 72 dpi (0x00480000 fixed-point).
+    write_u32(&mut out, 0x00480000);
+    write_u32(&mut out, 0x00480000);
+    // pixelType = 0 (indexed), pixelSize, cmpCount = 1, cmpSize = pixelSize.
+    write_u16(&mut out, 0);
+    write_u16(&mut out, pixel_size.bits());
+    write_u16(&mut out, 1);
+    write_u16(&mut out, pixel_size.bits());
+    // planeBytes, pmTable, pmReserved.
+    write_u32(&mut out, 0);
+    write_u32(&mut out, 0);
+    write_u32(&mut out, 0);
+
+    // ColorTable: ctSeed (4) + ctFlags (2) + ctSize (2) + entries (8 each).
+    write_u32(&mut out, 0); // ctSeed (synth — decoder ignores)
+    write_u16(&mut out, 0); // ctFlags (clear → PixMap, not device)
+    let ct_size = (palette.len() as i16) - 1;
+    write_i16(&mut out, ct_size);
+    for (i, rgba) in palette.iter().enumerate() {
+        // value: sequential index per §A-3 ColorSpec layout. The
+        // decoder maps by position (palette[0] = entry 0), so this is
+        // metadata only.
+        write_u16(&mut out, i as u16);
+        // RGBColor: 16-bit per channel; replicate the 8-bit input across
+        // both bytes so `from_rgb16` recovers the 8-bit value exactly
+        // (`high8 = colour data`, same convention used by `build_pix_pat_op`).
+        write_u16(&mut out, ((rgba[0] as u16) << 8) | rgba[0] as u16);
+        write_u16(&mut out, ((rgba[1] as u16) << 8) | rgba[1] as u16);
+        write_u16(&mut out, ((rgba[2] as u16) << 8) | rgba[2] as u16);
+    }
+
+    // srcRect / dstRect.
+    for _ in 0..2 {
+        write_i16(&mut out, 0);
+        write_i16(&mut out, 0);
+        write_i16(&mut out, height as i16);
+        write_i16(&mut out, width as i16);
+    }
+    // mode = srcCopy.
+    write_u16(&mut out, 0);
+
+    // Rectangular clip region (rgnSize = 10 + bbox) if requested.
+    if let Some(bbox) = clip {
+        write_u16(&mut out, 10);
+        write_i16(&mut out, bbox[0]);
+        write_i16(&mut out, bbox[1]);
+        write_i16(&mut out, bbox[2]);
+        write_i16(&mut out, bbox[3]);
+    }
+
+    // PixData rows — raw for the BitsRect / BitsRgn opcodes (or the
+    // PackBitsRect narrow-row carve-out when rowBytes < 8). Otherwise
+    // per-row PackBits with byteCount prefix (1 byte if rowBytes ≤ 250,
+    // else 2 bytes).
+    if !pack_bits || row_bytes < 8 {
+        for row in &packed_rows {
+            out.extend_from_slice(row);
+        }
+    } else {
+        for row in &packed_rows {
+            let enc = packbits::encode(row);
+            let total = enc.len();
+            if row_bytes > 250 {
+                write_u16(&mut out, total as u16);
+            } else {
+                out.push(total as u8);
+            }
+            out.extend_from_slice(&enc);
+        }
+    }
+
+    if out.len() % 2 != 0 {
+        out.push(0);
+    }
+    write_u16(&mut out, 0x00FF); // OpEndPic
     Ok(out)
 }
 
