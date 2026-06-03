@@ -38,6 +38,7 @@
 //! 2 bytes) is shared between packTypes 3 and 4.
 
 use crate::error::{PictError, Result};
+use crate::header::PictHeader;
 use crate::image::{PictImage, PictPixelFormat};
 use crate::opcodes::*;
 use crate::packbits;
@@ -76,7 +77,7 @@ pub fn parse_pict(bytes: &[u8]) -> Result<PictImage> {
     let pic_frame = r.read_rect()?;
     let pic_frame = RectI32::from_be(pic_frame.0, pic_frame.1, pic_frame.2, pic_frame.3);
 
-    let version = detect_version(&mut r)?;
+    let (version, header) = detect_version(&mut r)?;
 
     // Initial canvas sized to the picture frame, pre-filled white
     // (QuickDraw "paper"). The drawing-state machine adjusts the
@@ -102,10 +103,12 @@ pub fn parse_pict(bytes: &[u8]) -> Result<PictImage> {
         ..PictState::default()
     };
 
-    match version {
-        PictVersion::V1 => parse_v1_opcodes(&mut r, pic_frame, canvas, state),
-        PictVersion::V2 => parse_v2_opcodes(&mut r, pic_frame, canvas, state),
-    }
+    let mut img = match version {
+        PictVersion::V1 => parse_v1_opcodes(&mut r, pic_frame, canvas, state)?,
+        PictVersion::V2 => parse_v2_opcodes(&mut r, pic_frame, canvas, state)?,
+    };
+    img.header = header;
+    Ok(img)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,7 +142,7 @@ fn looks_like_picture_record(bytes: &[u8]) -> bool {
     false
 }
 
-fn detect_version(r: &mut Reader<'_>) -> Result<PictVersion> {
+fn detect_version(r: &mut Reader<'_>) -> Result<(PictVersion, Option<PictHeader>)> {
     // The version stanza is the first thing after the 10-byte
     // picture-record header. v2 emits the 2-byte opcode 0x0011
     // followed by the 2-byte 0x02FF v2 sentinel and the headerOp
@@ -155,8 +158,24 @@ fn detect_version(r: &mut Reader<'_>) -> Result<PictVersion> {
                     "expected headerOp 0x0C00 after v2 sentinel, got 0x{header_op:04X}"
                 )));
             }
-            r.skip(24)?;
-            return Ok(PictVersion::V2);
+            // Decode the 24-byte payload per §A-3 / Listings A-5+A-6.
+            // Pre-existing zero-pad headers (our own pre-r217 encoder
+            // emitted `[0u8; 24]`, which is neither the FFFE nor FFFF
+            // version marker) are tolerated by stepping past them so
+            // older PICTs still decode.
+            let header = match PictHeader::parse(r) {
+                Ok(h) => Some(h),
+                Err(_) => {
+                    // Already consumed the 2-byte version word inside
+                    // PictHeader::parse — back up and skip 24 bytes
+                    // total to preserve the §A-3 24-byte payload
+                    // contract.
+                    r.pos -= 2;
+                    r.skip(24)?;
+                    None
+                }
+            };
+            return Ok((PictVersion::V2, header));
         }
         // Some pre-v2 generators pad the version opcode out to 2 bytes
         // (`0x0011`) followed by a 1-byte version `0x01` then v1
@@ -167,7 +186,7 @@ fn detect_version(r: &mut Reader<'_>) -> Result<PictVersion> {
             // We have to back up one byte: the low byte of `next` is
             // the first v1 opcode.
             r.pos -= 1;
-            return Ok(PictVersion::V1);
+            return Ok((PictVersion::V1, None));
         }
         return Err(PictError::invalid(format!(
             "unrecognised version stanza after 0x0011: 0x{next:04X}"
@@ -177,7 +196,7 @@ fn detect_version(r: &mut Reader<'_>) -> Result<PictVersion> {
         // Canonical v1 form: 1-byte opcode 0x11 then 1-byte version
         // 0x01. Both bytes consumed; the next byte is the first v1
         // opcode.
-        return Ok(PictVersion::V1);
+        return Ok((PictVersion::V1, None));
     }
     Err(PictError::invalid(format!(
         "expected version opcode 0x0011 or 0x1101, got 0x{v_word:04X}"
@@ -1247,6 +1266,7 @@ fn finalise_canvas(canvas: Canvas, _state: &PictState) -> Result<PictImage> {
         pixel_format: PictPixelFormat::Rgba,
         data: canvas.data,
         pts: None,
+        header: None,
     })
 }
 

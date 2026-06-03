@@ -43,6 +43,7 @@
 pub mod decoder;
 pub mod encoder;
 pub mod error;
+pub mod header;
 pub mod image;
 pub mod opcodes;
 pub mod ops;
@@ -68,6 +69,7 @@ pub use encoder::{
     pixel_data_sizes, IndexedPixelSize, PackType, PixPatSlot,
 };
 pub use error::{PictError, Result};
+pub use header::{Fixed, PictHeader};
 pub use image::{PictImage, PictPixelFormat};
 pub use ops::{
     build_arc_op, build_bk_pat, build_fill_pat, build_line, build_line_from, build_oval_op,

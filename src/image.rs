@@ -8,6 +8,8 @@
 //! [`PictPixelFormat`] -> `oxideav_core::PixelFormat` mapping so the
 //! trait-side `Decoder` impl keeps working unchanged.
 
+use crate::header::PictHeader;
+
 /// Pixel layout used by [`PictImage`].
 ///
 /// The decoder always normalises to [`PictPixelFormat::Rgba`]: 1-bit
@@ -43,6 +45,18 @@ pub struct PictImage {
     /// Optional presentation timestamp. Always `None` from the
     /// standalone decode path.
     pub pts: Option<i64>,
+    /// Decoded form of the 24-byte v2 `HeaderOp` (`0x0C00`) payload
+    /// (Inside Macintosh: Imaging With QuickDraw §A-3 / §A-22 Listing
+    /// A-5 + A-6).
+    ///
+    /// * `Some(PictHeader::ExtendedV2 { .. })` — `OpenCPicture` PICTs
+    ///   (`version=-2`), carrying explicit hRes / vRes / optimal-source
+    ///   rectangle.
+    /// * `Some(PictHeader::V2 { .. })` — `OpenPicture`-in-CGrafPort
+    ///   PICTs (`version=-1`), carrying a fixed-point bounding box.
+    /// * `None` — v1 PICTs (no `HeaderOp` per §A-25) and v2 PICTs whose
+    ///   header version word doesn't match either of the §A-3 values.
+    pub header: Option<PictHeader>,
 }
 
 impl PictImage {

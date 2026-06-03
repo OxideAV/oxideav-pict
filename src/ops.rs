@@ -36,7 +36,9 @@
 //! coordinates.
 
 use crate::error::{PictError, Result};
+use crate::header::PictHeader;
 use crate::opcodes::*;
+use crate::state::RectI32;
 
 // ---------------------------------------------------------------------------
 // Drawing-verb selector.
@@ -462,6 +464,10 @@ pub struct PictBuilder {
 
 impl PictBuilder {
     /// Start a new v2 stream with the given `picFrame`.
+    ///
+    /// Emits a canonical Listing-A-5 extended-v2 `HeaderOp` payload:
+    /// `version=-2`, `hRes=vRes=72.0` dpi, `optimal_source_rect = picFrame`,
+    /// reserved fields zero.
     pub fn new(top: i16, left: i16, bottom: i16, right: i16) -> Self {
         let mut bytes = Vec::with_capacity(1024);
         // 512-byte launch stub.
@@ -477,7 +483,8 @@ impl PictBuilder {
         write_u16(&mut bytes, 0x0011);
         write_u16(&mut bytes, 0x02FF);
         write_u16(&mut bytes, OP_HEADER_OP);
-        bytes.extend_from_slice(&[0u8; 24]);
+        let header = PictHeader::extended_v2_72dpi(RectI32::from_be(top, left, bottom, right));
+        bytes.extend_from_slice(&header.to_wire());
         Self {
             bytes,
             record_start,

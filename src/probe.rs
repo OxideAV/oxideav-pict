@@ -28,6 +28,7 @@
 //!   mix without reaching into the canvas pixels.
 
 use crate::error::{PictError, Result};
+use crate::header::PictHeader;
 use crate::opcodes::*;
 use crate::reader::Reader;
 use crate::state::RectI32;
@@ -117,6 +118,13 @@ pub struct PictProbe {
     /// Byte offset (into the *whole* input buffer including the
     /// launch-stub prefix if any) at which the walker stopped.
     pub terminated_at: usize,
+    /// Decoded form of the 24-byte v2 `HeaderOp` (`0x0C00`) payload
+    /// (Inside Macintosh §A-3 / §A-22 Listing A-5 + A-6). `None` for
+    /// v1 streams (no `HeaderOp` per §A-25) or v2 streams whose
+    /// header version word doesn't match `0xFFFE` or `0xFFFF` (the
+    /// probe tolerates a non-canonical 24-byte pad to keep statistics
+    /// available for the surrounding opcode walk).
+    pub header: Option<PictHeader>,
 }
 
 impl PictProbe {
@@ -196,7 +204,7 @@ pub fn probe_pict(bytes: &[u8]) -> Result<PictProbe> {
     let _pic_size = r.read_u16()?;
     let frame_tuple = r.read_rect()?;
     let frame = RectI32::from_be(frame_tuple.0, frame_tuple.1, frame_tuple.2, frame_tuple.3);
-    let version = detect_version_probe(&mut r)?;
+    let (version, header) = detect_version_probe(&mut r)?;
 
     let width = (frame.right - frame.left).max(0) as u32;
     let height = (frame.bottom - frame.top).max(0) as u32;
@@ -222,6 +230,7 @@ pub fn probe_pict(bytes: &[u8]) -> Result<PictProbe> {
         end_pic_seen: false,
         termination: ProbeTermination::Eof,
         terminated_at: body_offset + r.pos,
+        header,
     };
 
     let result = match version {
@@ -270,7 +279,7 @@ fn looks_like_picture_record(bytes: &[u8]) -> bool {
     false
 }
 
-fn detect_version_probe(r: &mut Reader<'_>) -> Result<ProbeVersion> {
+fn detect_version_probe(r: &mut Reader<'_>) -> Result<(ProbeVersion, Option<PictHeader>)> {
     let v_word = r.read_u16()?;
     if v_word == 0x0011 {
         let next = r.read_u16()?;
@@ -281,19 +290,30 @@ fn detect_version_probe(r: &mut Reader<'_>) -> Result<ProbeVersion> {
                     "expected headerOp 0x0C00 after v2 sentinel, got 0x{header_op:04X}"
                 )));
             }
-            r.skip(24)?;
-            return Ok(ProbeVersion::V2);
+            // Same tolerant parse as the decoder — fall back to a
+            // raw 24-byte skip when the leading version word isn't
+            // FFFE / FFFF so non-canonical headers still produce a
+            // valid probe.
+            let header = match PictHeader::parse(r) {
+                Ok(h) => Some(h),
+                Err(_) => {
+                    r.pos -= 2;
+                    r.skip(24)?;
+                    None
+                }
+            };
+            return Ok((ProbeVersion::V2, header));
         }
         if (next >> 8) == 0x01 {
             r.pos -= 1;
-            return Ok(ProbeVersion::V1);
+            return Ok((ProbeVersion::V1, None));
         }
         return Err(PictError::invalid(format!(
             "unrecognised version stanza after 0x0011: 0x{next:04X}"
         )));
     }
     if v_word == 0x1101 {
-        return Ok(ProbeVersion::V1);
+        return Ok((ProbeVersion::V1, None));
     }
     Err(PictError::invalid(format!(
         "expected version opcode 0x0011 or 0x1101, got 0x{v_word:04X}"

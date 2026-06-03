@@ -55,10 +55,36 @@ aborts the rest of the picture. Probe callers can inspect
 
 The PICT version stanza (`0x0011 0x02FF` for v2, `0x1101` for v1) is
 recognised. The 24-byte `headerOp` (`0x0C00`) payload that follows
-the v2 sentinel is consumed but otherwise ignored. The optional
+the v2 sentinel is parsed into a structured [`PictHeader`] (round
+217) per Inside Macintosh §A-3 "Version and Header Opcodes" + §A-22
+Listings A-5 / A-6:
+
+* `PictHeader::ExtendedV2 { hres, vres, optimal_source_rect }` —
+  the `OpenCPicture` `version=-2` shape, carrying explicit 16.16
+  fixed-point hRes / vRes and an optimal source rectangle (matches
+  Listing A-5).
+* `PictHeader::V2 { fixed_bounds }` — the `OpenPicture`-in-CGrafPort
+  `version=-1` shape, carrying a fixed-point bounding rectangle
+  (matches Listing A-6).
+
+Both shapes are surfaced on `PictImage::header` and `PictProbe::header`
+as `Option<PictHeader>`. v1 PICTs have no `HeaderOp` per §A-25, so
+their decoded image reports `header: None`. The optional
 512-byte launch-stub prefix (Apple's pre-OS-X file-manager habit) is
 auto-detected by sniffing for a plausible picture record at offset
 512.
+
+The encoder side (every v2 emit path — `encode_pict` /
+`encode_pict_v2` / `encode_pict_v2_with_clip` /
+`encode_pict_bits_rect` / `encode_pict_pack_bits_rect` / the `*_rgn`
+counterparts / `encode_pict_indexed_*` / `PictBuilder::new`) emits a
+canonical Listing-A-5 extended-v2 header (`version=-2`,
+`hRes=vRes=72.0` dpi via `Fixed::SEVENTY_TWO_DPI` = `$00480000`,
+`optimal_source_rect = picFrame`, reserved fields zero) instead of
+the pre-r217 zero-pad. Pre-r217 PICTs are still accepted on the
+decode side — the parser tolerates a leading-word that isn't
+`0xFFFE` / `0xFFFF` by falling back to a raw 24-byte skip and
+reporting `header: None`.
 
 PackBits (`n` byte: `0..=127` = literal `n+1` bytes; `129..=255` =
 repeat next byte `257-n` times; `128` = NOP) is implemented per

@@ -38,7 +38,18 @@
 //! follow-up.
 
 use crate::error::{PictError, Result};
+use crate::header::PictHeader;
 use crate::packbits;
+use crate::state::RectI32;
+
+/// Build the 24-byte `HeaderOp` payload for an extended-v2 PICT covering
+/// `(0, 0)..(width, height)` at 72.0 dpi. Matches the Listing A-5
+/// canonical form (`version=-2`, `hRes=vRes=$00480000`,
+/// `optimal_source_rect=picFrame`, reserved fields zero).
+fn extended_v2_header_payload(width: u32, height: u32) -> [u8; 24] {
+    let pf = RectI32::from_be(0, 0, height as i16, width as i16);
+    PictHeader::extended_v2_72dpi(pf).to_wire()
+}
 
 // ---------------------------------------------------------------------------
 // Public pack-type selector.
@@ -135,7 +146,7 @@ pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> R
     write_u16(&mut out, 0x0011);
     write_u16(&mut out, 0x02FF);
     write_u16(&mut out, 0x0C00);
-    out.extend_from_slice(&[0u8; 24]);
+    out.extend_from_slice(&extended_v2_header_payload(width, height));
 
     // DirectBitsRect opcode.
     write_u16(&mut out, 0x009A);
@@ -763,7 +774,7 @@ fn encode_pict_bitmap(width: u32, height: u32, data: &[u8], pack_bits: bool) -> 
     write_u16(&mut out, 0x0011);
     write_u16(&mut out, 0x02FF);
     write_u16(&mut out, 0x0C00);
-    out.extend_from_slice(&[0u8; 24]);
+    out.extend_from_slice(&extended_v2_header_payload(width, height));
 
     // Opcode: BitsRect (0x0090) or PackBitsRect (0x0098). For BitMap
     // opcodes the rowBytes top bit must stay clear (the decoder
@@ -878,7 +889,7 @@ fn encode_pict_bitmap_with_region(
     write_u16(&mut out, 0x0011);
     write_u16(&mut out, 0x02FF);
     write_u16(&mut out, 0x0C00);
-    out.extend_from_slice(&[0u8; 24]);
+    out.extend_from_slice(&extended_v2_header_payload(width, height));
 
     let opcode = if pack_bits { 0x0099 } else { 0x0091 };
     write_u16(&mut out, opcode);
@@ -1194,7 +1205,7 @@ fn encode_pict_indexed_pixmap(
     write_u16(&mut out, 0x0011);
     write_u16(&mut out, 0x02FF);
     write_u16(&mut out, 0x0C00);
-    out.extend_from_slice(&[0u8; 24]);
+    out.extend_from_slice(&extended_v2_header_payload(width, height));
 
     // Opcode + indexed PixMap header.
     write_u16(&mut out, opcode);

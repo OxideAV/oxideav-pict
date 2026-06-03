@@ -81,6 +81,13 @@ impl<'a> Reader<'a> {
         Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     }
 
+    /// Big-endian signed 32-bit integer. Used by the v2 `HeaderOp`
+    /// payload (`Fixed` resolution / bounding-box values).
+    pub fn read_i32(&mut self) -> Result<i32> {
+        let b = self.read_bytes(4)?;
+        Ok(i32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
     /// Read a QuickDraw `Rect` (8 bytes: top, left, bottom, right as
     /// big-endian i16 each). Returned as `(top, left, bottom, right)`.
     pub fn read_rect(&mut self) -> Result<(i16, i16, i16, i16)> {

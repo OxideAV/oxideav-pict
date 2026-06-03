@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 217: **v2 `HeaderOp` (`0x0C00`) 24-byte payload** is now parsed
+  into a structured `PictHeader` instead of being discarded with a raw
+  24-byte skip (Inside Macintosh: Imaging With QuickDraw §A-3 "Version
+  and Header Opcodes" + §A-22 Listings A-5 / A-6). Two variants per
+  the §A-3 contract:
+  - `PictHeader::ExtendedV2 { hres, vres, optimal_source_rect }` — the
+    `OpenCPicture` `version=-2` shape carrying explicit 16.16
+    fixed-point resolution and an optimal source rectangle.
+  - `PictHeader::V2 { fixed_bounds }` — the `OpenPicture`-in-CGrafPort
+    `version=-1` shape carrying a fixed-point bounding rectangle
+    (top, left, bottom, right).
+
+  Surfaced via the new `PictImage::header: Option<PictHeader>` field
+  (None for v1 PICTs and non-canonical pads). The read-only probe path
+  picks it up too — `PictProbe::header` reports the parsed variant
+  without rasterising. The encoder side now emits a canonical
+  Listing-A-5 extended-v2 header (`version=-2`, `hRes=vRes=72.0` dpi,
+  `optimal_source_rect = picFrame`, reserved fields zero) from every
+  v2 emit path (`encode_pict`, `encode_pict_v2`, `encode_pict_v1`'s v2
+  counterparts, the BitsRect / PackBitsRect / region encoders, the
+  indexed-PixMap encoders, `encode_pict_v2_with_clip`, and
+  `PictBuilder::new`). A new `Fixed` newtype wraps the QuickDraw 16.16
+  fixed-point type with `to_f32` / `integer_part` / `as_u32` helpers
+  and a `SEVENTY_TWO_DPI` constant. Pre-r217 PICTs whose 24-byte
+  payload was zeroed out keep decoding — the parser tolerates a
+  non-canonical leading word by falling back to the raw 24-byte skip
+  and reporting `header: None`.
+
 - Round 211: **Indexed-PixMap encoder** — closes the round-186
   decoder's encoder side. Four new public functions emit a v2 PICT
   stream containing a single indexed-PixMap raster opcode (Inside
