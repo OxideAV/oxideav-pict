@@ -432,6 +432,79 @@ pub fn build_fill_pat(pattern: [u8; 8]) -> Vec<u8> {
     buf
 }
 
+/// Build a v2 `ShortComment` (`$00A0`) opcode carrying a 2-byte `Kind`
+/// integer per Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2.
+///
+/// `ShortComment` records carry metadata only — they don't influence
+/// the drawing-state machine — so the encoder simply writes the opcode
+/// + kind word with no further payload.
+pub fn build_short_comment(kind: u16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4);
+    write_u16(&mut buf, OP_SHORT_COMMENT);
+    write_u16(&mut buf, kind);
+    buf
+}
+
+/// Build a v2 `LongComment` (`$00A1`) opcode carrying a 2-byte `Kind`
+/// integer, a 2-byte `size` byte count, and `size` raw data bytes per
+/// Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2.
+///
+/// Returns [`PictError::InvalidData`] when `data.len()` overflows the
+/// `u16` `size` field (the §A-3 record layout caps the payload at
+/// 65535 bytes; longer annotations must split across multiple opcodes).
+/// The §A-3 word-alignment rule for v2 opcodes is the
+/// [`PictBuilder`]'s job — odd-size data blocks get a pad byte before
+/// the *next* opcode, not inside this record.
+pub fn build_long_comment(kind: u16, data: &[u8]) -> Result<Vec<u8>> {
+    let size: u16 = data.len().try_into().map_err(|_| {
+        PictError::invalid(format!(
+            "LongComment data size {} exceeds the u16 (65535-byte) size field",
+            data.len()
+        ))
+    })?;
+    let mut buf = Vec::with_capacity(6 + data.len());
+    write_u16(&mut buf, OP_LONG_COMMENT);
+    write_u16(&mut buf, kind);
+    write_u16(&mut buf, size);
+    buf.extend_from_slice(data);
+    Ok(buf)
+}
+
+/// Build a v1 `ShortComment` (`$A0`) opcode — a 1-byte opcode followed
+/// by a 2-byte `Kind` integer per Inside Macintosh: Imaging With
+/// QuickDraw §A-3 Table A-3.
+///
+/// v1 streams use 8-bit opcodes and have no word-alignment requirement,
+/// so the on-disk record is one byte shorter than its v2 counterpart.
+pub fn build_short_comment_v1(kind: u16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(3);
+    buf.push(0xA0u8);
+    write_u16(&mut buf, kind);
+    buf
+}
+
+/// Build a v1 `LongComment` (`$A1`) opcode — a 1-byte opcode followed
+/// by a 2-byte `Kind` integer, a 2-byte `size` field, and `size` raw
+/// data bytes per Inside Macintosh: Imaging With QuickDraw §A-3
+/// Table A-3.
+///
+/// Same `u16` `size` cap as [`build_long_comment`] — overflow returns
+/// [`PictError::InvalidData`].
+pub fn build_long_comment_v1(kind: u16, data: &[u8]) -> Result<Vec<u8>> {
+    let size: u16 = data.len().try_into().map_err(|_| {
+        PictError::invalid(format!(
+            "LongComment data size {} exceeds the u16 (65535-byte) size field",
+            data.len()
+        ))
+    })?;
+    let mut buf = Vec::with_capacity(5 + data.len());
+    buf.push(0xA1u8);
+    write_u16(&mut buf, kind);
+    write_u16(&mut buf, size);
+    buf.extend_from_slice(data);
+    Ok(buf)
+}
+
 // ---------------------------------------------------------------------------
 // PictBuilder: assemble a complete v2 stream.
 // ---------------------------------------------------------------------------
@@ -653,6 +726,31 @@ impl PictBuilder {
         let bytes = build_fill_pat(pattern);
         self.push(&bytes);
         self
+    }
+
+    /// Push a `ShortComment` opcode (`$00A0`) carrying the
+    /// application-defined `kind` word per Inside Macintosh: Imaging
+    /// With QuickDraw §A-3 Table A-2. Comments are passive metadata —
+    /// they don't influence rasterisation.
+    pub fn short_comment(&mut self, kind: u16) -> &mut Self {
+        let bytes = build_short_comment(kind);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `LongComment` opcode (`$00A1`) carrying `kind` and the
+    /// raw `data` bytes per Inside Macintosh: Imaging With QuickDraw
+    /// §A-3 Table A-2. Returns [`PictError::InvalidData`] when
+    /// `data.len()` overflows the on-disk u16 `size` field.
+    ///
+    /// The §A-3 word-alignment between subsequent opcodes is handled by
+    /// the builder, so odd-length data blocks don't need padding from
+    /// the caller — the next `push` adds a zero pad byte
+    /// automatically.
+    pub fn long_comment(&mut self, kind: u16, data: &[u8]) -> Result<&mut Self> {
+        let bytes = build_long_comment(kind, data)?;
+        self.push(&bytes);
+        Ok(self)
     }
 
     /// Push a `PnPixPat` opcode (colour pen pattern). The 8×8 RGBA tile

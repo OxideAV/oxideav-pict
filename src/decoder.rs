@@ -39,7 +39,7 @@
 
 use crate::error::{PictError, Result};
 use crate::header::PictHeader;
-use crate::image::{PictImage, PictPixelFormat};
+use crate::image::{PictComment, PictImage, PictPixelFormat};
 use crate::opcodes::*;
 use crate::packbits;
 use crate::raster::{
@@ -570,13 +570,15 @@ fn dispatch_v2_opcode(
             Ok(true)
         }
         OP_SHORT_COMMENT => {
-            r.skip(2)?;
+            let kind = r.read_u16()?;
+            state.comments.push(PictComment::short(kind));
             Ok(true)
         }
         OP_LONG_COMMENT => {
-            r.skip(2)?;
+            let kind = r.read_u16()?;
             let n = r.read_u16()? as usize;
-            r.skip(n)?;
+            let data = r.read_bytes(n)?.to_vec();
+            state.comments.push(PictComment::long(kind, data));
             Ok(true)
         }
         OP_PACK_BITS_RECT => {
@@ -1256,7 +1258,7 @@ fn blit_subimage_with_rgn(
 }
 
 /// Final canvas → PictImage. Returns NoRaster if nothing was drawn.
-fn finalise_canvas(canvas: Canvas, _state: &PictState) -> Result<PictImage> {
+fn finalise_canvas(canvas: Canvas, state: &PictState) -> Result<PictImage> {
     if !canvas.dirty {
         return Err(PictError::NoRaster);
     }
@@ -1267,6 +1269,7 @@ fn finalise_canvas(canvas: Canvas, _state: &PictState) -> Result<PictImage> {
         data: canvas.data,
         pts: None,
         header: None,
+        comments: state.comments.clone(),
     })
 }
 
@@ -2548,13 +2551,15 @@ fn dispatch_v1_opcode(
             Ok(true)
         }
         0xA0 => {
-            r.skip(2)?;
+            let kind = r.read_u16()?;
+            state.comments.push(PictComment::short(kind));
             Ok(true)
         }
         0xA1 => {
-            r.skip(2)?;
+            let kind = r.read_u16()?;
             let n = r.read_u16()? as usize;
-            r.skip(n)?;
+            let data = r.read_bytes(n)?.to_vec();
+            state.comments.push(PictComment::long(kind, data));
             Ok(true)
         }
         _ => Err(PictError::unsupported(format!(

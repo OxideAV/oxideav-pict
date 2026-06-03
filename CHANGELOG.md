@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 224: **Structured Picture Comments** — `ShortComment` (`$00A0`
+  v2 / `$A0` v1) and `LongComment` (`$00A1` v2 / `$A1` v1) opcodes
+  are now captured as `PictComment` records on `PictImage::comments`
+  and `PictProbe::comments` instead of being silently skipped past
+  by the opcode walker. Inside Macintosh: Imaging With QuickDraw
+  §A-3 Table A-2 (v2) and Table A-3 (v1) define the on-disk records:
+  `ShortComment` carries a 2-byte `Kind (Integer)` word; `LongComment`
+  adds a 2-byte `size` byte count and that many raw data bytes.
+  `PictComment` owns `kind: u16`, `data: Vec<u8>` (empty for
+  `ShortComment`), and an `is_long: bool` flag so consumers can
+  re-emit the original opcode shape. The drawing-state machine
+  remains untouched — Picture Comments are a passive annotation
+  channel for PostScript fragments, application drawing hints,
+  page-break markers, and font / line-style overrides; the decoder
+  doesn't impose a parse on the data slice. The probe walker stays
+  byte-identical to the decoder's comment path so
+  `PictProbe::comments` and `PictImage::comments` carry the same
+  records.
+- Round 224: Encoder helpers `build_short_comment(kind)` and
+  `build_long_comment(kind, data)` emit the raw v2 opcode bytes
+  (`build_long_comment` returns `PictError::InvalidData` when the
+  data slice overflows the on-disk u16 `size` field at 65535 bytes —
+  longer annotations must split across multiple opcodes per §A-3).
+  `build_short_comment_v1` and `build_long_comment_v1` emit the v1
+  (1-byte-opcode) variants. `PictBuilder::short_comment` and
+  `PictBuilder::long_comment` are the chainable convenience wrappers
+  for v2 stream synthesis; the builder's existing word-alignment
+  pass pads odd-length `LongComment` data automatically before the
+  next opcode.
+- Round 224: 18 synthesis tests in `tests/synth_v2_round224.rs`
+  covering the `PictComment` constructors, the four encoder
+  byte-layout helpers (including u16-size-field overflow rejection
+  and max-u16-size acceptance), single-comment and multi-comment
+  v2 round-trips through `parse_pict`, stream-order preservation
+  across mixed `ShortComment` + `LongComment` runs, odd-size
+  word-alignment, empty-`LongComment` round-trip, probe
+  surface-equality with the decoder, hand-rolled v1 PICT comment
+  decoding (`ShortComment 0xA0` + `LongComment 0xA1`), the v1 probe
+  surface, and the `InvalidData` error path on a truncated
+  `LongComment` payload.
+
 - Round 217: **v2 `HeaderOp` (`0x0C00`) 24-byte payload** is now parsed
   into a structured `PictHeader` instead of being discarded with a raw
   24-byte skip (Inside Macintosh: Imaging With QuickDraw §A-3 "Version

@@ -10,6 +10,70 @@
 
 use crate::header::PictHeader;
 
+/// One Picture Comment captured from the opcode stream.
+///
+/// Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 lists two
+/// comment opcodes that carry application-defined metadata alongside
+/// the drawing-state stream:
+///
+/// * `ShortComment` (`$00A0` v2 / `$A0` v1) — 2-byte `Kind (Integer)`
+///   payload, no associated data block.
+/// * `LongComment` (`$00A1` v2 / `$A1` v1) — 2-byte `Kind (Integer)` +
+///   2-byte `size (Integer)` byte count + `size` raw bytes.
+///
+/// The decoder records the on-disk `kind` word verbatim (the spec
+/// reserves the integer space for Apple-internal and registered
+/// third-party identifiers) and, for `LongComment`, owns the data slice
+/// so the picture's comment annotations survive the rasterisation
+/// step. The drawing-state machine itself ignores comment payloads —
+/// they exist purely as a passive metadata channel.
+///
+/// PICT generators historically used Picture Comments to annotate the
+/// drawing stream with PostScript fragments, application-specific
+/// drawing hints, page breaks, and font / line-style overrides; a
+/// `LongComment` data block holds whatever bytes the producing
+/// application chose to write, so the decoder leaves interpretation up
+/// to the consumer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PictComment {
+    /// `Kind` word as written on disk (16-bit signed in the spec, but
+    /// always serialised as an unsigned 16-bit pattern in PICT files
+    /// — we expose the raw u16 so callers can compare against the
+    /// in-spec `Kind` values without sign-conversion).
+    pub kind: u16,
+    /// Raw `LongComment` data payload. Empty for `ShortComment` (which
+    /// has no data block per §A-3) and for `LongComment` with a zero
+    /// `size` field.
+    pub data: Vec<u8>,
+    /// `true` when the comment was emitted as `LongComment`
+    /// (`$00A1` / `$A1`); `false` for `ShortComment` (`$00A0` / `$A0`).
+    /// Carries the v2-vs-v1 distinction *only* via this flag — the
+    /// kind / data round-trip is identical across the two framings.
+    pub is_long: bool,
+}
+
+impl PictComment {
+    /// Construct a `ShortComment` record (kind only, no data block).
+    pub fn short(kind: u16) -> Self {
+        Self {
+            kind,
+            data: Vec::new(),
+            is_long: false,
+        }
+    }
+
+    /// Construct a `LongComment` record from `kind` + an owned data
+    /// slice. The spec's `size` word is implicit in `data.len()` and
+    /// must fit in a `u16` (the encoder errors on overflow).
+    pub fn long(kind: u16, data: Vec<u8>) -> Self {
+        Self {
+            kind,
+            data,
+            is_long: true,
+        }
+    }
+}
+
 /// Pixel layout used by [`PictImage`].
 ///
 /// The decoder always normalises to [`PictPixelFormat::Rgba`]: 1-bit
@@ -57,6 +121,12 @@ pub struct PictImage {
     /// * `None` — v1 PICTs (no `HeaderOp` per §A-25) and v2 PICTs whose
     ///   header version word doesn't match either of the §A-3 values.
     pub header: Option<PictHeader>,
+    /// Picture Comments captured during the opcode walk, in stream
+    /// order. Inside Macintosh: Imaging With QuickDraw §A-3 — `$00A0`
+    /// `ShortComment` / `$00A1` `LongComment` for v2 and `$A0` /
+    /// `$A1` for v1 share the same record layout via [`PictComment`].
+    /// Empty for PICTs that emit no comment opcodes.
+    pub comments: Vec<PictComment>,
 }
 
 impl PictImage {

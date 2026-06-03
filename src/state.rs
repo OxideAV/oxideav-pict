@@ -367,6 +367,13 @@ pub struct PictState {
     /// Active multi-colour fill pattern (`FillPixPat 0x0014`). Overrides
     /// `fill_pat` for fill verbs when `Some`.
     pub fill_pix_pat: Option<PixPattern>,
+    /// Picture Comments collected during the opcode walk, in stream
+    /// order. Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2
+    /// (`$00A0` `ShortComment` / `$00A1` `LongComment`) and Table A-3
+    /// (`$A0` / `$A1`). Surfaced on the final [`crate::PictImage`] so
+    /// callers can recover annotation metadata that doesn't influence
+    /// rasterisation.
+    pub comments: Vec<crate::image::PictComment>,
 }
 
 impl Default for PictState {
@@ -389,6 +396,7 @@ impl Default for PictState {
             pen_pix_pat: None,
             back_pix_pat: None,
             fill_pix_pat: None,
+            comments: Vec::new(),
         }
     }
 }

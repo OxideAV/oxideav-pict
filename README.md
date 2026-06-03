@@ -39,8 +39,8 @@ colour (white) and returned as the decoded `PictImage`.
 | `0x0099` | **PackBitsRgn**     | **decode -> RGBA** (PackBitsRect + clip region; indexed PixMap also honoured; round 186) |
 | `0x009A` | **DirectBitsRect**  | **decode -> RGBA** (16-bit A1R5G5B5 / 32-bit XRGB|ARGB; packType 0/1 raw, 2 packed 24bpp, 3 u16-PackBits, 4 component-separated PackBits) |
 | `0x009B` | **DirectBitsRgn**   | **decode -> RGBA** (DirectBitsRect + clip region) |
-| `0x00A0` | ShortComment        | fixed-size skip         |
-| `0x00A1` | LongComment         | length-prefixed skip    |
+| `0x00A0` | **ShortComment**    | parse → `PictComment::short(kind)` (round 224)        |
+| `0x00A1` | **LongComment**     | parse → `PictComment::long(kind, data)` (round 224)   |
 | `0x8200` | CompressedQuickTime | length-prefixed skip (embedded JPEG/RLE/Animation decode is a future round) |
 | `0x8201` | UncompressedQuickTime | length-prefixed skip   |
 | `0x00FF` | OpEndPic            | terminate               |
@@ -495,6 +495,70 @@ assert_eq!(&img.data[0..4], &[0xFF, 0, 0, 0xFF]);
 assert_eq!(&img.data[8 * 4..8 * 4 + 4], &[0, 0xFF, 0, 0xFF]);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+## Picture Comments (round 224 — `ShortComment` / `LongComment`)
+
+Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 (v2) and
+Table A-3 (v1) define two metadata-only opcodes that carry
+application-defined annotations alongside the drawing-state stream:
+
+* **`ShortComment`** (`$00A0` v2 / `$A0` v1) — 2-byte `Kind (Integer)`
+  word, no further data.
+* **`LongComment`** (`$00A1` v2 / `$A1` v1) — 2-byte `Kind` +
+  2-byte `size` byte count + `size` raw data bytes.
+
+Round 224 surfaces both records as structured `PictComment` entries
+on `PictImage::comments` and `PictProbe::comments`. The decoder
+captures `kind` and (for `LongComment`) the on-disk data slice in
+stream order; rasterisation is untouched (Picture Comments are
+passive metadata). `PictComment::is_long` carries the
+`ShortComment`-vs-`LongComment` distinction so consumers can
+re-emit the original opcode shape on the encoder side.
+
+```rust
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::{parse_pict, probe_pict, PictComment};
+
+let mut b = PictBuilder::new(0, 0, 4, 4);
+b.short_comment(0x00C8);
+b.long_comment(150, b"PostScriptHandle:8,0,72")?;
+b.fg_color(0, 0, 0);
+b.rect(Verb::Paint, 0, 0, 4, 4);
+let bytes = b.finish();
+
+// Decoder surface.
+let img = parse_pict(&bytes)?;
+assert_eq!(img.comments.len(), 2);
+assert_eq!(img.comments[0], PictComment::short(0x00C8));
+assert_eq!(img.comments[1].kind, 150);
+assert_eq!(img.comments[1].data, b"PostScriptHandle:8,0,72");
+assert!(img.comments[1].is_long);
+
+// Probe surface (read-only walk, same records).
+let p = probe_pict(&bytes)?;
+assert_eq!(p.comment_count, 2);
+assert_eq!(p.comments, img.comments);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Encoder side: `build_short_comment(kind)` / `build_long_comment(kind,
+data)` emit raw v2 opcode bytes; `build_short_comment_v1` /
+`build_long_comment_v1` emit the v1 (1-byte-opcode) variant.
+`PictBuilder::short_comment` / `long_comment` are the chainable
+convenience wrappers — `long_comment` returns
+`Err(PictError::InvalidData)` when the data slice overflows the on-
+disk u16 `size` field (the §A-3 record caps the payload at 65535
+bytes; longer annotations must split across multiple opcodes). The
+builder's word-alignment pass handles odd-length data blocks
+automatically (next opcode picks up a pad byte if needed).
+
+The drawing-state machine itself ignores the comment payload — the
+records exist purely as a passive annotation channel for PostScript
+fragments, application-specific drawing hints, page breaks, and font
+/ line-style overrides. PICT consumers that need to interpret a
+specific `Kind` value can inspect `PictImage::comments` and dispatch
+on the integer themselves; the decoder doesn't impose a parse on the
+data slice.
 
 ## What's not yet in
 

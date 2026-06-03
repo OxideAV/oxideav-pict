@@ -29,6 +29,7 @@
 
 use crate::error::{PictError, Result};
 use crate::header::PictHeader;
+use crate::image::PictComment;
 use crate::opcodes::*;
 use crate::reader::Reader;
 use crate::state::RectI32;
@@ -77,7 +78,21 @@ pub struct PictProbe {
     /// the count is useful for spotting label-bearing PICTs.
     pub text_count: u32,
     /// How many comment opcodes (`ShortComment` + `LongComment`).
+    /// Each opcode counted here also appears as one entry in
+    /// [`Self::comments`], so `comments.len() as u32 == comment_count`
+    /// when the walker reaches `OpEndPic` cleanly. The two surfaces
+    /// stay in sync even when the walker terminates early — every
+    /// comment seen *before* the failure is recorded.
     pub comment_count: u32,
+    /// Picture Comments captured during the walk, in stream order.
+    /// Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2
+    /// (`$00A0` `ShortComment` / `$00A1` `LongComment`) and Table A-3
+    /// (`$A0` / `$A1`) share the [`PictComment`] record layout via
+    /// the [`PictComment::is_long`] flag. Content scanners use this
+    /// surface to fish out PostScript fragments, application drawing
+    /// hints, page-break markers, and other annotation metadata
+    /// without paying the rasterisation cost.
+    pub comments: Vec<PictComment>,
     /// How many `ClipRgn` opcodes (each one *replaces* the active clip).
     pub clip_rgn_count: u32,
     /// How many pattern-set opcodes (`PnPat`, `BkPat`, `FillPat`) appear.
@@ -221,6 +236,7 @@ pub fn probe_pict(bytes: &[u8]) -> Result<PictProbe> {
         same_shape_count: 0,
         text_count: 0,
         comment_count: 0,
+        comments: Vec::new(),
         clip_rgn_count: 0,
         pattern_set_count: 0,
         pix_pattern_set_count: 0,
@@ -499,14 +515,16 @@ fn probe_v2_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             Ok(OpStep::Continue)
         }
         OP_SHORT_COMMENT => {
-            r.skip(2)?;
+            let kind = r.read_u16()?;
+            p.comments.push(PictComment::short(kind));
             p.comment_count += 1;
             Ok(OpStep::Continue)
         }
         OP_LONG_COMMENT => {
-            r.skip(2)?;
+            let kind = r.read_u16()?;
             let n = r.read_u16()? as usize;
-            r.skip(n)?;
+            let data = r.read_bytes(n)?.to_vec();
+            p.comments.push(PictComment::long(kind, data));
             p.comment_count += 1;
             Ok(OpStep::Continue)
         }
@@ -775,14 +793,16 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             Ok(OpStep::Continue)
         }
         0xA0 => {
-            r.skip(2)?;
+            let kind = r.read_u16()?;
+            p.comments.push(PictComment::short(kind));
             p.comment_count += 1;
             Ok(OpStep::Continue)
         }
         0xA1 => {
-            r.skip(2)?;
+            let kind = r.read_u16()?;
             let n = r.read_u16()? as usize;
-            r.skip(n)?;
+            let data = r.read_bytes(n)?.to_vec();
+            p.comments.push(PictComment::long(kind, data));
             p.comment_count += 1;
             Ok(OpStep::Continue)
         }
