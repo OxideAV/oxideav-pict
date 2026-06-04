@@ -9,6 +9,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 230: **Structured text / pen-mode / highlight state opcodes** —
+  Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 (v2) and
+  Table A-3 (v1) list a block of state-mutating opcodes whose payloads
+  were previously stepped past with no further accounting:
+  - `TxFont` `$0003` v2 / `$03` v1 — 2-byte `Integer` font number.
+  - `TxFace` `$0004` v2 / `$04` v1 — 1-byte `Style` flag-byte.
+  - `TxMode` `$0005` v2 / `$05` v1 — 2-byte `Integer` source-mode code.
+  - `SpExtra` `$0006` v2 / `$06` v1 — 4-byte `Fixed` extra-space value.
+  - `PnMode` `$0008` v2 / `$08` v1 — 2-byte `Integer` pen-mode code.
+  - `TxSize` `$000D` v2 / `$0D` v1 — 2-byte `Integer` text size in points.
+  - `TxRatio` `$0010` v2 / `$10` v1 — 8-byte numerator + denominator
+    Point pair (each `Point` is `(v: i16, h: i16)` on disk).
+  - `PnLocHFrac` `$0015` (v2 only) — 2-byte fractional pen position.
+  - `ChExtra` `$0016` (v2 only) — 2-byte per-character extra-width.
+  - `HiliteMode` `$001C` (v2 only) — 0-byte "use highlight mode" flag.
+  - `HiliteColor` `$001D` (v2 only) — 6-byte `RGBColor`.
+  - `DefHilite` `$001E` (v2 only) — 0-byte reset to system-default
+    highlight colour.
+  - `OpColor` `$001F` (v2 only) — 6-byte `RGBColor` consumed by the
+    arithmetic transfer modes (`blend`, `addPin`, `addOver`, `subPin`,
+    `addMax`, `subOver`, `addMin`).
+
+  Round 230 captures every payload into the new `PictTextState`
+  struct, surfaced on `PictImage::text_state` and
+  `PictProbe::text_state`. A new `PictProbe::text_state_op_count`
+  field counts the number of state-opcode occurrences. The
+  rasterisation path is untouched — these opcodes don't paint
+  pixels — but consumers (and round-trip encoders) can now recover
+  the producer's declared text shape and arithmetic-transfer-mode
+  op-colour without re-walking the byte stream. `DefHilite` resets
+  `hilite_color` to `None` and sets `hilite_default = true`;
+  `HiliteColor` after a `DefHilite` overrides the default flag back
+  to `false`. Missing state opcodes leave the slot at its fresh-
+  GrafPort default (`PictTextState::fresh_graf_port`): `tx_size = 12`,
+  `pn_mode = 8` (patCopy), `pn_loc_h_frac = 0x4000` (0.5), every
+  other field zero.
+- Round 230: Encoder helpers `build_tx_font`, `build_tx_face`,
+  `build_tx_mode`, `build_sp_extra`, `build_pn_mode`, `build_tx_size`,
+  `build_tx_ratio`, `build_pn_loc_h_frac`, `build_ch_extra`,
+  `build_hilite_mode`, `build_hilite_color`, `build_def_hilite`,
+  `build_op_color` emit the §A-3 on-disk record bytes (opcode word +
+  payload). Chainable `PictBuilder::tx_font` / `tx_face` / `tx_mode` /
+  `sp_extra` / `pn_mode` / `tx_size` / `tx_ratio` / `pn_loc_h_frac` /
+  `ch_extra` / `hilite_mode` / `hilite_color` / `def_hilite` /
+  `op_color` wrappers route through the byte builders. The
+  `HiliteColor` / `OpColor` 8-bit RGB inputs are replicated to the
+  16-bit-per-channel on-disk form (`high8 = low8 = channel`) so the
+  decoder's `Rgba::from_rgb16` high-byte selection round-trips
+  bit-exact.
+- Round 230: 29 synthesis tests in `tests/synth_v2_round230.rs`:
+  byte-layout assertions for every encoder helper; `PictTextState`
+  default-slot validation; the multi-opcode round-trip through
+  `parse_pict` confirming each slot lands; `HiliteMode` / `HiliteColor`
+  / `DefHilite` ordering semantics (set-after-default override and
+  default-after-set reset); decoder ↔ probe text-state equality;
+  `PictProbe::text_state_op_count` accuracy across single-opcode and
+  13-opcode streams; v1 dispatcher coverage for `0x03`..`0x06`,
+  `0x08`, `0x0D`, `0x10`; 16-bit RGB high-byte round-trip via
+  `HiliteColor` + `OpColor`. Every byte sequence is traceable back to
+  §A-3 Table A-2 / A-3.
+
 - Round 224: **Structured Picture Comments** — `ShortComment` (`$00A0`
   v2 / `$A0` v1) and `LongComment` (`$00A1` v2 / `$A1` v1) opcodes
   are now captured as `PictComment` records on `PictImage::comments`

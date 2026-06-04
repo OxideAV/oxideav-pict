@@ -9,6 +9,7 @@
 //! trait-side `Decoder` impl keeps working unchanged.
 
 use crate::header::PictHeader;
+use crate::state::PictTextState;
 
 /// One Picture Comment captured from the opcode stream.
 ///
@@ -127,6 +128,25 @@ pub struct PictImage {
     /// `$A1` for v1 share the same record layout via [`PictComment`].
     /// Empty for PICTs that emit no comment opcodes.
     pub comments: Vec<PictComment>,
+    /// Final tracked text / pen-mode / highlight state as observed by
+    /// the opcode walker.
+    ///
+    /// Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 / A-3
+    /// list a handful of opcodes — `TxFont $0003`, `TxFace $0004`,
+    /// `TxMode $0005`, `SpExtra $0006`, `PnMode $0008`,
+    /// `TxSize $000D`, `TxRatio $0010`, `PnLocHFrac $0015`,
+    /// `ChExtra $0016`, `HiliteMode $001C`, `HiliteColor $001D`,
+    /// `DefHilite $001E`, `OpColor $001F` — that carry text-shape,
+    /// transfer-mode, highlight-colour and arithmetic-transfer-mode
+    /// parameters. Round 230 captures their payloads into
+    /// [`PictTextState`] so consumers (and round-trip encoders) can
+    /// recover the values the producer declared even before the crate
+    /// grows a font rasteriser or honours the arithmetic transfer
+    /// modes on the canvas.
+    ///
+    /// Defaults to [`PictTextState::fresh_graf_port`] when the picture
+    /// emits no state opcode in the corresponding slot.
+    pub text_state: PictTextState,
 }
 
 impl PictImage {

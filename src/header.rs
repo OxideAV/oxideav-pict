@@ -66,7 +66,7 @@ use crate::state::RectI32;
 ///
 /// The on-disk form is a big-endian `i32`. `0x00480000` is the canonical
 /// 72.0 dpi value used by the §A-22 sample listings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Fixed(pub i32);
 
 impl Fixed {

@@ -308,6 +308,152 @@ impl RectI32 {
     }
 }
 
+/// Tracked text / pen-mode / highlight state captured from the §A-3
+/// opcodes the rasteriser walks past today.
+///
+/// Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 (v2) and
+/// Table A-3 (v1) list a handful of opcodes that carry pen-mode,
+/// text-font, text-size, transfer-mode, highlight-colour and arithmetic
+/// transfer-mode parameters which previously had their payload bytes
+/// stepped past with no further structure. Round 230 captures the
+/// payloads into [`PictTextState`] so consumers (and round-trip
+/// encoders) can recover the values that the producer chose to declare,
+/// even before the crate grows a font rasteriser or honours the
+/// arithmetic transfer modes on the canvas.
+///
+/// Every field defaults to the Color QuickDraw "fresh GrafPort" value
+/// per §A-3 / §4 ("Color QuickDraw and PixMaps"). `None` on the
+/// highlight / op-color slots means the producer never emitted the
+/// corresponding opcode — distinct from "emitted then reset" because
+/// QuickDraw has no reset opcode for these slots (a fresh GrafPort just
+/// inherits the system-wide default at draw time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PictTextState {
+    /// Font number set by `TxFont` (`$0003` v2 / `$03` v1, `Integer`).
+    /// §A-3 Table A-2: 2-byte payload. The numeric ID is the classic
+    /// `FOND` resource ID, not yet resolved against a font database by
+    /// this crate.
+    pub tx_font: i16,
+    /// Text face / style flags set by `TxFace` (`$0004` v2 / `$04` v1,
+    /// 0..255). §A-3 Table A-2: 1-byte payload. Bitfield with bold
+    /// (`0x01`), italic (`0x02`), underline (`0x04`), outline (`0x08`),
+    /// shadow (`0x10`), condense (`0x20`) and extend (`0x40`) flags per
+    /// the classic Mac `Style` byte; surfaced unmodified for now.
+    pub tx_face: u8,
+    /// Source-mode raster transfer mode set by `TxMode` (`$0005` v2 /
+    /// `$05` v1, `Integer`). §A-3 Table A-2: 2-byte payload, named
+    /// `srcCopy = 0`, `srcOr = 1`, …, `notSrcXor = 7`, plus the
+    /// arithmetic-mode block (`patCopy = 8` … `grayishTextOr = 49`).
+    pub tx_mode: i16,
+    /// Extra space-width set by `SpExtra` (`$0006` v2 / `$06` v1,
+    /// `Fixed`). §A-3 Table A-2: 4-byte payload. Stored verbatim as the
+    /// on-disk i32 16.16 fixed value (use [`crate::header::Fixed::to_f32`]
+    /// to convert).
+    pub sp_extra: crate::header::Fixed,
+    /// Pen transfer mode set by `PnMode` (`$0008` v2 / `$08` v1,
+    /// `Integer`). §A-3 Table A-2: 2-byte payload, same numeric mode
+    /// catalog as `tx_mode`.
+    pub pn_mode: i16,
+    /// Text size in points set by `TxSize` (`$000D` v2 / `$0D` v1,
+    /// `Integer`). §A-3 Table A-2: 2-byte payload.
+    pub tx_size: i16,
+    /// Text scaling ratio set by `TxRatio` (`$0010` v2 / `$10` v1).
+    /// §A-3 Table A-2: 8-byte payload — `(Point numerator, Point
+    /// denominator)` where each `Point` is `(v, h)` i16-pair. Stored
+    /// here as four signed 16-bit components in on-disk order to make
+    /// the round-trip explicit.
+    pub tx_ratio: TextRatio,
+    /// Fractional pen position set by `PnLocHFrac` (`$0015` v2 /
+    /// `$15` v1, low word of `Fixed`). §A-3 Table A-2: 2-byte payload.
+    /// Default = 0.5 per the spec's note: *"if value is not 0.5, pen
+    /// position is always set to the picture before each text-drawing
+    /// operation."*
+    pub pn_loc_h_frac: i16,
+    /// Per-character extra-width adjustment set by `ChExtra`
+    /// (`$0016` v2, `Integer`). §A-3 Table A-2: 2-byte payload.
+    pub ch_extra: i16,
+    /// Highlight colour set by `HiliteColor` (`$001D` v2,
+    /// `RGBColor`). §A-3 Table A-2: 6-byte payload (3 × i16). `None`
+    /// until the picture emits one — `DefHilite` (`$001E`) resets to
+    /// the QuickDraw default, which depends on the low-memory globals
+    /// at draw time, so we surface that as `None` rather than guess.
+    pub hilite_color: Option<Rgba>,
+    /// Arithmetic-transfer-mode opcolor set by `OpColor` (`$001F` v2,
+    /// `RGBColor`). §A-3 Table A-2: 6-byte payload. Consumed by the
+    /// `blend`, `addPin`, `addOver`, `subPin`, `addMax`, `subOver` and
+    /// `addMin` arithmetic transfer modes; round 230 captures the
+    /// declared colour but does not yet honour the arithmetic transfer
+    /// modes on the canvas.
+    pub op_color: Option<Rgba>,
+    /// `true` once a `DefHilite` (`$001E` v2) opcode was observed.
+    /// Mutually-exclusive with `hilite_color` in practice — a producer
+    /// that wants the system default highlight colour emits this
+    /// opcode and clears the previously-set colour. We track the flag
+    /// separately from `hilite_color: None` (which is also the default
+    /// before any opcode is emitted) so encoder-side round-trips can
+    /// reproduce the opcode.
+    pub hilite_default: bool,
+    /// `true` once a `HiliteMode` (`$001C` v2) opcode was observed.
+    /// §A-3 Table A-2: 0-byte payload. The opcode is a "flag" that the
+    /// next drawing operation uses the highlight mode; the producer
+    /// emits it once per draw that needs it.
+    pub hilite_mode_flag: bool,
+}
+
+impl PictTextState {
+    /// Construct a fresh-GrafPort default state.
+    ///
+    /// `tx_size = 12` and `pn_loc_h_frac = 0x8000` (= 0.5) match the
+    /// Color QuickDraw default a `NewWindow` call establishes; every
+    /// other field defaults to zero.
+    pub const fn fresh_graf_port() -> Self {
+        Self {
+            tx_font: 0,
+            tx_face: 0,
+            tx_mode: 0, // srcCopy
+            sp_extra: crate::header::Fixed(0),
+            pn_mode: 8, // patCopy — Inside Macintosh default
+            tx_size: 12,
+            tx_ratio: TextRatio {
+                numer_v: 1,
+                numer_h: 1,
+                denom_v: 1,
+                denom_h: 1,
+            },
+            pn_loc_h_frac: 0x4000, // 0.5 in the low word of a Fixed
+            ch_extra: 0,
+            hilite_color: None,
+            op_color: None,
+            hilite_default: false,
+            hilite_mode_flag: false,
+        }
+    }
+}
+
+/// `TxRatio` payload: numerator and denominator `Point`s.
+///
+/// Each `Point` in §A-3 is `(v, h)` (vertical then horizontal i16) per
+/// Table A-1 / §A-3. We preserve that ordering on the wire so encoder
+/// round-trips stay explicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextRatio {
+    pub numer_v: i16,
+    pub numer_h: i16,
+    pub denom_v: i16,
+    pub denom_h: i16,
+}
+
+impl Default for TextRatio {
+    fn default() -> Self {
+        Self {
+            numer_v: 1,
+            numer_h: 1,
+            denom_v: 1,
+            denom_h: 1,
+        }
+    }
+}
+
 /// Drawing state carried across the v2 opcode walk.
 #[derive(Debug, Clone)]
 pub struct PictState {
@@ -374,6 +520,14 @@ pub struct PictState {
     /// callers can recover annotation metadata that doesn't influence
     /// rasterisation.
     pub comments: Vec<crate::image::PictComment>,
+    /// Tracked text / pen-mode / highlight state. Updated by the §A-3
+    /// state opcodes (`TxFont`, `TxFace`, `TxMode`, `SpExtra`,
+    /// `PnMode`, `TxSize`, `TxRatio`, `PnLocHFrac`, `ChExtra`,
+    /// `HiliteMode`, `HiliteColor`, `DefHilite`, `OpColor`) instead of
+    /// having the payload bytes stepped past. Surfaced on
+    /// [`crate::PictImage`] / [`crate::PictProbe`] as the producer's
+    /// final declared text + transfer-mode state — round 230.
+    pub text_state: PictTextState,
 }
 
 impl Default for PictState {
@@ -397,6 +551,7 @@ impl Default for PictState {
             back_pix_pat: None,
             fill_pix_pat: None,
             comments: Vec::new(),
+            text_state: PictTextState::fresh_graf_port(),
         }
     }
 }

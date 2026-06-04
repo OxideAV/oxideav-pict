@@ -28,11 +28,11 @@
 //!   mix without reaching into the canvas pixels.
 
 use crate::error::{PictError, Result};
-use crate::header::PictHeader;
+use crate::header::{Fixed, PictHeader};
 use crate::image::PictComment;
 use crate::opcodes::*;
 use crate::reader::Reader;
-use crate::state::RectI32;
+use crate::state::{PictTextState, RectI32, Rgba, TextRatio};
 
 /// Read-only metadata extracted from a PICT byte stream.
 ///
@@ -140,6 +140,27 @@ pub struct PictProbe {
     /// probe tolerates a non-canonical 24-byte pad to keep statistics
     /// available for the surrounding opcode walk).
     pub header: Option<PictHeader>,
+    /// Final tracked text / pen-mode / highlight state observed by the
+    /// probe walker. Mirrors [`crate::PictImage::text_state`] — round 230
+    /// captures the §A-3 Table A-2 / A-3 state opcodes (`TxFont`,
+    /// `TxFace`, `TxMode`, `SpExtra`, `PnMode`, `TxSize`, `TxRatio`,
+    /// `PnLocHFrac`, `ChExtra`, `HiliteMode`, `HiliteColor`,
+    /// `DefHilite`, `OpColor`) into a structured snapshot so probe
+    /// consumers can spot the producer's declared text shape and
+    /// arithmetic-transfer-mode op-colour without paying the
+    /// rasterisation cost. Defaults to
+    /// [`PictTextState::fresh_graf_port`] when the picture emits no
+    /// state opcode in the corresponding slot. The decoder + probe
+    /// walkers share the same byte parse so the two surfaces stay in
+    /// sync.
+    pub text_state: PictTextState,
+    /// How many §A-3 text / pen-mode / highlight state opcodes the
+    /// walker observed (the same set that updates [`Self::text_state`]).
+    /// Lets a probe caller distinguish "producer used the default
+    /// shape and the slot has the default value" from "producer set
+    /// the slot to the default value explicitly." Counted once per
+    /// occurrence regardless of which opcode was emitted.
+    pub text_state_op_count: u32,
 }
 
 impl PictProbe {
@@ -247,6 +268,8 @@ pub fn probe_pict(bytes: &[u8]) -> Result<PictProbe> {
         termination: ProbeTermination::Eof,
         terminated_at: body_offset + r.pos,
         header,
+        text_state: PictTextState::fresh_graf_port(),
+        text_state_op_count: 0,
     };
 
     let result = match version {
@@ -514,6 +537,92 @@ fn probe_v2_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             p.pix_pattern_set_count += 1;
             Ok(OpStep::Continue)
         }
+        // §A-3 Table A-2 text / pen / transfer-mode / highlight state
+        // opcodes — round 230 promotes from generic skip-table to
+        // dedicated arms so `p.text_state` and `p.text_state_op_count`
+        // can be updated in lock-step with the decoder.
+        OP_TX_FONT => {
+            p.text_state.tx_font = r.read_i16()?;
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_TX_FACE => {
+            p.text_state.tx_face = r.read_u8()?;
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_TX_MODE => {
+            p.text_state.tx_mode = r.read_i16()?;
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_SP_EXTRA => {
+            p.text_state.sp_extra = Fixed(r.read_u32()? as i32);
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_PN_MODE => {
+            p.text_state.pn_mode = r.read_i16()?;
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_TX_SIZE => {
+            p.text_state.tx_size = r.read_i16()?;
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_TX_RATIO => {
+            let numer_v = r.read_i16()?;
+            let numer_h = r.read_i16()?;
+            let denom_v = r.read_i16()?;
+            let denom_h = r.read_i16()?;
+            p.text_state.tx_ratio = TextRatio {
+                numer_v,
+                numer_h,
+                denom_v,
+                denom_h,
+            };
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_PN_LOC_HFRAC => {
+            p.text_state.pn_loc_h_frac = r.read_i16()?;
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_CH_EXTRA => {
+            p.text_state.ch_extra = r.read_i16()?;
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_HILITE_MODE => {
+            p.text_state.hilite_mode_flag = true;
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_HILITE_COLOR => {
+            let rr = r.read_u16()?;
+            let gg = r.read_u16()?;
+            let bb = r.read_u16()?;
+            p.text_state.hilite_color = Some(Rgba::from_rgb16(rr, gg, bb));
+            p.text_state.hilite_default = false;
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_DEF_HILITE => {
+            p.text_state.hilite_default = true;
+            p.text_state.hilite_color = None;
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_OP_COLOR => {
+            let rr = r.read_u16()?;
+            let gg = r.read_u16()?;
+            let bb = r.read_u16()?;
+            p.text_state.op_color = Some(Rgba::from_rgb16(rr, gg, bb));
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
         OP_SHORT_COMMENT => {
             let kind = r.read_u16()?;
             p.comments.push(PictComment::short(kind));
@@ -633,27 +742,30 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             p.pattern_set_count += 1;
             Ok(OpStep::Continue)
         }
-        // §A-3 Table A-3 text / pen / font state opcodes — fixed
-        // payload sizes from the v1 opcode table, walked past without
-        // accounting (they do not paint pixels).
+        // §A-3 Table A-3 text / pen / font state opcodes — round 230
+        // promotes from skip-only to structured capture into
+        // `p.text_state` (mirrors the v2 walker arms above). The pen-
+        // size / oval-size / origin / fg-color / bg-color opcodes
+        // continue to consume their byte payload here (no `PictState`
+        // surface on the probe — those are decoder-only state slots).
         0x03 => {
-            // TxFont (Integer = 2 bytes)
-            r.skip(2)?;
+            p.text_state.tx_font = r.read_i16()?;
+            p.text_state_op_count += 1;
             Ok(OpStep::Continue)
         }
         0x04 => {
-            // TxFace (0..255 = 1 byte)
-            r.skip(1)?;
+            p.text_state.tx_face = r.read_u8()?;
+            p.text_state_op_count += 1;
             Ok(OpStep::Continue)
         }
         0x05 => {
-            // TxMode (Integer = 2 bytes)
-            r.skip(2)?;
+            p.text_state.tx_mode = r.read_i16()?;
+            p.text_state_op_count += 1;
             Ok(OpStep::Continue)
         }
         0x06 => {
-            // SpExtra (Fixed = 4 bytes)
-            r.skip(4)?;
+            p.text_state.sp_extra = Fixed(r.read_u32()? as i32);
+            p.text_state_op_count += 1;
             Ok(OpStep::Continue)
         }
         0x07 | 0x0B => {
@@ -661,8 +773,8 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             Ok(OpStep::Continue)
         }
         0x08 => {
-            // PnMode (Integer = 2 bytes)
-            r.skip(2)?;
+            p.text_state.pn_mode = r.read_i16()?;
+            p.text_state_op_count += 1;
             Ok(OpStep::Continue)
         }
         0x0C => {
@@ -670,8 +782,8 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             Ok(OpStep::Continue)
         }
         0x0D => {
-            // TxSize (Integer = 2 bytes)
-            r.skip(2)?;
+            p.text_state.tx_size = r.read_i16()?;
+            p.text_state_op_count += 1;
             Ok(OpStep::Continue)
         }
         0x0E | 0x0F => {
@@ -680,7 +792,17 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
         }
         0x10 => {
             // TxRatio: numerator (Point=4) + denominator (Point=4) = 8.
-            r.skip(8)?;
+            let numer_v = r.read_i16()?;
+            let numer_h = r.read_i16()?;
+            let denom_v = r.read_i16()?;
+            let denom_h = r.read_i16()?;
+            p.text_state.tx_ratio = TextRatio {
+                numer_v,
+                numer_h,
+                denom_v,
+                denom_h,
+            };
+            p.text_state_op_count += 1;
             Ok(OpStep::Continue)
         }
         0x20 => {
@@ -816,18 +938,13 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
 /// Static operand size for opcodes whose payload is a fixed number of
 /// bytes per Inside Macintosh §A-3. Mirrors the same table used by
 /// the decoder.
-fn fixed_operand_size(opcode: u16) -> Option<usize> {
-    // OP_BK_PAT / OP_PN_PAT / OP_FILL_PAT have dedicated arms in
-    // `probe_v2_opcode` that bump `pattern_set_count`.
-    Some(match opcode {
-        OP_TX_FONT | OP_TX_MODE | OP_TX_SIZE | OP_PN_MODE | OP_PN_LOC_HFRAC | OP_CH_EXTRA => 2,
-        OP_TX_FACE => 1,
-        OP_SP_EXTRA => 4,
-        OP_TX_RATIO => 8,
-        OP_HILITE_MODE | OP_DEF_HILITE => 0,
-        OP_HILITE_COLOR | OP_OP_COLOR => 6,
-        _ => return None,
-    })
+///
+/// Round 230 promotes every §A-3 state opcode previously listed here to
+/// its own arm in `probe_v2_opcode` so the count / structured-value
+/// surfaces can be updated. Kept returning `Option<usize>` for future
+/// per-opcode fixed-skip arms that don't update [`PictProbe`].
+fn fixed_operand_size(_opcode: u16) -> Option<usize> {
+    None
 }
 
 /// Skip a v2 raster opcode payload (BitsRect / BitsRgn / PackBitsRect

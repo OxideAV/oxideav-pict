@@ -26,7 +26,7 @@ colour (white) and returned as the decoded `PictImage`.
 | `0x0002` | **BkPat**           | 8-byte background pattern → `state.back_pat` |
 | `0x0009` | **PnPat**           | 8-byte pen pattern → `state.pen_pat`        |
 | `0x000A` | **FillPat**         | 8-byte fill pattern → `state.fill_pat`      |
-| `0x0003`-`0x0008`, `0x000B`-`0x0010`, `0x0015`, `0x0016`, `0x001A`-`0x001F` | pen / colour / text state | rasteriser tracks fg/bg colour, pen size, oval-corner size, origin |
+| `0x0003`-`0x0008`, `0x000B`-`0x0010`, `0x0015`, `0x0016`, `0x001A`-`0x001F` | pen / colour / text state | rasteriser tracks fg/bg colour, pen size, oval-corner size, origin; round 230 also captures `TxFont` / `TxFace` / `TxMode` / `SpExtra` / `PnMode` / `TxSize` / `TxRatio` / `PnLocHFrac` / `ChExtra` / `HiliteMode` / `HiliteColor` / `DefHilite` / `OpColor` into [`PictTextState`] |
 | `0x0020`-`0x0023` | Line / LineFrom / ShortLine[From] | **draw via Bresenham** |
 | `0x0028`-`0x002B` | Long/DH/DV/DHDV Text  | length-prefixed skip (no font rasteriser) |
 | `0x002C`-`0x002E` | FontName / LineJustify / GlyphState | size-prefixed skip |
@@ -560,6 +560,69 @@ specific `Kind` value can inspect `PictImage::comments` and dispatch
 on the integer themselves; the decoder doesn't impose a parse on the
 data slice.
 
+## Structured text / pen-mode / highlight state (round 230)
+
+Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 (v2) and
+Table A-3 (v1) define a block of state-mutating opcodes that don't
+paint pixels — `TxFont $0003`, `TxFace $0004`, `TxMode $0005`,
+`SpExtra $0006`, `PnMode $0008`, `TxSize $000D`, `TxRatio $0010`,
+`PnLocHFrac $0015`, `ChExtra $0016`, `HiliteMode $001C`,
+`HiliteColor $001D`, `DefHilite $001E`, `OpColor $001F` — but
+nevertheless carry parameters that downstream consumers (and round-
+trip encoders) need to recover. Round 230 promotes each of these
+opcodes from "skip the payload" to a structured capture into
+[`PictTextState`], surfaced on `PictImage::text_state` and
+`PictProbe::text_state`.
+
+```rust
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::{parse_pict, PictTextState};
+
+let mut b = PictBuilder::new(0, 0, 4, 4);
+b.tx_font(0x4242)
+    .tx_face(0x05)
+    .tx_size(24)
+    .pn_mode(10)
+    .op_color(0x10, 0x20, 0x30)
+    .hilite_color(0xFF, 0x00, 0x00);
+b.fg_color(0, 0, 0).rect(Verb::Paint, 0, 0, 4, 4);
+let bytes = b.finish();
+
+let img = parse_pict(&bytes)?;
+assert_eq!(img.text_state.tx_font, 0x4242);
+assert_eq!(img.text_state.tx_size, 24);
+assert_eq!(img.text_state.pn_mode, 10);
+let oc = img.text_state.op_color.expect("op_color set");
+assert_eq!((oc.r, oc.g, oc.b), (0x10, 0x20, 0x30));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`HiliteMode` is a flag — emitting it sets `text_state.hilite_mode_flag`
+to `true`. `DefHilite` resets `hilite_color` to `None` and sets
+`hilite_default = true`; a subsequent `HiliteColor` overrides the
+default flag back to `false`. Missing state opcodes leave their slot
+at the §A-3 fresh-GrafPort default ([`PictTextState::fresh_graf_port`]:
+`tx_size = 12`, `pn_mode = 8` patCopy, `pn_loc_h_frac = 0x4000` ≈ 0.5,
+every other field zero).
+
+The probe walker mirrors the decoder byte-for-byte:
+`PictProbe::text_state` carries the same final-state snapshot, and the
+new `PictProbe::text_state_op_count` field counts the number of
+state-opcode occurrences observed during the walk. This lets a probe
+caller distinguish "producer used the default shape and the slot
+happened to have the default value" from "producer set the slot to
+the default value explicitly." The rasterisation path is unchanged —
+these opcodes do not paint pixels — but consumers no longer need to
+re-walk the byte stream to recover the producer's declared text shape
+or arithmetic-transfer-mode op-colour.
+
+`OpColor` supplies the colour parameter for the §A-3 arithmetic
+transfer modes (`blend`, `addPin`, `addOver`, `subPin`, `addMax`,
+`subOver`, `addMin`); round 230 captures the declared colour but does
+not yet honour the arithmetic transfer modes on the canvas — that is a
+follow-up round on top of `state.text_state.pn_mode` /
+`state.text_state.tx_mode` dispatch.
+
 ## What's not yet in
 
 * **Non-8×8 PixPat tiles.** Inside Macintosh §A-3 nominally permits
@@ -567,6 +630,11 @@ data slice.
   falls back to the monochrome `Pat1Data` for other tile sizes.
 * **Text glyphs.** `LongText` / `DH/DV/DHDVText` are walked past but
   not rasterised — a TrueType engine is a separate round.
+* **Arithmetic transfer modes on the canvas.** Round 230 captures
+  `TxMode` / `PnMode` / `OpColor` into `text_state`, but the
+  arithmetic transfer modes (`blend`, `addPin`, `addOver`, `subPin`,
+  `addMax`, `subOver`, `addMin`) are not yet honoured on the
+  rasteriser — every draw still uses the `srcCopy` default.
 * **CompressedQuickTime decode.** The opcode is parsed (length-prefixed
   payload skipped cleanly so the surrounding decode keeps going), but
   the embedded image (typically JPEG) is not decoded — that needs

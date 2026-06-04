@@ -38,7 +38,7 @@
 //! 2 bytes) is shared between packTypes 3 and 4.
 
 use crate::error::{PictError, Result};
-use crate::header::PictHeader;
+use crate::header::{Fixed, PictHeader};
 use crate::image::{PictComment, PictImage, PictPixelFormat};
 use crate::opcodes::*;
 use crate::packbits;
@@ -51,7 +51,7 @@ use crate::raster::{
 };
 use crate::reader::Reader;
 use crate::region::{parse_region, Region};
-use crate::state::{Pattern, PictState, PixPattern, RectI32, Rgba};
+use crate::state::{Pattern, PictState, PixPattern, RectI32, Rgba, TextRatio};
 
 /// Decode a complete PICT byte stream into a single rasterised
 /// [`PictImage`].
@@ -569,6 +569,79 @@ fn dispatch_v2_opcode(
             }
             Ok(true)
         }
+        // §A-3 Table A-2 text / pen / transfer-mode / highlight state
+        // opcodes. Round 230: payload bytes are now captured into
+        // `state.text_state` instead of stepped past silently, so the
+        // producer's declared text shape + arithmetic-transfer-mode
+        // op-colour can be recovered after the walk.
+        OP_TX_FONT => {
+            state.text_state.tx_font = r.read_i16()?;
+            Ok(true)
+        }
+        OP_TX_FACE => {
+            state.text_state.tx_face = r.read_u8()?;
+            Ok(true)
+        }
+        OP_TX_MODE => {
+            state.text_state.tx_mode = r.read_i16()?;
+            Ok(true)
+        }
+        OP_SP_EXTRA => {
+            state.text_state.sp_extra = Fixed(r.read_u32()? as i32);
+            Ok(true)
+        }
+        OP_PN_MODE => {
+            state.text_state.pn_mode = r.read_i16()?;
+            Ok(true)
+        }
+        OP_TX_SIZE => {
+            state.text_state.tx_size = r.read_i16()?;
+            Ok(true)
+        }
+        OP_TX_RATIO => {
+            // `TxRatio` = numerator (Point) + denominator (Point);
+            // each `Point` is `(v: i16, h: i16)` on disk per §A-3
+            // Table A-1.
+            let numer_v = r.read_i16()?;
+            let numer_h = r.read_i16()?;
+            let denom_v = r.read_i16()?;
+            let denom_h = r.read_i16()?;
+            state.text_state.tx_ratio = TextRatio {
+                numer_v,
+                numer_h,
+                denom_v,
+                denom_h,
+            };
+            Ok(true)
+        }
+        OP_PN_LOC_HFRAC => {
+            state.text_state.pn_loc_h_frac = r.read_i16()?;
+            Ok(true)
+        }
+        OP_CH_EXTRA => {
+            state.text_state.ch_extra = r.read_i16()?;
+            Ok(true)
+        }
+        OP_HILITE_MODE => {
+            state.text_state.hilite_mode_flag = true;
+            Ok(true)
+        }
+        OP_HILITE_COLOR => {
+            let (rr, gg, bb) = read_rgb16(r)?;
+            state.text_state.hilite_color = Some(Rgba::from_rgb16(rr, gg, bb));
+            state.text_state.hilite_default = false;
+            Ok(true)
+        }
+        OP_DEF_HILITE => {
+            state.text_state.hilite_default = true;
+            state.text_state.hilite_color = None;
+            Ok(true)
+        }
+        OP_OP_COLOR => {
+            let (rr, gg, bb) = read_rgb16(r)?;
+            state.text_state.op_color = Some(Rgba::from_rgb16(rr, gg, bb));
+            Ok(true)
+        }
         OP_SHORT_COMMENT => {
             let kind = r.read_u16()?;
             state.comments.push(PictComment::short(kind));
@@ -694,26 +767,14 @@ fn skip_reserved_v2_payload(r: &mut Reader<'_>, skip: ReservedV2Skip) -> Result<
 /// bytes per Inside Macintosh §A-3. Returning `None` means the opcode
 /// has variable-size operands — those have their own match arm in
 /// [`dispatch_v2_opcode`].
-fn fixed_operand_size(opcode: u16) -> Option<usize> {
-    // OP_BK_PAT / OP_PN_PAT / OP_FILL_PAT are handled with dedicated
-    // match arms in `dispatch_v2_opcode` so they can update the
-    // drawing-state's `back_pat` / `pen_pat` / `fill_pat` fields.
-    Some(match opcode {
-        OP_TX_FONT => 2,
-        OP_TX_FACE => 1,
-        OP_TX_MODE => 2,
-        OP_SP_EXTRA => 4,
-        OP_PN_MODE => 2,
-        OP_TX_SIZE => 2,
-        OP_TX_RATIO => 8,
-        OP_PN_LOC_HFRAC => 2,
-        OP_CH_EXTRA => 2,
-        OP_HILITE_MODE => 0,
-        OP_HILITE_COLOR => 6,
-        OP_DEF_HILITE => 0,
-        OP_OP_COLOR => 6,
-        _ => return None,
-    })
+///
+/// As of round 230 every §A-3 state-mutating opcode in this list has
+/// been promoted to a dedicated match arm in `dispatch_v2_opcode` so
+/// the table is effectively empty — kept as a private function (still
+/// returning `Option<usize>`) for future per-opcode fixed-skip arms
+/// that don't update [`PictState`].
+fn fixed_operand_size(_opcode: u16) -> Option<usize> {
+    None
 }
 
 fn read_rect_op(r: &mut Reader<'_>) -> Result<RectI32> {
@@ -1270,6 +1331,7 @@ fn finalise_canvas(canvas: Canvas, state: &PictState) -> Result<PictImage> {
         pts: None,
         header: None,
         comments: state.comments.clone(),
+        text_state: state.text_state,
     })
 }
 
@@ -2277,29 +2339,28 @@ fn dispatch_v1_opcode(
             state.fill_pix_pat = None;
             Ok(true)
         }
-        // §A-3 Table A-3 text / pen / font state opcodes that we do not
-        // fully model in the rasteriser yet — payload sizes are walked
-        // past per the table so v1 PICTs carrying them no longer abort.
-        // Mirrors the v2 `fixed_operand_size` skip-table arm for the
-        // corresponding 16-bit opcodes (0x0003..=0x0010).
+        // §A-3 Table A-3 text / pen / font state opcodes — round 230
+        // promotes these from "walk past the payload" to "capture into
+        // `state.text_state`" so v1 PICTs surface the producer's
+        // declared text shape just like v2 ones do.
         0x03 => {
             // TxFont (Integer)
-            r.skip(2)?;
+            state.text_state.tx_font = r.read_i16()?;
             Ok(true)
         }
         0x04 => {
             // TxFace (0..255)
-            r.skip(1)?;
+            state.text_state.tx_face = r.read_u8()?;
             Ok(true)
         }
         0x05 => {
             // TxMode (Integer)
-            r.skip(2)?;
+            state.text_state.tx_mode = r.read_i16()?;
             Ok(true)
         }
         0x06 => {
             // SpExtra (Fixed)
-            r.skip(4)?;
+            state.text_state.sp_extra = Fixed(r.read_u32()? as i32);
             Ok(true)
         }
         0x07 => {
@@ -2310,7 +2371,7 @@ fn dispatch_v1_opcode(
         }
         0x08 => {
             // PnMode (Integer)
-            r.skip(2)?;
+            state.text_state.pn_mode = r.read_i16()?;
             Ok(true)
         }
         0x0B => {
@@ -2328,7 +2389,7 @@ fn dispatch_v1_opcode(
         }
         0x0D => {
             // TxSize (Integer)
-            r.skip(2)?;
+            state.text_state.tx_size = r.read_i16()?;
             Ok(true)
         }
         0x0E => {
@@ -2343,7 +2404,16 @@ fn dispatch_v1_opcode(
         }
         0x10 => {
             // TxRatio: numerator (Point) + denominator (Point) = 8 bytes
-            r.skip(8)?;
+            let numer_v = r.read_i16()?;
+            let numer_h = r.read_i16()?;
+            let denom_v = r.read_i16()?;
+            let denom_h = r.read_i16()?;
+            state.text_state.tx_ratio = TextRatio {
+                numer_v,
+                numer_h,
+                denom_v,
+                denom_h,
+            };
             Ok(true)
         }
         0x20 => {

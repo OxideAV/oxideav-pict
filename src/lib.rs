@@ -72,14 +72,16 @@ pub use error::{PictError, Result};
 pub use header::{Fixed, PictHeader};
 pub use image::{PictComment, PictImage, PictPixelFormat};
 pub use ops::{
-    build_arc_op, build_bk_pat, build_fill_pat, build_line, build_line_from, build_long_comment,
-    build_long_comment_v1, build_oval_op, build_oval_size, build_pn_pat, build_pn_size,
-    build_poly_op, build_rect_op, build_rgb_bk_col, build_rgb_fg_col, build_rgn_inverted_op,
-    build_rgn_rect_op, build_round_rect_op, build_short_comment, build_short_comment_v1,
-    PictBuilder, Verb,
+    build_arc_op, build_bk_pat, build_ch_extra, build_def_hilite, build_fill_pat,
+    build_hilite_color, build_hilite_mode, build_line, build_line_from, build_long_comment,
+    build_long_comment_v1, build_op_color, build_oval_op, build_oval_size, build_pn_loc_h_frac,
+    build_pn_mode, build_pn_pat, build_pn_size, build_poly_op, build_rect_op, build_rgb_bk_col,
+    build_rgb_fg_col, build_rgn_inverted_op, build_rgn_rect_op, build_round_rect_op,
+    build_short_comment, build_short_comment_v1, build_sp_extra, build_tx_face, build_tx_font,
+    build_tx_mode, build_tx_ratio, build_tx_size, PictBuilder, Verb,
 };
 pub use probe::{probe_pict, PictProbe, ProbeRect, ProbeTermination, ProbeVersion};
-pub use state::{Pattern, PictPattern, PixPattern};
+pub use state::{Pattern, PictPattern, PictTextState, PixPattern, TextRatio};
 
 #[cfg(feature = "registry")]
 pub use registry::{__oxideav_entry, register, register_codecs, register_containers};

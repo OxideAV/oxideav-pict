@@ -432,6 +432,141 @@ pub fn build_fill_pat(pattern: [u8; 8]) -> Vec<u8> {
     buf
 }
 
+/// Build a `TxFont` (`$0003`) opcode carrying a 2-byte `Integer` font
+/// number per Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2.
+pub fn build_tx_font(font: i16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4);
+    write_u16(&mut buf, OP_TX_FONT);
+    write_i16(&mut buf, font);
+    buf
+}
+
+/// Build a `TxFace` (`$0004`) opcode carrying a 1-byte font-style byte
+/// (the classic Mac `Style` bitfield) per §A-3 Table A-2.
+///
+/// §A-3 Table A-2 lists the operand as 1 byte (`0..255`). The opcode is
+/// 2 bytes — caller is responsible for the word-alignment pad expected
+/// before the next v2 opcode; `PictBuilder` handles it automatically.
+pub fn build_tx_face(face: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(3);
+    write_u16(&mut buf, OP_TX_FACE);
+    buf.push(face);
+    buf
+}
+
+/// Build a `TxMode` (`$0005`) opcode carrying a 2-byte `Integer`
+/// source-mode value (`srcCopy = 0`, `srcOr = 1`, …) per §A-3 Table A-2.
+pub fn build_tx_mode(mode: i16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4);
+    write_u16(&mut buf, OP_TX_MODE);
+    write_i16(&mut buf, mode);
+    buf
+}
+
+/// Build a `SpExtra` (`$0006`) opcode carrying a 4-byte `Fixed`
+/// extra-space value per §A-3 Table A-2.
+pub fn build_sp_extra(extra: i32) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(6);
+    write_u16(&mut buf, OP_SP_EXTRA);
+    buf.extend_from_slice(&extra.to_be_bytes());
+    buf
+}
+
+/// Build a `PnMode` (`$0008`) opcode carrying a 2-byte `Integer`
+/// pen-mode value (same numeric catalog as `TxMode`) per §A-3
+/// Table A-2.
+pub fn build_pn_mode(mode: i16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4);
+    write_u16(&mut buf, OP_PN_MODE);
+    write_i16(&mut buf, mode);
+    buf
+}
+
+/// Build a `TxSize` (`$000D`) opcode carrying a 2-byte `Integer` text
+/// size in points per §A-3 Table A-2.
+pub fn build_tx_size(size: i16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4);
+    write_u16(&mut buf, OP_TX_SIZE);
+    write_i16(&mut buf, size);
+    buf
+}
+
+/// Build a `TxRatio` (`$0010`) opcode carrying an 8-byte payload —
+/// numerator (Point) + denominator (Point) per §A-3 Table A-2. Each
+/// `Point` is `(v: i16, h: i16)` on disk.
+pub fn build_tx_ratio(numer_v: i16, numer_h: i16, denom_v: i16, denom_h: i16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(10);
+    write_u16(&mut buf, OP_TX_RATIO);
+    write_i16(&mut buf, numer_v);
+    write_i16(&mut buf, numer_h);
+    write_i16(&mut buf, denom_v);
+    write_i16(&mut buf, denom_h);
+    buf
+}
+
+/// Build a `PnLocHFrac` (`$0015`) opcode carrying a 2-byte `Integer`
+/// (low word of `Fixed`) per §A-3 Table A-2.
+pub fn build_pn_loc_h_frac(frac: i16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4);
+    write_u16(&mut buf, OP_PN_LOC_HFRAC);
+    write_i16(&mut buf, frac);
+    buf
+}
+
+/// Build a `ChExtra` (`$0016`) opcode carrying a 2-byte `Integer`
+/// per-character extra-width adjustment per §A-3 Table A-2.
+pub fn build_ch_extra(extra: i16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4);
+    write_u16(&mut buf, OP_CH_EXTRA);
+    write_i16(&mut buf, extra);
+    buf
+}
+
+/// Build a `HiliteMode` (`$001C`) opcode — a 0-byte-payload "flag"
+/// per §A-3 Table A-2 indicating the next drawing operation should use
+/// the highlight mode.
+pub fn build_hilite_mode() -> Vec<u8> {
+    let mut buf = Vec::with_capacity(2);
+    write_u16(&mut buf, OP_HILITE_MODE);
+    buf
+}
+
+/// Build a `HiliteColor` (`$001D`) opcode carrying a 6-byte `RGBColor`
+/// per §A-3 Table A-2. The 8-bit input is replicated across both bytes
+/// of each 16-bit-per-channel on-disk component so the decoder's
+/// `Rgba::from_rgb16` high-byte selection round-trips bit-exact.
+pub fn build_hilite_color(r: u8, g: u8, b: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(8);
+    write_u16(&mut buf, OP_HILITE_COLOR);
+    write_u16(&mut buf, expand_8_to_16(r));
+    write_u16(&mut buf, expand_8_to_16(g));
+    write_u16(&mut buf, expand_8_to_16(b));
+    buf
+}
+
+/// Build a `DefHilite` (`$001E`) opcode — a 0-byte-payload reset that
+/// switches subsequent draws back to the system-default highlight
+/// colour per §A-3 Table A-2.
+pub fn build_def_hilite() -> Vec<u8> {
+    let mut buf = Vec::with_capacity(2);
+    write_u16(&mut buf, OP_DEF_HILITE);
+    buf
+}
+
+/// Build an `OpColor` (`$001F`) opcode carrying a 6-byte `RGBColor`
+/// per §A-3 Table A-2. The opcode supplies the colour parameter for
+/// arithmetic transfer modes (`blend`, `addPin`, etc.) — round 230
+/// captures it as state; the arithmetic transfer modes themselves are
+/// a future round.
+pub fn build_op_color(r: u8, g: u8, b: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(8);
+    write_u16(&mut buf, OP_OP_COLOR);
+    write_u16(&mut buf, expand_8_to_16(r));
+    write_u16(&mut buf, expand_8_to_16(g));
+    write_u16(&mut buf, expand_8_to_16(b));
+    buf
+}
+
 /// Build a v2 `ShortComment` (`$00A0`) opcode carrying a 2-byte `Kind`
 /// integer per Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2.
 ///
@@ -724,6 +859,118 @@ impl PictBuilder {
     /// Push a `FillPat` opcode (fill pattern, 8 bytes).
     pub fn fill_pattern(&mut self, pattern: [u8; 8]) -> &mut Self {
         let bytes = build_fill_pat(pattern);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `TxFont` opcode setting the text font number. Round 230.
+    pub fn tx_font(&mut self, font: i16) -> &mut Self {
+        let bytes = build_tx_font(font);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `TxFace` opcode setting the text face / style flags.
+    /// Round 230.
+    pub fn tx_face(&mut self, face: u8) -> &mut Self {
+        let bytes = build_tx_face(face);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `TxMode` opcode setting the source-mode transfer code
+    /// (`srcCopy = 0`, …). Round 230.
+    pub fn tx_mode(&mut self, mode: i16) -> &mut Self {
+        let bytes = build_tx_mode(mode);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `SpExtra` opcode setting the extra-space `Fixed` value
+    /// (raw on-disk i32 16.16). Round 230.
+    pub fn sp_extra(&mut self, extra: i32) -> &mut Self {
+        let bytes = build_sp_extra(extra);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `PnMode` opcode setting the pen transfer-mode code.
+    /// Round 230.
+    pub fn pn_mode(&mut self, mode: i16) -> &mut Self {
+        let bytes = build_pn_mode(mode);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `TxSize` opcode setting the text size in points.
+    /// Round 230.
+    pub fn tx_size(&mut self, size: i16) -> &mut Self {
+        let bytes = build_tx_size(size);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `TxRatio` opcode setting the text scaling ratio.
+    /// `numer` and `denom` are each a `Point` on disk `(v, h)` per
+    /// §A-3 Table A-1. Round 230.
+    pub fn tx_ratio(
+        &mut self,
+        numer_v: i16,
+        numer_h: i16,
+        denom_v: i16,
+        denom_h: i16,
+    ) -> &mut Self {
+        let bytes = build_tx_ratio(numer_v, numer_h, denom_v, denom_h);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `PnLocHFrac` opcode setting the fractional pen position
+    /// (low word of a `Fixed`). Round 230.
+    pub fn pn_loc_h_frac(&mut self, frac: i16) -> &mut Self {
+        let bytes = build_pn_loc_h_frac(frac);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `ChExtra` opcode setting the per-character extra-width
+    /// adjustment. Round 230.
+    pub fn ch_extra(&mut self, extra: i16) -> &mut Self {
+        let bytes = build_ch_extra(extra);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `HiliteMode` opcode — the 0-byte "flag" that signals
+    /// the next drawing operation should use the highlight mode.
+    /// Round 230.
+    pub fn hilite_mode(&mut self) -> &mut Self {
+        let bytes = build_hilite_mode();
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `HiliteColor` opcode carrying an `RGBColor` triple.
+    /// Round 230.
+    pub fn hilite_color(&mut self, r: u8, g: u8, b: u8) -> &mut Self {
+        let bytes = build_hilite_color(r, g, b);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `DefHilite` opcode — switches subsequent draws back to
+    /// the system-default highlight colour. Round 230.
+    pub fn def_hilite(&mut self) -> &mut Self {
+        let bytes = build_def_hilite();
+        self.push(&bytes);
+        self
+    }
+
+    /// Push an `OpColor` opcode carrying an `RGBColor` triple — the
+    /// colour parameter for arithmetic transfer modes (`blend`,
+    /// `addPin`, …). Round 230.
+    pub fn op_color(&mut self, r: u8, g: u8, b: u8) -> &mut Self {
+        let bytes = build_op_color(r, g, b);
         self.push(&bytes);
         self
     }
