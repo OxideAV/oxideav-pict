@@ -567,6 +567,109 @@ pub fn build_op_color(r: u8, g: u8, b: u8) -> Vec<u8> {
     buf
 }
 
+/// Build a `fontName` (`$002C`) opcode carrying the producer's
+/// `oldFontID` + font-name bytes per Inside Macintosh: Imaging With
+/// QuickDraw §A-3 Table A-2 footnote `*`.
+///
+/// On-disk layout (after the 2-byte opcode):
+///
+/// ```text
+/// dataLength (Integer)  = 5 + name.len()  // includes itself
+/// oldFontID  (Integer)  = the producer's TxFont pairing
+/// nameLength (Byte)     = name.len()
+/// name       (Bytes)    = the raw font-name bytes
+/// ```
+///
+/// `dataLength` is written inclusive of itself, matching the decoder
+/// arm (round 236) and the §A-3 "Additional data size" column of
+/// `5 + nameLength`. The 1-byte `nameLength` field caps the font name
+/// at 255 bytes; an oversize input returns
+/// [`PictError::InvalidData`].
+pub fn build_font_name(old_font_id: i16, name: &[u8]) -> Result<Vec<u8>> {
+    let name_len: u8 = name.len().try_into().map_err(|_| {
+        PictError::invalid(format!(
+            "fontName name length {} exceeds the u8 (255-byte) name-length field",
+            name.len()
+        ))
+    })?;
+    let data_length: u16 = (5usize + name.len()).try_into().map_err(|_| {
+        PictError::invalid(format!(
+            "fontName total record length {} exceeds the u16 dataLength field",
+            5usize + name.len()
+        ))
+    })?;
+    let mut buf = Vec::with_capacity(2 + 5 + name.len());
+    write_u16(&mut buf, OP_FONT_NAME);
+    write_u16(&mut buf, data_length);
+    write_i16(&mut buf, old_font_id);
+    buf.push(name_len);
+    buf.extend_from_slice(name);
+    Ok(buf)
+}
+
+/// Build a `lineJustify` (`$002D`) opcode carrying the Script-Manager
+/// line-layout state per Inside Macintosh: Imaging With QuickDraw §A-3
+/// Table A-2 footnote `†`.
+///
+/// On-disk layout (after the 2-byte opcode):
+///
+/// ```text
+/// dataLength             (Integer) = 8   // bytes after itself
+/// intercharacter spacing (Fixed)         // 16.16 i32
+/// total extra space      (Fixed)         // 16.16 i32
+/// ```
+///
+/// `dataLength` is fixed at 8 (footnote `†`: *"the field's data length,
+/// which should always be 8 bytes"*) and **excludes itself** — the
+/// total additional-data column in Table A-2 is 10 = 2 (length) + 8
+/// (two Fixed values).
+pub fn build_line_justify(inter_char_spacing: i32, total_extra: i32) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(2 + 10);
+    write_u16(&mut buf, OP_LINE_JUSTIFY);
+    write_u16(&mut buf, 8);
+    buf.extend_from_slice(&inter_char_spacing.to_be_bytes());
+    buf.extend_from_slice(&total_extra.to_be_bytes());
+    buf
+}
+
+/// Build a `glyphState` (`$002E`) opcode carrying the four
+/// preserved-glyph Booleans per Inside Macintosh: Imaging With
+/// QuickDraw §A-3 Table A-2 row `$002E`.
+///
+/// On-disk layout (after the 2-byte opcode):
+///
+/// ```text
+/// dataLength         (Integer) = 6
+/// outline_preferred  (Byte)   // 0 = false, non-zero = true
+/// preserve_glyph     (Byte)
+/// fractional_widths  (Byte)
+/// scaling_disabled   (Byte)
+/// pad                (2 bytes of 0)
+/// ```
+///
+/// `dataLength` is set to 6 — the four 1-byte Booleans plus two pad
+/// bytes — so that the §A-3 Table A-2 "Additional data size" column of
+/// `8` (2 length + 6 payload) is honoured. The pad keeps the next v2
+/// opcode word-aligned without relying on the builder's
+/// align-on-push pass for record-internal padding.
+pub fn build_glyph_state(
+    outline_preferred: bool,
+    preserve_glyph: bool,
+    fractional_widths: bool,
+    scaling_disabled: bool,
+) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(2 + 8);
+    write_u16(&mut buf, OP_GLYPH_STATE);
+    write_u16(&mut buf, 6);
+    buf.push(outline_preferred as u8);
+    buf.push(preserve_glyph as u8);
+    buf.push(fractional_widths as u8);
+    buf.push(scaling_disabled as u8);
+    buf.push(0);
+    buf.push(0);
+    buf
+}
+
 /// Build a v2 `ShortComment` (`$00A0`) opcode carrying a 2-byte `Kind`
 /// integer per Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2.
 ///
@@ -971,6 +1074,47 @@ impl PictBuilder {
     /// `addPin`, …). Round 230.
     pub fn op_color(&mut self, r: u8, g: u8, b: u8) -> &mut Self {
         let bytes = build_op_color(r, g, b);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `fontName` opcode (`$002C`) recording the producer's
+    /// `oldFontID` + font-name bytes per Inside Macintosh: Imaging With
+    /// QuickDraw §A-3 Table A-2 footnote `*`. Returns
+    /// [`PictError::InvalidData`] when `name.len()` exceeds the on-disk
+    /// `u8` (255-byte) name-length field. Round 236.
+    pub fn font_name(&mut self, old_font_id: i16, name: &[u8]) -> Result<&mut Self> {
+        let bytes = build_font_name(old_font_id, name)?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
+    /// Push a `lineJustify` opcode (`$002D`) recording the Script-
+    /// Manager line-layout state per Inside Macintosh: Imaging With
+    /// QuickDraw §A-3 Table A-2 footnote `†`. Each parameter is a raw
+    /// `Fixed` (16.16 i32). Round 236.
+    pub fn line_justify(&mut self, inter_char_spacing: i32, total_extra: i32) -> &mut Self {
+        let bytes = build_line_justify(inter_char_spacing, total_extra);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `glyphState` opcode (`$002E`) recording the four
+    /// preserved-glyph Booleans per Inside Macintosh: Imaging With
+    /// QuickDraw §A-3 Table A-2 row `$002E`. Round 236.
+    pub fn glyph_state(
+        &mut self,
+        outline_preferred: bool,
+        preserve_glyph: bool,
+        fractional_widths: bool,
+        scaling_disabled: bool,
+    ) -> &mut Self {
+        let bytes = build_glyph_state(
+            outline_preferred,
+            preserve_glyph,
+            fractional_widths,
+            scaling_disabled,
+        );
         self.push(&bytes);
         self
     }

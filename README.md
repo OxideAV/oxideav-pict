@@ -29,7 +29,9 @@ colour (white) and returned as the decoded `PictImage`.
 | `0x0003`-`0x0008`, `0x000B`-`0x0010`, `0x0015`, `0x0016`, `0x001A`-`0x001F` | pen / colour / text state | rasteriser tracks fg/bg colour, pen size, oval-corner size, origin; round 230 also captures `TxFont` / `TxFace` / `TxMode` / `SpExtra` / `PnMode` / `TxSize` / `TxRatio` / `PnLocHFrac` / `ChExtra` / `HiliteMode` / `HiliteColor` / `DefHilite` / `OpColor` into [`PictTextState`] |
 | `0x0020`-`0x0023` | Line / LineFrom / ShortLine[From] | **draw via Bresenham** |
 | `0x0028`-`0x002B` | Long/DH/DV/DHDV Text  | length-prefixed skip (no font rasteriser) |
-| `0x002C`-`0x002E` | FontName / LineJustify / GlyphState | size-prefixed skip |
+| `0x002C` | **FontName**          | parse → `PictTextState::font_name` (`Option<PictFontName>`; round 236)        |
+| `0x002D` | **LineJustify**       | parse → `PictTextState::line_justify` (`Option<PictLineJustify>`; round 236) |
+| `0x002E` | **GlyphState**        | parse → `PictTextState::glyph_state` (`Option<PictGlyphState>`; round 236)   |
 | `0x0030`-`0x006C` | Frame / Paint / Erase / Invert / Fill of Rect / RoundRect / Oval / Arc | **rasterise via in-crate kernel** |
 | `0x0070`-`0x0074` | Frame / Paint / Erase / Invert / Fill Poly | **rasterise via even-odd scanline** |
 | `0x0080`-`0x0084` | Frame / Paint / Erase / Invert / Fill Rgn | **rasterise (rect bbox + per-row inversion mask)** |
@@ -622,6 +624,82 @@ transfer modes (`blend`, `addPin`, `addOver`, `subPin`, `addMax`,
 not yet honour the arithmetic transfer modes on the canvas — that is a
 follow-up round on top of `state.text_state.pn_mode` /
 `state.text_state.tx_mode` dispatch.
+
+## Structured `fontName` / `lineJustify` / `glyphState` (round 236)
+
+Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 footnotes `*`
+and `†` and row `$002E` define three more state-mutating v2 opcodes
+that the decoder previously walked past with no further structure but
+that carry Script-Manager and font-engine round-trip parameters:
+
+* **`fontName` (`$002C`)** — footnote `*`: `dataLength (Integer)`
+  inclusive of itself, `oldFontID (Integer)`, `nameLength (0..255)`,
+  `name (nameLength bytes)`. Declares the font identity that subsequent
+  text-glyph opcodes belong to.
+* **`lineJustify` (`$002D`)** — footnote `†`: `dataLength = 8`
+  excluding itself, then two `Fixed` 16.16 values — intercharacter
+  spacing and the total extra width spread across the style run for
+  justification. The §A-3 footnote `†` worked example
+  `2D 00 08 00 01 00 00 00 0A 00 00` round-trips bit-exactly.
+* **`glyphState` (`$002E`)** — `dataLength`-prefixed block carrying
+  four 1-byte Booleans (`outline preferred`, `preserve glyph`,
+  `fractional widths`, `scaling disabled`). The §A-3 8-byte additional-
+  data size implies two trailing pad bytes after the four Booleans —
+  the encoder writes `dataLength = 6` and emits the pad.
+
+Round 236 captures each payload into [`PictTextState`]'s new
+`font_name: Option<PictFontName>`, `line_justify:
+Option<PictLineJustify>` and `glyph_state: Option<PictGlyphState>`
+slots, surfaced on `PictImage::text_state` and `PictProbe::text_state`.
+`text_state_op_count` bumps once per occurrence so callers can detect
+"producer emitted this opcode with the default value" vs. "no opcode
+emitted, slot is at its fresh-GrafPort `None` default".
+
+```rust
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::{parse_pict, Fixed, PictGlyphState};
+
+let mut b = PictBuilder::new(0, 0, 4, 4);
+b.font_name(0x0102, b"Geneva")?
+    .line_justify(0x0001_8000, 0x0007_4000) // 1.5 / 7.25 pixels
+    .glyph_state(true, false, true, false);
+b.fg_color(0, 0, 0).rect(Verb::Paint, 0, 0, 4, 4);
+
+let img = parse_pict(&b.finish())?;
+let fn_ = img.text_state.font_name.as_ref().expect("font_name");
+assert_eq!(fn_.old_font_id, 0x0102);
+assert_eq!(fn_.name, b"Geneva");
+let lj = img.text_state.line_justify.expect("line_justify");
+assert!((lj.inter_char_spacing.to_f32() - 1.5).abs() < 1e-6);
+assert_eq!(
+    img.text_state.glyph_state.expect("glyph_state"),
+    PictGlyphState {
+        outline_preferred: true,
+        preserve_glyph: false,
+        fractional_widths: true,
+        scaling_disabled: false,
+    }
+);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Encoder side: `build_font_name(old_font_id, name)` /
+`build_line_justify(inter_char_spacing, total_extra)` /
+`build_glyph_state(...)` emit the §A-3 on-disk record bytes;
+`PictBuilder::{font_name, line_justify, glyph_state}` are the
+chainable convenience wrappers. `font_name` returns
+`Err(PictError::InvalidData)` when the name length overflows the on-
+disk `u8` nameLength field. `fontName` records whose `dataLength`
+falls below the 5-byte minimum (length + oldFontID + nameLen) and
+`lineJustify` records whose `dataLength` is below the 8-byte Fixed-
+pair payload are rejected by the decoder + probe with the same
+`InvalidData` error so a corrupted producer doesn't silently drift
+the opcode walker.
+
+These opcodes are v2-only — §A-3 Table A-3 (v1) does not include
+`$2C-$2F`, so the v1 dispatcher is unchanged. The `PictTextState`
+struct lost its `Copy` impl in round 236 (the `Vec<u8>` font name is
+the reason), but kept `Clone + Default + PartialEq + Eq`.
 
 ## What's not yet in
 

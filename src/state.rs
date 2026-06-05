@@ -327,7 +327,17 @@ impl RectI32 {
 /// corresponding opcode — distinct from "emitted then reset" because
 /// QuickDraw has no reset opcode for these slots (a fresh GrafPort just
 /// inherits the system-wide default at draw time).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Round 236 adds typed capture of the `fontName $002C` /
+/// `lineJustify $002D` / `glyphState $002E` payloads — these are the
+/// "Pictures-chapter Script-Manager round-trip" opcodes (§A-3 Table A-2
+/// footnotes `*` and `†`) that the v2 walker previously stepped past.
+/// Each lands in a dedicated `Option<…>` slot so that consumers can
+/// recover the producer's last-declared font / justification / glyph-
+/// rendering preferences (`Some` ↔ "the producer emitted this opcode at
+/// least once"; the slot otherwise stays at `None`, preserving the
+/// fresh-GrafPort baseline).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PictTextState {
     /// Font number set by `TxFont` (`$0003` v2 / `$03` v1, `Integer`).
     /// §A-3 Table A-2: 2-byte payload. The numeric ID is the classic
@@ -398,6 +408,24 @@ pub struct PictTextState {
     /// next drawing operation uses the highlight mode; the producer
     /// emits it once per draw that needs it.
     pub hilite_mode_flag: bool,
+    /// Last `fontName` (`$002C` v2 / `$2C` v1) record observed in the
+    /// stream, decoded into a [`PictFontName`]. §A-3 Table A-2 footnote
+    /// `*` — the v2 record is `dataLength (Integer)`, `oldFontID
+    /// (Integer)`, `nameLength (0..255)`, `fontName (nameLength bytes)`
+    /// — declares the font identity that subsequent text-glyph opcodes
+    /// (`LongText / DH/DV/DHDVText`) belong to. Round 236.
+    pub font_name: Option<PictFontName>,
+    /// Last `lineJustify` (`$002D` v2) record observed, decoded into a
+    /// [`PictLineJustify`]. §A-3 Table A-2 footnote `†` — Script-Manager
+    /// line-layout state: `dataLength = 8`, `intercharacter spacing
+    /// (Fixed)`, `total extra space (Fixed)`. Round 236.
+    pub line_justify: Option<PictLineJustify>,
+    /// Last `glyphState` (`$002E` v2) record observed, decoded into a
+    /// [`PictGlyphState`]. §A-3 Table A-2 row 0x002E — the four
+    /// preserved-glyph Booleans (`outline preferred`, `preserve glyph`,
+    /// `fractional widths`, `scaling disabled`) carried inside a
+    /// length-prefixed block. Round 236.
+    pub glyph_state: Option<PictGlyphState>,
 }
 
 impl PictTextState {
@@ -426,8 +454,82 @@ impl PictTextState {
             op_color: None,
             hilite_default: false,
             hilite_mode_flag: false,
+            font_name: None,
+            line_justify: None,
+            glyph_state: None,
         }
     }
+}
+
+/// Decoded `fontName` (`$002C`) record per Inside Macintosh: Imaging
+/// With QuickDraw §A-3 Table A-2 footnote `*`.
+///
+/// On-disk layout (after the 2-byte opcode):
+///
+/// ```text
+/// dataLength : u16    // total payload size, including itself (5 + nameLen)
+/// oldFontID  : i16    // legacy `FOND` resource ID
+/// nameLen    : u8     // 0..255
+/// name       : [u8; nameLen]
+/// ```
+///
+/// The "old font ID" pairs with the `TxFont` opcode that the same
+/// producer emitted earlier in the stream; the `name` is the
+/// human-readable identifier (`Geneva`, `Chicago`, `Helvetica`, …) the
+/// host font subsystem resolves it under. Stored byte-for-byte; this
+/// crate makes no attempt at MacRoman → UTF-8 conversion because §A-3
+/// is silent on the name encoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PictFontName {
+    /// Pairs with the `TxFont` (`$0003`) opcode's `fontID`.
+    pub old_font_id: i16,
+    /// Font name bytes as they appeared on disk — `name_len` bytes long.
+    pub name: Vec<u8>,
+}
+
+impl PictFontName {
+    /// Construct a `PictFontName` from its decoded parts.
+    pub fn new(old_font_id: i16, name: Vec<u8>) -> Self {
+        Self { old_font_id, name }
+    }
+}
+
+/// Decoded `lineJustify` (`$002D`) record per Inside Macintosh: Imaging
+/// With QuickDraw §A-3 Table A-2 footnote `†`.
+///
+/// The Script-Manager line-layout state, serialised as two `Fixed`
+/// 16.16 values:
+///
+/// * `inter_char_spacing` — extra width inserted between every glyph
+///   pair (§A-3 footnote `†`'s "intercharacter spacing").
+/// * `total_extra` — total extra width spread across the style run to
+///   reach the justified line length.
+///
+/// Both are stored as raw `Fixed` (i32 16.16) so callers can convert
+/// to `f32` via [`crate::header::Fixed::to_f32`] when needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PictLineJustify {
+    pub inter_char_spacing: crate::header::Fixed,
+    pub total_extra: crate::header::Fixed,
+}
+
+/// Decoded `glyphState` (`$002E`) record per Inside Macintosh: Imaging
+/// With QuickDraw §A-3 Table A-2 row 0x002E.
+///
+/// Four 1-byte Boolean fields the QuickDraw text engine consults during
+/// glyph rasterisation. Stored as `bool` values; the on-disk bytes are
+/// `0` for `false`, any non-zero for `true`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PictGlyphState {
+    /// `outline preferred` — request outline glyph shapes when the font
+    /// offers them.
+    pub outline_preferred: bool,
+    /// `preserve glyph` — preserve the glyph metric across scaling.
+    pub preserve_glyph: bool,
+    /// `fractional widths` — honour sub-pixel advance widths.
+    pub fractional_widths: bool,
+    /// `scaling disabled` — skip glyph scaling.
+    pub scaling_disabled: bool,
 }
 
 /// `TxRatio` payload: numerator and denominator `Point`s.

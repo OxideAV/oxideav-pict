@@ -51,7 +51,10 @@ use crate::raster::{
 };
 use crate::reader::Reader;
 use crate::region::{parse_region, Region};
-use crate::state::{Pattern, PictState, PixPattern, RectI32, Rgba, TextRatio};
+use crate::state::{
+    Pattern, PictFontName, PictGlyphState, PictLineJustify, PictState, PixPattern, RectI32, Rgba,
+    TextRatio,
+};
 
 /// Decode a complete PICT byte stream into a single rasterised
 /// [`PictImage`].
@@ -524,18 +527,86 @@ fn dispatch_v2_opcode(
             Ok(true)
         }
         OP_FONT_NAME => {
+            // §A-3 Table A-2 footnote `*`: the `fontName` payload begins
+            // with a `dataLength` word that **includes itself**, so the
+            // bytes-after-length = `dataLength - 2` and the total
+            // additional-data column matches the table's `5 + nameLen`.
+            // Round 236 promotes the walk-past path to a structured
+            // [`PictFontName`] capture into `state.text_state.font_name`.
             let n = r.read_u16()? as usize;
-            if n < 2 {
+            if n < 5 {
+                // dataLength must cover at least itself (2) + oldFontID
+                // (2) + nameLen (1) = 5 bytes minimum.
                 return Err(PictError::invalid(format!(
-                    "fontName dataLength {n} smaller than the size word"
+                    "fontName dataLength {n} smaller than the 5-byte minimum"
                 )));
             }
-            r.skip(n - 2)?;
+            let old_font_id = r.read_i16()?;
+            let name_len = r.read_u8()? as usize;
+            // Bytes already consumed since the length word: oldFontID
+            // (2) + nameLen (1) = 3. Remaining = n - 2 - 3 = n - 5.
+            let remaining = n.saturating_sub(5);
+            if name_len > remaining {
+                return Err(PictError::invalid(format!(
+                    "fontName nameLength {name_len} exceeds remaining {remaining} bytes",
+                )));
+            }
+            let name = r.read_bytes(name_len)?.to_vec();
+            // Skip any padding the producer left at the tail (per the
+            // spec footnote the table cell column is `5 + nameLen`, so
+            // remaining-after-name should be zero, but a producer that
+            // padded for word-alignment inside the record is tolerated).
+            r.skip(remaining - name_len)?;
+            state.text_state.font_name = Some(PictFontName::new(old_font_id, name));
             Ok(true)
         }
-        OP_LINE_JUSTIFY | OP_GLYPH_STATE => {
+        OP_LINE_JUSTIFY => {
+            // §A-3 Table A-2 footnote `†`: `dataLength` is the number of
+            // bytes **after** the length word — should "always be 8"
+            // (the two Fixed-32 fields). Round 236 captures the
+            // intercharacter-spacing + total-extra-width pair into
+            // `state.text_state.line_justify`.
             let n = r.read_u16()? as usize;
-            r.skip(n)?;
+            if n < 8 {
+                return Err(PictError::invalid(format!(
+                    "lineJustify dataLength {n} smaller than the 8-byte payload",
+                )));
+            }
+            let inter = Fixed(r.read_u32()? as i32);
+            let extra = Fixed(r.read_u32()? as i32);
+            // Tolerate trailing bytes the producer left beyond the
+            // 8-byte minimum (§A-3 fixes the field but a v2 stream may
+            // pad).
+            r.skip(n - 8)?;
+            state.text_state.line_justify = Some(PictLineJustify {
+                inter_char_spacing: inter,
+                total_extra: extra,
+            });
+            Ok(true)
+        }
+        OP_GLYPH_STATE => {
+            // §A-3 Table A-2 row `$002E`: `dataLength` word + four
+            // 1-byte Boolean flags. The Additional-data column says 8 —
+            // i.e. dataLength = 6 with two pad bytes, or dataLength = 8
+            // tolerating the producer's choice. Round 236 captures the
+            // four Boolean fields into `state.text_state.glyph_state`.
+            let n = r.read_u16()? as usize;
+            if n < 4 {
+                return Err(PictError::invalid(format!(
+                    "glyphState dataLength {n} smaller than the 4-byte payload",
+                )));
+            }
+            let outline_preferred = r.read_u8()? != 0;
+            let preserve_glyph = r.read_u8()? != 0;
+            let fractional_widths = r.read_u8()? != 0;
+            let scaling_disabled = r.read_u8()? != 0;
+            r.skip(n - 4)?;
+            state.text_state.glyph_state = Some(PictGlyphState {
+                outline_preferred,
+                preserve_glyph,
+                fractional_widths,
+                scaling_disabled,
+            });
             Ok(true)
         }
         OP_BK_PIX_PAT | OP_PN_PIX_PAT | OP_FILL_PIX_PAT => {
@@ -1331,7 +1402,7 @@ fn finalise_canvas(canvas: Canvas, state: &PictState) -> Result<PictImage> {
         pts: None,
         header: None,
         comments: state.comments.clone(),
-        text_state: state.text_state,
+        text_state: state.text_state.clone(),
     })
 }
 

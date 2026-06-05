@@ -9,6 +9,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 236: **Structured `fontName` / `lineJustify` / `glyphState`
+  opcode capture** — Inside Macintosh: Imaging With QuickDraw §A-3
+  Table A-2 lists three v2-only state-mutating opcodes whose payloads
+  carry Script-Manager and font-engine round-trip parameters but had
+  previously been walked past with no further structure:
+  - `fontName` `$002C` — footnote `*`: `dataLength (Integer)` (inclusive
+    of itself), `oldFontID (Integer)`, `nameLength (0..255)`, `name
+    (nameLength bytes)`. Declares the font identity that subsequent
+    text-glyph opcodes belong to.
+  - `lineJustify` `$002D` — footnote `†`: `dataLength = 8` (exclusive
+    of itself), two `Fixed` 16.16 values — intercharacter spacing and
+    total extra spread across the style run. Matches the appendix's
+    worked example `2D 00 08 00 01 00 00 00 0A 00 00`.
+  - `glyphState` `$002E` — `dataLength`-prefixed block carrying four
+    1-byte Booleans (`outline preferred`, `preserve glyph`, `fractional
+    widths`, `scaling disabled`); the encoder writes `dataLength = 6`
+    and two trailing zero pad bytes so the §A-3 8-byte
+    "Additional data size" column is honoured.
+
+  Round 236 captures each payload into the new `PictTextState`
+  fields `font_name: Option<PictFontName>`, `line_justify:
+  Option<PictLineJustify>`, `glyph_state: Option<PictGlyphState>`,
+  surfaced on `PictImage::text_state` / `PictProbe::text_state`.
+  `PictProbe::text_state_op_count` bumps once per occurrence,
+  mirroring round 230's accounting. The rasterisation path is
+  unchanged — these are passive state opcodes — but consumers can now
+  recover the producer's declared font name + Script-Manager line-
+  layout state + glyph-renderer preferences without re-walking the
+  byte stream. `PictTextState` lost its `Copy` impl (the heap-
+  allocated `name: Vec<u8>` on `PictFontName` is the reason) but kept
+  `Clone + Default + PartialEq + Eq`.
+- Round 236: Encoder helpers `build_font_name`, `build_line_justify`,
+  `build_glyph_state` emit the §A-3 on-disk record bytes (opcode word
+  + length-prefixed payload). Chainable `PictBuilder::font_name` /
+  `line_justify` / `glyph_state` wrappers route through the byte
+  builders; `font_name` returns `Err(PictError::InvalidData)` when
+  the name length overflows the on-disk u8 nameLength field (cap = 255
+  bytes). The decoder + probe also reject `fontName` records whose
+  `dataLength` falls below the 5-byte minimum (length + oldFontID +
+  nameLen) and `lineJustify` records whose `dataLength` is below the
+  8-byte Fixed-pair payload.
+- Round 236: 16 synthesis tests in `tests/synth_v2_round236.rs`:
+  fresh-GrafPort defaults (the three new slots start at `None`);
+  byte-layout assertions for every encoder helper including the
+  spec's worked `lineJustify` example; `PictBuilder` round-trip
+  through `parse_pict` for each of the three opcodes (font name +
+  line-justify Fixed values + glyph-state Booleans); "last opcode
+  wins" semantics when the producer emits multiple of the same
+  opcode; probe parity vs decoder; `text_state_op_count` accuracy
+  (3 for a stream with all three opcodes; 0 when none emitted);
+  invalid-stream rejection (`fontName` with `dataLength < 5`). Every
+  byte sequence is traceable back to §A-3 Table A-2 footnotes `*` and
+  `†` and row `$002E`.
+
 - Round 230: **Structured text / pen-mode / highlight state opcodes** —
   Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 (v2) and
   Table A-3 (v1) list a block of state-mutating opcodes whose payloads

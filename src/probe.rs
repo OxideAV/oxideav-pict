@@ -32,7 +32,9 @@ use crate::header::{Fixed, PictHeader};
 use crate::image::PictComment;
 use crate::opcodes::*;
 use crate::reader::Reader;
-use crate::state::{PictTextState, RectI32, Rgba, TextRatio};
+use crate::state::{
+    PictFontName, PictGlyphState, PictLineJustify, PictTextState, RectI32, Rgba, TextRatio,
+};
 
 /// Read-only metadata extracted from a PICT byte stream.
 ///
@@ -504,18 +506,66 @@ fn probe_v2_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             Ok(OpStep::Continue)
         }
         OP_FONT_NAME => {
+            // Round 236 mirrors the decoder's structured `fontName`
+            // capture so probe consumers see the same final-state
+            // snapshot without paying the rasterisation cost. See the
+            // decoder's `OP_FONT_NAME` arm for the §A-3 layout notes.
             let n = r.read_u16()? as usize;
-            if n < 2 {
+            if n < 5 {
                 return Err(PictError::invalid(format!(
-                    "fontName dataLength {n} smaller than the size word"
+                    "fontName dataLength {n} smaller than the 5-byte minimum"
                 )));
             }
-            r.skip(n - 2)?;
+            let old_font_id = r.read_i16()?;
+            let name_len = r.read_u8()? as usize;
+            let remaining = n.saturating_sub(5);
+            if name_len > remaining {
+                return Err(PictError::invalid(format!(
+                    "fontName nameLength {name_len} exceeds remaining {remaining} bytes",
+                )));
+            }
+            let name = r.read_bytes(name_len)?.to_vec();
+            r.skip(remaining - name_len)?;
+            p.text_state.font_name = Some(PictFontName::new(old_font_id, name));
+            p.text_state_op_count += 1;
             Ok(OpStep::Continue)
         }
-        OP_LINE_JUSTIFY | OP_GLYPH_STATE => {
+        OP_LINE_JUSTIFY => {
             let n = r.read_u16()? as usize;
-            r.skip(n)?;
+            if n < 8 {
+                return Err(PictError::invalid(format!(
+                    "lineJustify dataLength {n} smaller than the 8-byte payload",
+                )));
+            }
+            let inter = Fixed(r.read_u32()? as i32);
+            let extra = Fixed(r.read_u32()? as i32);
+            r.skip(n - 8)?;
+            p.text_state.line_justify = Some(PictLineJustify {
+                inter_char_spacing: inter,
+                total_extra: extra,
+            });
+            p.text_state_op_count += 1;
+            Ok(OpStep::Continue)
+        }
+        OP_GLYPH_STATE => {
+            let n = r.read_u16()? as usize;
+            if n < 4 {
+                return Err(PictError::invalid(format!(
+                    "glyphState dataLength {n} smaller than the 4-byte payload",
+                )));
+            }
+            let outline_preferred = r.read_u8()? != 0;
+            let preserve_glyph = r.read_u8()? != 0;
+            let fractional_widths = r.read_u8()? != 0;
+            let scaling_disabled = r.read_u8()? != 0;
+            r.skip(n - 4)?;
+            p.text_state.glyph_state = Some(PictGlyphState {
+                outline_preferred,
+                preserve_glyph,
+                fractional_widths,
+                scaling_disabled,
+            });
+            p.text_state_op_count += 1;
             Ok(OpStep::Continue)
         }
         OP_BK_PAT | OP_PN_PAT | OP_FILL_PAT => {
