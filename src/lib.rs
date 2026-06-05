@@ -1,10 +1,7 @@
 //! Pure-Rust PICT (Apple QuickDraw picture) reader.
 //!
 //! Clean-room implementation of the public **Inside Macintosh: Imaging
-//! With QuickDraw** (Apple, 1994). No Apple QuickDraw source, no
-//! `image` crate's PICT submodule (if any), no Bitmap.framework, no
-//! GIMP PICT plugin, no libavif PICT path, no Wine PICT-conversion
-//! code, no NetPBM `picttoppm` source consulted.
+//! With QuickDraw** (Apple, 1994).
 //!
 //! ## Status
 //!

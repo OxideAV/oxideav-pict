@@ -24,8 +24,7 @@
 //!   mix drawing primitives + raster in the same v2 stream.
 //!
 //! Cross-validation: every output produced by this module decodes
-//! cleanly via [`crate::decoder::parse_pict`] and the v2 outputs pass
-//! through ImageMagick's PICT delegate unchanged.
+//! cleanly via [`crate::decoder::parse_pict`].
 //!
 //! Round 211 adds the **indexed-PixMap** variants of the four BitMap /
 //! PackBitsRect / region opcodes (Inside Macintosh §A-3 footnote `§`:
@@ -313,8 +312,8 @@ pub fn encode_pict_v1(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
 /// pixel data is emitted as a v1 `DirectBitsRect` (opcode `0x9A`),
 /// identical PixMap-header layout to the v2 `0x009A` opcode.
 ///
-/// Preview.app and ImageMagick both accept v1 PICT streams; the format
-/// pre-dates System 7 but is still in wide use for legacy interchange.
+/// The v1 wire shape pre-dates System 7 but is still in wide use for
+/// legacy interchange.
 ///
 /// **Note:** This function does NOT emit a 512-byte launch-stub prefix
 /// because v1 files pre-date the stub convention. If a consuming
