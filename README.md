@@ -32,8 +32,8 @@ colour (white) and returned as the decoded `PictImage`.
 | `0x002C` | **FontName**          | parse → `PictTextState::font_name` (`Option<PictFontName>`; round 236)        |
 | `0x002D` | **LineJustify**       | parse → `PictTextState::line_justify` (`Option<PictLineJustify>`; round 236) |
 | `0x002E` | **GlyphState**        | parse → `PictTextState::glyph_state` (`Option<PictGlyphState>`; round 236)   |
-| `0x0030`-`0x006C` | Frame / Paint / Erase / Invert / Fill of Rect / RoundRect / Oval / Arc | **rasterise via in-crate kernel** |
-| `0x0070`-`0x0074` | Frame / Paint / Erase / Invert / Fill Poly | **rasterise via even-odd scanline** |
+| `0x0030`-`0x006C` | Frame / Paint / Erase / Invert / Fill of Rect / RoundRect / Oval / Arc | **rasterise via in-crate kernel** (Invert verb honours channel-wise NOT across the shape interior — round 252) |
+| `0x0070`-`0x0074` | Frame / Paint / Erase / Invert / Fill Poly | **rasterise via even-odd scanline** (Invert verb honours channel-wise NOT across the polygon interior — round 252) |
 | `0x0080`-`0x0084` | Frame / Paint / Erase / Invert / Fill Rgn | **rasterise (rect bbox + per-row inversion mask)** |
 | `0x0090` | **BitsRect**        | **decode -> RGBA** (1-bpp BitMap, raw rows OR indexed PixMap, raw rows when `rowBytes` high bit is set; round 186) |
 | `0x0091` | **BitsRgn**         | **decode -> RGBA** (BitsRect + clip region; indexed PixMap also honoured; round 186) |
@@ -702,6 +702,59 @@ arithmetic transfer modes (32..=49 — `blend`, `addPin`, `addOver`,
 `grayishTextOr`) are still captured-but-not-honoured per round 230 —
 those need a Color QuickDraw colour-arithmetic pipeline on top of the
 per-cell write path round 247 establishes.
+
+## `Invert*` verbs on round-rect / oval / arc / polygon (round 252)
+
+Inside Macintosh: Imaging With QuickDraw §3 ("QuickDraw Drawing
+Reference") and §A-3 Table A-2 define five invert verbs: `InvertRect`
+(`$0033`), `InvertRRect` (`$0043`), `InvertOval` (`$0053`),
+`InvertArc` (`$0063`), `InvertPoly` (`$0073`). Per §3, each *"inverts
+the destination pixel"* over the shape's interior — on a 1-bit display
+the literal Boolean NOT; on this crate's true-colour RGBA canvas a
+channel-wise NOT per RGB channel (alpha preserved), matching the
+round-2 `invert_rect` helper that already covered the rectangle verb.
+
+Pre-r252 the round-rect / oval / arc / polygon dispatcher routed verb 3
+through the *frame* helper rather than inverting the shape's interior
+(`apply_rrect_verb` carried the explicit *"Round 2: just frame"*
+placeholder comment). Round 252 closes the gap with four new raster
+helpers — [`raster::invert_oval`], [`raster::invert_round_rect`],
+[`raster::invert_arc`], [`raster::invert_polygon`] — each iterating
+the same per-row coverage as its matching `fill_*` sibling so the §3
+self-inverse contract holds bit-exact: applying `InvertOval` twice on
+the same geometry restores the canvas pixel-for-pixel.
+
+The Same-shape opcode family (`InvertSameRRect $004B`, `InvertSameOval
+$005B`, `InvertSameArc $006B`) and the v1 byte-opcode variants (`$43`
+/ `$53` / `$63`) route through the shared `apply_*_verb` dispatchers
+and pick up the new behaviour automatically. The polygon Same opcode
+(`InvertSamePoly $007B`) is marked *"(Not yet implemented)"* in §A-3
+Table A-2 and remains a no-op per the round-205 contract.
+
+```rust
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::parse_pict;
+
+let mut b = PictBuilder::new(0, 0, 20, 20);
+// Wash the canvas mid-grey.
+b.fg_color(0x80, 0x80, 0x80)
+    .bg_color(0x80, 0x80, 0x80)
+    .pn_mode(8) // patCopy
+    .pen_pattern([0xFF; 8])
+    .rect(Verb::Paint, 0, 0, 20, 20);
+// Invert the ellipse interior — every covered pixel takes the
+// channel-wise NOT of the mid-grey (0x7F 0x7F 0x7F).
+b.oval(Verb::Invert, 2, 2, 18, 18);
+let img = parse_pict(&b.finish())?;
+let off = (10 * img.width as usize + 10) * 4;
+assert_eq!(&img.data[off..off + 3], &[0x7F, 0x7F, 0x7F]);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+A new [`raster::Canvas::invert_span`] primitive carries the channel-
+wise-NOT-with-clip-honoured shape that the four shape helpers iterate
+through. The arithmetic transfer modes (32..=49) still need a separate
+round to honour the per-pixel `OpColor` arithmetic blend on the canvas.
 
 ## Structured `fontName` / `lineJustify` / `glyphState` (round 236)
 

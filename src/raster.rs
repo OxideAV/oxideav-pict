@@ -181,6 +181,40 @@ impl Canvas {
         }
     }
 
+    /// Invert a horizontal span `[x0, x1)` at row `y` per the §3-44
+    /// QuickDraw invert-verb contract — every covered pixel has its RGB
+    /// channels bitwise-NOTed (alpha preserved). Coords are clipped to
+    /// the canvas; out-of-range spans are no-ops. Pixels outside the
+    /// active clip mask (if any) are skipped.
+    pub fn invert_span(&mut self, y: i32, x0: i32, x1: i32) {
+        if y < 0 || (y as u32) >= self.height {
+            return;
+        }
+        let lo = x0.max(0).min(self.width as i32);
+        let hi = x1.max(0).min(self.width as i32);
+        if lo >= hi {
+            return;
+        }
+        let row = y as u32 * self.width;
+        let mut any = false;
+        for x in lo..hi {
+            let idx = (row + x as u32) as usize;
+            if let Some(mask) = &self.clip {
+                if !mask[idx] {
+                    continue;
+                }
+            }
+            let off = idx * 4;
+            self.data[off] = !self.data[off];
+            self.data[off + 1] = !self.data[off + 1];
+            self.data[off + 2] = !self.data[off + 2];
+            any = true;
+        }
+        if any {
+            self.dirty = true;
+        }
+    }
+
     /// Composite an externally-decoded RGBA raster into the canvas at
     /// destination rectangle `(dst_left, dst_top, dst_right, dst_bot)`.
     /// `src_rgba` is `src_w × src_h` packed RGBA. If src and dst sizes
@@ -1667,6 +1701,219 @@ pub fn frame_rect_pix_pattern_thick(
             plot_pix_pattern(canvas, right - 1 - dx, y, pp);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Invert-verb shapes — round 252.
+// ---------------------------------------------------------------------------
+//
+// Inside Macintosh: Imaging With QuickDraw §3 ("QuickDraw Drawing
+// Reference") `InvertRect` / `InvertOval` / `InvertRoundRect` /
+// `InvertArc` / `InvertPoly` (and the corresponding §A-3 Table A-2
+// opcodes `$0033` / `$0053` / `$0043` / `$0063` / `$0073`) toggle every
+// pixel in the shape's interior — on a 1-bit display, the literal
+// Boolean NOT; on our true-colour canvas, channel-wise NOT per
+// `invert_rgba`. Round 252 wires the rounded-rect / oval / arc / poly
+// verbs to honour the spec; the rect verb already routed through
+// `invert_rect` at the decoder level (round 2).
+//
+// Each helper computes the same per-row coverage the matching `fill_*`
+// helper produces, then inverts the covered spans instead of writing a
+// fixed colour. This keeps the geometric kernel exactly synchronised
+// with the fill side so a round-trip (`InvertVerb` then `InvertVerb`
+// again) restores the canvas pixel-for-pixel — the §3 spec contract.
+
+/// Invert every pixel of the filled-ellipse interior fitted to
+/// `(top, left, bottom, right)` per Inside Macintosh §3 `InvertOval`.
+pub fn invert_oval(canvas: &mut Canvas, top: i32, left: i32, bottom: i32, right: i32) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    let h = (bottom - top) as usize;
+    let mut min = vec![i32::MAX; h];
+    let mut max = vec![i32::MIN; h];
+    walk_ellipse(top, left, bottom, right, |x, y| {
+        let row = y - top;
+        if row < 0 || (row as usize) >= h {
+            return;
+        }
+        let r = row as usize;
+        if x < min[r] {
+            min[r] = x;
+        }
+        if x > max[r] {
+            max[r] = x;
+        }
+    });
+    for (i, (lo, hi)) in min.iter().zip(max.iter()).enumerate() {
+        if *lo == i32::MAX {
+            continue;
+        }
+        canvas.invert_span(top + i as i32, *lo, *hi + 1);
+    }
+}
+
+/// Invert every pixel of the filled-round-rectangle interior per
+/// Inside Macintosh §3 `InvertRoundRect`.
+pub fn invert_round_rect(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    oval_w: i32,
+    oval_h: i32,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    let ow = oval_w.max(0).min(right - left);
+    let oh = oval_h.max(0).min(bottom - top);
+    let ry = oh / 2;
+    // Middle band: full width.
+    for y in (top + ry)..(bottom - ry) {
+        canvas.invert_span(y, left, right);
+    }
+    // Top + bottom strips: width modulated by corner ellipses.
+    let mut top_min = vec![i32::MAX; ry.max(0) as usize];
+    let mut top_max = vec![i32::MIN; ry.max(0) as usize];
+    walk_ellipse(top, left, top + oh, left + ow, |x, y| {
+        let row = y - top;
+        if row < 0 || row >= ry {
+            return;
+        }
+        if x < top_min[row as usize] {
+            top_min[row as usize] = x;
+        }
+    });
+    walk_ellipse(top, right - ow, top + oh, right, |x, y| {
+        let row = y - top;
+        if row < 0 || row >= ry {
+            return;
+        }
+        if x > top_max[row as usize] {
+            top_max[row as usize] = x;
+        }
+    });
+    for (i, (lo, hi)) in top_min.iter().zip(top_max.iter()).enumerate() {
+        if *lo == i32::MAX || *hi == i32::MIN {
+            continue;
+        }
+        canvas.invert_span(top + i as i32, *lo, *hi + 1);
+    }
+    let mut bot_min = vec![i32::MAX; ry.max(0) as usize];
+    let mut bot_max = vec![i32::MIN; ry.max(0) as usize];
+    walk_ellipse(bottom - oh, left, bottom, left + ow, |x, y| {
+        let row = bottom - 1 - y;
+        if row < 0 || row >= ry {
+            return;
+        }
+        if x < bot_min[row as usize] {
+            bot_min[row as usize] = x;
+        }
+    });
+    walk_ellipse(bottom - oh, right - ow, bottom, right, |x, y| {
+        let row = bottom - 1 - y;
+        if row < 0 || row >= ry {
+            return;
+        }
+        if x > bot_max[row as usize] {
+            bot_max[row as usize] = x;
+        }
+    });
+    for (i, (lo, hi)) in bot_min.iter().zip(bot_max.iter()).enumerate() {
+        if *lo == i32::MAX || *hi == i32::MIN {
+            continue;
+        }
+        canvas.invert_span(bottom - 1 - i as i32, *lo, *hi + 1);
+    }
+}
+
+/// Invert every pixel of the polygon interior (even-odd parity) per
+/// Inside Macintosh §3 `InvertPoly`. Vertices in `(x, y)` order; the
+/// polygon is implicitly closed.
+pub fn invert_polygon(canvas: &mut Canvas, vertices: &[(i32, i32)]) {
+    if vertices.len() < 3 {
+        return;
+    }
+    let mut y_min = i32::MAX;
+    let mut y_max = i32::MIN;
+    for &(_, y) in vertices {
+        if y < y_min {
+            y_min = y;
+        }
+        if y > y_max {
+            y_max = y;
+        }
+    }
+    if y_max < 0 || y_min >= canvas.height as i32 {
+        return;
+    }
+    let scan_lo = y_min.max(0);
+    let scan_hi = y_max.min(canvas.height as i32 - 1);
+    let n = vertices.len();
+    for y in scan_lo..=scan_hi {
+        let yf = y as f64 + 0.5;
+        let mut xs = Vec::new();
+        for i in 0..n {
+            let (x0, y0) = vertices[i];
+            let (x1, y1) = vertices[(i + 1) % n];
+            let y0f = y0 as f64;
+            let y1f = y1 as f64;
+            if (y0f <= yf && y1f > yf) || (y1f <= yf && y0f > yf) {
+                let t = (yf - y0f) / (y1f - y0f);
+                let x = x0 as f64 + t * (x1 - x0) as f64;
+                xs.push(x);
+            }
+        }
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+        let mut i = 0;
+        while i + 1 < xs.len() {
+            let x0 = xs[i].floor() as i32;
+            let x1 = (xs[i + 1].ceil() as i32).max(x0 + 1);
+            canvas.invert_span(y, x0, x1);
+            i += 2;
+        }
+    }
+}
+
+/// Invert every pixel of the filled-arc wedge per Inside Macintosh §3
+/// `InvertArc`. Mirrors [`fill_arc`]'s polygon-approximation shape
+/// (centre + sampled boundary along the wedge).
+pub fn invert_arc(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    start_deg: i32,
+    arc_deg: i32,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    let cx = left as f64 + (right - left - 1) as f64 / 2.0;
+    let cy = top as f64 + (bottom - top - 1) as f64 / 2.0;
+    let a = (right - left - 1) as f64 / 2.0;
+    let b = (bottom - top - 1) as f64 / 2.0;
+    if a < 0.0 || b < 0.0 {
+        return;
+    }
+    let (lo, hi) = arc_range(start_deg, arc_deg);
+    let n = (a.max(b) * 4.0).max(32.0) as i32;
+    let mut poly = Vec::with_capacity(n as usize + 2);
+    poly.push((cx.round() as i32, cy.round() as i32));
+    for i in 0..=n {
+        let frac = i as f64 / n as f64;
+        let deg = lo + frac * (hi - lo);
+        let qd_rad = deg.to_radians();
+        let mx = qd_rad.sin();
+        let my = -qd_rad.cos();
+        let x = (cx + a * mx).round() as i32;
+        let y = (cy + b * my).round() as i32;
+        poly.push((x, y));
+    }
+    invert_polygon(canvas, &poly);
 }
 
 #[cfg(test)]

@@ -47,7 +47,8 @@ use crate::raster::{
     fill_polygon_pix_pattern, fill_rect, fill_rect_pattern_mode, fill_rect_pix_pattern,
     fill_round_rect_pattern_mode, fill_round_rect_pix_pattern, frame_arc, frame_oval_thick,
     frame_polygon, frame_rect, frame_rect_pattern_thick_mode, frame_rect_pix_pattern_thick,
-    frame_round_rect, line_thick as draw_line_thick, Canvas, PatternMode,
+    frame_round_rect, invert_arc, invert_oval, invert_polygon, invert_round_rect,
+    line_thick as draw_line_thick, Canvas, PatternMode,
 };
 use crate::reader::Reader;
 use crate::region::{parse_region, Region};
@@ -998,10 +999,11 @@ fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: R
             }
         }
         3 => {
-            // Approximate invert as "frame for outline + nothing for
-            // interior" — true invert needs per-pixel toggle and we
-            // don't have an alpha pipeline. Round 2: just frame.
-            frame_round_rect(canvas, top, left, bottom, right, ow, oh, state.fg)
+            // §3-44 InvertRoundRect / §A-3 Table A-2 `$0043`: channel-
+            // wise NOT every pixel of the rounded-rect interior. Round
+            // 252 swaps the round-2 frame-only placeholder for the spec
+            // contract — round-trip (invert twice) restores the canvas.
+            invert_round_rect(canvas, top, left, bottom, right, ow, oh)
         }
         4 => {
             if let Some(pp) = &state.fill_pix_pat {
@@ -1066,7 +1068,12 @@ fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
                 );
             }
         }
-        3 => frame_oval_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
+        3 => {
+            // §3-44 InvertOval / §A-3 Table A-2 `$0053`: channel-wise
+            // NOT every pixel of the ellipse interior. Round 252
+            // swaps the round-2 frame-only placeholder.
+            invert_oval(canvas, top, left, bottom, right);
+        }
         4 => {
             if let Some(pp) = &state.fill_pix_pat {
                 fill_oval_pix_pattern(canvas, top, left, bottom, right, pp);
@@ -1101,7 +1108,10 @@ fn apply_arc_verb(
         0 => frame_arc(canvas, top, left, bottom, right, start, arc, state.fg),
         1 => fill_arc(canvas, top, left, bottom, right, start, arc, state.fg),
         2 => fill_arc(canvas, top, left, bottom, right, start, arc, state.bg),
-        3 => frame_arc(canvas, top, left, bottom, right, start, arc, state.fg),
+        // §3-44 InvertArc / §A-3 Table A-2 `$0063`: channel-wise NOT
+        // every pixel of the arc wedge interior. Round 252 swaps the
+        // round-2 frame-only placeholder.
+        3 => invert_arc(canvas, top, left, bottom, right, start, arc),
         4 => fill_arc(canvas, top, left, bottom, right, start, arc, state.fg),
         _ => {}
     }
@@ -1125,7 +1135,10 @@ fn apply_poly_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, verts: &
                 fill_polygon_pattern_mode(canvas, verts, state.back_pat, state.bg, state.fg, mode);
             }
         }
-        3 => frame_polygon(canvas, verts, state.fg),
+        // §3-44 InvertPoly / §A-3 Table A-2 `$0073`: channel-wise NOT
+        // every pixel of the even-odd polygon interior. Round 252 swaps
+        // the round-2 frame-only placeholder.
+        3 => invert_polygon(canvas, verts),
         4 => {
             if let Some(pp) = &state.fill_pix_pat {
                 fill_polygon_pix_pattern(canvas, verts, pp);

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 252: **`Invert*` verbs honoured on round-rect / oval / arc /
+  polygon shapes.** Inside Macintosh: Imaging With QuickDraw §3
+  ("QuickDraw Drawing Reference") and §A-3 Table A-2 specify five
+  invert verbs — `InvertRect $0033`, `InvertRRect $0043`, `InvertOval
+  $0053`, `InvertArc $0063`, `InvertPoly $0073` — each *"inverts the
+  destination pixel"* across the shape's interior. The round-2
+  dispatcher routed only `InvertRect` through a true pixel invert
+  (`invert_rect`); the other four collapsed onto the *frame* helper as
+  a documented placeholder. Round 252 wires the missing four through
+  new spec-correct raster helpers (`invert_oval`, `invert_round_rect`,
+  `invert_arc`, `invert_polygon`) that share the same per-row coverage
+  shape as their `fill_*` siblings so the §3 self-inverse contract
+  holds (invert twice on the same geometry restores the canvas pixel-
+  for-pixel). The Same-shape companion opcodes (`$004B`, `$005B`,
+  `$006B`) and the v1 byte-opcode variants (`$43`, `$53`, `$63`) pick
+  up the new behaviour through the existing shared `apply_*_verb`
+  dispatchers. New `Canvas::invert_span` helper carries the
+  channel-wise-NOT primitive that the four shape helpers iterate over.
 - Round 247: **`PnMode` Boolean pattern transfer modes honoured on the
   rasteriser.** Inside Macintosh: Imaging With QuickDraw §3
   ("QuickDraw Drawing Reference") `PenMode` procedure (book page 3-44)
