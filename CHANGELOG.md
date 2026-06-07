@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 247: **`PnMode` Boolean pattern transfer modes honoured on the
+  rasteriser.** Inside Macintosh: Imaging With QuickDraw §3
+  ("QuickDraw Drawing Reference") `PenMode` procedure (book page 3-44)
+  defines eight Boolean pattern modes (`patCopy = 8` … `notPatBic = 15`)
+  consumed by every pattern-fill verb. Round 230 captured the
+  `PnMode $0008` payload into `PictTextState::pn_mode` but the
+  rasteriser still wrote every cell as if the mode were `patCopy`.
+  Round 247 routes `state.text_state.pn_mode` through a new
+  `PatternMode` enum into every patterned `frame` / `paint` / `erase` /
+  `fill` of `rect` / `round-rect` / `oval` / `poly` / `region` verb,
+  so the §3-44 per-cell Boolean op is honoured at draw time. The
+  default `pn_mode = 8` (`patCopy`) collapses to the round-8 solid-fg
+  / solid-bg fast paths bit-for-bit; non-default modes go through the
+  per-cell read-modify-write path with `Canvas::pixel_at` for the
+  `patXor` / `notPatXor` destination-invert cases. Codes outside
+  `8..=15` (including the §3-44 source modes `0..=7` and the §4-38
+  arithmetic transfer modes `32..=49`) fall back to `patCopy`. New
+  exports: `PatternMode`, `PatternMode::from_pn_mode`,
+  `PatternMode::is_pat_copy`, plus mode-aware raster primitives
+  (`fill_rect_pattern_mode`, `fill_oval_pattern_mode`,
+  `fill_round_rect_pattern_mode`, `fill_polygon_pattern_mode`,
+  `frame_rect_pattern_thick_mode`, `plot_region_cell_mode`) alongside
+  the original `*_pattern` shapes. Sixteen new `synth_v2_round247`
+  tests cover every mode + verb (rect / oval / poly / region) + the
+  `fresh_graf_port` default.
+
 - Round 236: **Structured `fontName` / `lineJustify` / `glyphState`
   opcode capture** — Inside Macintosh: Imaging With QuickDraw §A-3
   Table A-2 lists three v2-only state-mutating opcodes whose payloads

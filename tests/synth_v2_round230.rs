@@ -317,7 +317,13 @@ fn probe_counts_every_state_opcode_emission() {
 #[test]
 fn probe_and_decoder_text_state_agree() {
     let mut b = PictBuilder::new(0, 0, 4, 4);
-    b.tx_font(0x4242).pn_mode(13).hilite_color(0x7F, 0x80, 0x81);
+    // pn_mode = 8 (patCopy, §3-44 default) keeps the §247 transfer-mode
+    // path on the round-8 solid-fg fast path so paint_canvas still
+    // emits visible pixels here; the assertion is on text_state
+    // round-trip parity between probe + decoder, not on the canvas
+    // contents (transfer-mode-aware rasterisation is covered by the
+    // round-247 suite).
+    b.tx_font(0x4242).pn_mode(8).hilite_color(0x7F, 0x80, 0x81);
     paint_canvas(&mut b);
     let bytes = b.finish();
 

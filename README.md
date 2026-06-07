@@ -625,6 +625,84 @@ not yet honour the arithmetic transfer modes on the canvas — that is a
 follow-up round on top of `state.text_state.pn_mode` /
 `state.text_state.tx_mode` dispatch.
 
+## Boolean pattern transfer modes (round 247 — `PnMode` honoured)
+
+Inside Macintosh: Imaging With QuickDraw §3 ("QuickDraw Drawing
+Reference") `PenMode` procedure (book page 3-44) defines eight Boolean
+pattern transfer modes (`patCopy = 8` … `notPatBic = 15`) consumed by
+every pattern-fill verb. Round 230 captured `PnMode $0008` /
+`$08` into [`PictTextState::pn_mode`] but the rasteriser still wrote
+every cell as if the mode were `patCopy`. Round 247 wires
+[`PatternMode::from_pn_mode`] into every patterned `frame` / `paint` /
+`erase` / `fill` of `rect` / `round-rect` / `oval` / `poly` / `region`
+verb so the §3-44 table is honoured per-cell:
+
+| Mode         | Code | Pattern-bit-1 cell    | Pattern-bit-0 cell    |
+| ------------ | ---- | --------------------- | --------------------- |
+| `patCopy`    | 8    | write `fg`            | write `bg`            |
+| `patOr`      | 9    | write `fg`            | unchanged             |
+| `patXor`     | 10   | invert destination    | unchanged             |
+| `patBic`     | 11   | write `bg`            | unchanged             |
+| `notPatCopy` | 12   | write `bg`            | write `fg`            |
+| `notPatOr`   | 13   | unchanged             | write `fg`            |
+| `notPatXor`  | 14   | unchanged             | invert destination    |
+| `notPatBic`  | 15   | unchanged             | write `bg`            |
+
+Codes outside `8..=15` (including the source modes `0..=7` and the
+arithmetic transfer modes `32..=49`) fall back to `patCopy` —
+[`PatternMode::from_pn_mode`] is total. The §3-44 default is
+`patCopy`, matching the fresh-GrafPort `PictTextState::pn_mode = 8`
+value the [`PictTextState::fresh_graf_port`] constructor sets, so a
+producer that never emits a `PnMode` opcode renders bit-for-bit
+identically to the pre-round-247 dispatcher.
+
+The invert is implemented as bit-NOT on every RGB channel (alpha
+preserved). On a 1-bit display the §3 spec defines invert as the literal
+Boolean NOT; on our true-colour RGBA canvas channel-wise NOT preserves
+the §3 contract: an inverted black is white, an inverted middle-grey is
+its complement, and the operation is its own inverse so `patXor` twice
+returns the destination unchanged.
+
+```rust
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::{parse_pict, PatternMode};
+
+const HSTRIPE: [u8; 8] = [0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00];
+
+// Paint the destination red, then notPatOr-paint with the horizontal-
+// stripe pattern: the on-rows stay red, the off-rows become green.
+let mut b = PictBuilder::new(0, 0, 2, 2);
+b.fg_color(0xFF, 0, 0).bg_color(0xFF, 0, 0)
+    .pn_mode(8)               // patCopy wash
+    .pen_pattern([0xFF; 8])
+    .rect(Verb::Paint, 0, 0, 2, 2);
+b.fg_color(0, 0xFF, 0).bg_color(0, 0, 0xFF)
+    .pn_mode(13)              // notPatOr
+    .pen_pattern(HSTRIPE)
+    .rect(Verb::Paint, 0, 0, 2, 2);
+
+let img = parse_pict(&b.finish())?;
+// Row 0 (on bits) → destination unchanged.
+assert_eq!(&img.data[0..3], &[0xFF, 0, 0]);
+// Row 1 (off bits) → fg.
+assert_eq!(&img.data[2 * 4..2 * 4 + 3], &[0, 0xFF, 0]);
+
+assert_eq!(PatternMode::from_pn_mode(13), PatternMode::NotPatOr);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Coverage scope: round 247 honours `PnMode` for the **pattern-fill**
+verbs (paint / erase / fill of every shape, plus the patterned
+thick-frame variant). The §3-44 source modes (`srcCopy = 0` …
+`notSrcBic = 7`) apply to `CopyBits` rasters (DirectBits / PackBits)
+which always render `srcCopy` in this crate — wiring `TxMode` /
+`pnMode srcCopy` through to the blit path is a separate concern. The
+arithmetic transfer modes (32..=49 — `blend`, `addPin`, `addOver`,
+`subPin`, `addMax`, `subOver`, `addMin`, `transparent`, `hilite`,
+`grayishTextOr`) are still captured-but-not-honoured per round 230 —
+those need a Color QuickDraw colour-arithmetic pipeline on top of the
+per-cell write path round 247 establishes.
+
 ## Structured `fontName` / `lineJustify` / `glyphState` (round 236)
 
 Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 footnotes `*`
@@ -709,10 +787,20 @@ the reason), but kept `Clone + Default + PartialEq + Eq`.
 * **Text glyphs.** `LongText` / `DH/DV/DHDVText` are walked past but
   not rasterised — a TrueType engine is a separate round.
 * **Arithmetic transfer modes on the canvas.** Round 230 captures
-  `TxMode` / `PnMode` / `OpColor` into `text_state`, but the
-  arithmetic transfer modes (`blend`, `addPin`, `addOver`, `subPin`,
-  `addMax`, `subOver`, `addMin`) are not yet honoured on the
-  rasteriser — every draw still uses the `srcCopy` default.
+  `TxMode` / `PnMode` / `OpColor` into `text_state` and round 247
+  honours the Boolean pattern modes (`patCopy = 8` … `notPatBic = 15`)
+  for every patterned shape verb. The arithmetic transfer modes
+  (`blend = 32`, `addPin = 33`, `addOver = 34`, `subPin = 35`,
+  `transparent = 36`, `addMax = 37`, `subOver = 38`, `adMin = 39`,
+  `grayishTextOr = 49`) per Inside Macintosh §4 ("Color QuickDraw")
+  pages 4-38..40 are still captured-but-not-honoured — they need a
+  Color QuickDraw colour-arithmetic pipeline + the `OpColor` weight
+  / pin colour threaded into every per-cell write.
+* **`TxMode` / source transfer modes on rasters.** §3-44 source modes
+  (`srcCopy = 0` … `notSrcBic = 7`) apply to `CopyBits` rasters
+  (DirectBits / PackBits) which still render `srcCopy` here — wiring
+  `state.text_state.tx_mode` through `blit` is a separate concern from
+  the round-247 pattern path.
 * **CompressedQuickTime decode.** The opcode is parsed (length-prefixed
   payload skipped cleanly so the surrounding decode keeps going), but
   the embedded image (typically JPEG) is not decoded — that needs

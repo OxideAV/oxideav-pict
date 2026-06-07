@@ -25,11 +25,11 @@
 //! subsequent row, until another pair on a later row toggles them
 //! back.
 //!
-//! See the official write-up in
-//! <https://www.fileformat.info/format/macpict/egff.htm> for the
-//! traditional Apple-style description; the round-2 implementation
-//! here handles the rectangular case (overwhelming majority of real-
-//! world PICTs) plus the basic per-row inversion-pairs case.
+//! The round-2 implementation here handles the rectangular case
+//! (the common shape — a single-rectangle region collapses to
+//! `rgnSize = 10` with `bbox` and no inversion data) plus the basic
+//! per-row inversion-pairs case per the §A-3 `Rgn` data-type
+//! description (Table A-1).
 
 use crate::error::{PictError, Result};
 use crate::reader::Reader;

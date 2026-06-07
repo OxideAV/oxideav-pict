@@ -43,11 +43,11 @@ use crate::image::{PictComment, PictImage, PictPixelFormat};
 use crate::opcodes::*;
 use crate::packbits;
 use crate::raster::{
-    fill_arc, fill_oval_pattern, fill_oval_pix_pattern, fill_polygon_pattern,
-    fill_polygon_pix_pattern, fill_rect, fill_rect_pattern, fill_rect_pix_pattern,
-    fill_round_rect_pattern, fill_round_rect_pix_pattern, frame_arc, frame_oval_thick,
-    frame_polygon, frame_rect, frame_rect_pattern_thick, frame_rect_pix_pattern_thick,
-    frame_round_rect, line_thick as draw_line_thick, Canvas,
+    fill_arc, fill_oval_pattern_mode, fill_oval_pix_pattern, fill_polygon_pattern_mode,
+    fill_polygon_pix_pattern, fill_rect, fill_rect_pattern_mode, fill_rect_pix_pattern,
+    fill_round_rect_pattern_mode, fill_round_rect_pix_pattern, frame_arc, frame_oval_thick,
+    frame_polygon, frame_rect, frame_rect_pattern_thick_mode, frame_rect_pix_pattern_thick,
+    frame_round_rect, line_thick as draw_line_thick, Canvas, PatternMode,
 };
 use crate::reader::Reader;
 use crate::region::{parse_region, Region};
@@ -876,12 +876,13 @@ fn read_rgb16(r: &mut Reader<'_>) -> Result<(u16, u16, u16)> {
 fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
     let (ph, pv) = state.pen_size;
+    let mode = PatternMode::from_pn_mode(state.text_state.pn_mode);
     match opcode & 0x000F {
         0 => {
             if let Some(pp) = &state.pen_pix_pat {
                 frame_rect_pix_pattern_thick(canvas, top, left, bottom, right, ph, pv, pp);
             } else {
-                frame_rect_pattern_thick(
+                frame_rect_pattern_thick_mode(
                     canvas,
                     top,
                     left,
@@ -892,6 +893,7 @@ fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
                     state.pen_pat,
                     state.fg,
                     state.bg,
+                    mode,
                 );
             }
         }
@@ -899,7 +901,7 @@ fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
             if let Some(pp) = &state.pen_pix_pat {
                 fill_rect_pix_pattern(canvas, top, left, bottom, right, pp);
             } else {
-                fill_rect_pattern(
+                fill_rect_pattern_mode(
                     canvas,
                     top,
                     left,
@@ -908,6 +910,7 @@ fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
                     state.pen_pat,
                     state.fg,
                     state.bg,
+                    mode,
                 );
             }
         }
@@ -915,7 +918,7 @@ fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
             if let Some(pp) = &state.back_pix_pat {
                 fill_rect_pix_pattern(canvas, top, left, bottom, right, pp);
             } else {
-                fill_rect_pattern(
+                fill_rect_pattern_mode(
                     canvas,
                     top,
                     left,
@@ -924,6 +927,7 @@ fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
                     state.back_pat,
                     state.bg,
                     state.fg,
+                    mode,
                 );
             }
         }
@@ -932,7 +936,7 @@ fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
             if let Some(pp) = &state.fill_pix_pat {
                 fill_rect_pix_pattern(canvas, top, left, bottom, right, pp);
             } else {
-                fill_rect_pattern(
+                fill_rect_pattern_mode(
                     canvas,
                     top,
                     left,
@@ -941,6 +945,7 @@ fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
                     state.fill_pat,
                     state.fg,
                     state.bg,
+                    mode,
                 );
             }
         }
@@ -951,13 +956,14 @@ fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
 fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
     let (ow, oh) = state.oval_size;
+    let mode = PatternMode::from_pn_mode(state.text_state.pn_mode);
     match opcode & 0x000F {
         0 => frame_round_rect(canvas, top, left, bottom, right, ow, oh, state.fg),
         1 => {
             if let Some(pp) = &state.pen_pix_pat {
                 fill_round_rect_pix_pattern(canvas, top, left, bottom, right, ow, oh, pp);
             } else {
-                fill_round_rect_pattern(
+                fill_round_rect_pattern_mode(
                     canvas,
                     top,
                     left,
@@ -968,6 +974,7 @@ fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: R
                     state.pen_pat,
                     state.fg,
                     state.bg,
+                    mode,
                 );
             }
         }
@@ -975,7 +982,7 @@ fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: R
             if let Some(pp) = &state.back_pix_pat {
                 fill_round_rect_pix_pattern(canvas, top, left, bottom, right, ow, oh, pp);
             } else {
-                fill_round_rect_pattern(
+                fill_round_rect_pattern_mode(
                     canvas,
                     top,
                     left,
@@ -986,6 +993,7 @@ fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: R
                     state.back_pat,
                     state.bg,
                     state.fg,
+                    mode,
                 );
             }
         }
@@ -999,7 +1007,7 @@ fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: R
             if let Some(pp) = &state.fill_pix_pat {
                 fill_round_rect_pix_pattern(canvas, top, left, bottom, right, ow, oh, pp);
             } else {
-                fill_round_rect_pattern(
+                fill_round_rect_pattern_mode(
                     canvas,
                     top,
                     left,
@@ -1010,6 +1018,7 @@ fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: R
                     state.fill_pat,
                     state.fg,
                     state.bg,
+                    mode,
                 );
             }
         }
@@ -1020,13 +1029,14 @@ fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: R
 fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
     let (ph, pv) = state.pen_size;
+    let mode = PatternMode::from_pn_mode(state.text_state.pn_mode);
     match opcode & 0x000F {
         0 => frame_oval_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
         1 => {
             if let Some(pp) = &state.pen_pix_pat {
                 fill_oval_pix_pattern(canvas, top, left, bottom, right, pp);
             } else {
-                fill_oval_pattern(
+                fill_oval_pattern_mode(
                     canvas,
                     top,
                     left,
@@ -1035,6 +1045,7 @@ fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
                     state.pen_pat,
                     state.fg,
                     state.bg,
+                    mode,
                 );
             }
         }
@@ -1042,7 +1053,7 @@ fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
             if let Some(pp) = &state.back_pix_pat {
                 fill_oval_pix_pattern(canvas, top, left, bottom, right, pp);
             } else {
-                fill_oval_pattern(
+                fill_oval_pattern_mode(
                     canvas,
                     top,
                     left,
@@ -1051,6 +1062,7 @@ fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
                     state.back_pat,
                     state.bg,
                     state.fg,
+                    mode,
                 );
             }
         }
@@ -1059,7 +1071,7 @@ fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
             if let Some(pp) = &state.fill_pix_pat {
                 fill_oval_pix_pattern(canvas, top, left, bottom, right, pp);
             } else {
-                fill_oval_pattern(
+                fill_oval_pattern_mode(
                     canvas,
                     top,
                     left,
@@ -1068,6 +1080,7 @@ fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
                     state.fill_pat,
                     state.fg,
                     state.bg,
+                    mode,
                 );
             }
         }
@@ -1095,20 +1108,21 @@ fn apply_arc_verb(
 }
 
 fn apply_poly_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, verts: &[(i32, i32)]) {
+    let mode = PatternMode::from_pn_mode(state.text_state.pn_mode);
     match opcode & 0x000F {
         0 => frame_polygon(canvas, verts, state.fg),
         1 => {
             if let Some(pp) = &state.pen_pix_pat {
                 fill_polygon_pix_pattern(canvas, verts, pp);
             } else {
-                fill_polygon_pattern(canvas, verts, state.pen_pat, state.fg, state.bg);
+                fill_polygon_pattern_mode(canvas, verts, state.pen_pat, state.fg, state.bg, mode);
             }
         }
         2 => {
             if let Some(pp) = &state.back_pix_pat {
                 fill_polygon_pix_pattern(canvas, verts, pp);
             } else {
-                fill_polygon_pattern(canvas, verts, state.back_pat, state.bg, state.fg);
+                fill_polygon_pattern_mode(canvas, verts, state.back_pat, state.bg, state.fg, mode);
             }
         }
         3 => frame_polygon(canvas, verts, state.fg),
@@ -1116,7 +1130,7 @@ fn apply_poly_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, verts: &
             if let Some(pp) = &state.fill_pix_pat {
                 fill_polygon_pix_pattern(canvas, verts, pp);
             } else {
-                fill_polygon_pattern(canvas, verts, state.fill_pat, state.fg, state.bg);
+                fill_polygon_pattern_mode(canvas, verts, state.fill_pat, state.fg, state.bg, mode);
             }
         }
         _ => {}
@@ -1147,8 +1161,11 @@ fn invert_rect(canvas: &mut Canvas, top: i32, left: i32, bottom: i32, right: i32
 }
 
 /// Paint a region's interior with `pat` between `fg` (on bits) and
-/// `bg` (off bits). Falls back to a solid fill when the pattern
-/// collapses (all-ones → fg, all-zeros → bg).
+/// `bg` (off bits) under the §3-44 pattern transfer mode `mode`.
+/// `mode = PatCopy` (Inside Macintosh's `PnMode` default) hits the
+/// solid-collapse fast paths from round 8; any other mode goes through
+/// the per-pixel read-modify-write path so the §3-44 Boolean op
+/// applies at every cell.
 fn paint_region_pattern(
     canvas: &mut Canvas,
     state: &PictState,
@@ -1162,10 +1179,15 @@ fn paint_region_pattern(
     if bb_w == 0 || bb_h == 0 {
         return;
     }
-    let solid = if pat.is_solid_fg() {
-        Some(fg)
-    } else if pat.is_solid_bg() {
-        Some(bg)
+    let mode = PatternMode::from_pn_mode(state.text_state.pn_mode);
+    let solid = if mode.is_pat_copy() {
+        if pat.is_solid_fg() {
+            Some(fg)
+        } else if pat.is_solid_bg() {
+            Some(bg)
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -1176,7 +1198,7 @@ fn paint_region_pattern(
         if let Some(c) = solid {
             fill_rect(canvas, top, left, bottom, right, c);
         } else {
-            fill_rect_pattern(canvas, top, left, bottom, right, pat, fg, bg);
+            fill_rect_pattern_mode(canvas, top, left, bottom, right, pat, fg, bg, mode);
         }
         return;
     }
@@ -1186,10 +1208,8 @@ fn paint_region_pattern(
                 let (cx, cy) = to_canvas(state, x, y);
                 if let Some(c) = solid {
                     canvas.put(cx, cy, c);
-                } else if pat.sample(cx, cy) {
-                    canvas.put(cx, cy, fg);
                 } else {
-                    canvas.put(cx, cy, bg);
+                    crate::raster::plot_region_cell_mode(canvas, cx, cy, pat, fg, bg, mode);
                 }
             }
         }

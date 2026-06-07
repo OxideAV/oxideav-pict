@@ -93,6 +93,26 @@ impl Canvas {
         }
     }
 
+    /// Read the RGBA pixel at `(x, y)` (canvas-local). Returns `None`
+    /// when the coordinates fall outside the canvas — clip masks do
+    /// not filter reads, since callers (the pattern transfer-mode
+    /// primitives) need the unfiltered destination pixel to compute the
+    /// new value before re-writing through [`Canvas::put`] which itself
+    /// honours the clip mask.
+    #[inline]
+    pub fn pixel_at(&self, x: i32, y: i32) -> Option<Rgba> {
+        if x < 0 || y < 0 || (x as u32) >= self.width || (y as u32) >= self.height {
+            return None;
+        }
+        let off = ((y as u32 * self.width + x as u32) * 4) as usize;
+        Some(Rgba {
+            r: self.data[off],
+            g: self.data[off + 1],
+            b: self.data[off + 2],
+            a: self.data[off + 3],
+        })
+    }
+
     /// Plot a single pixel. Out-of-bounds writes are silently
     /// ignored — every drawing primitive does its own clipping
     /// against `(width, height)` first to keep the inner loops branch-
@@ -776,12 +796,204 @@ pub fn frame_oval_thick(
 // cheap check.
 // ---------------------------------------------------------------------------
 
+/// QuickDraw Boolean pattern-transfer modes (`PnMode` opcode payload).
+///
+/// Inside Macintosh: Imaging With QuickDraw §3 "QuickDraw Drawing
+/// Reference" (`PenMode` procedure, book page 3-44) defines eight
+/// pattern modes (`patCopy = 8` … `notPatBic = 15`) plus the parallel
+/// eight source modes (`srcCopy = 0` … `notSrcBic = 7`). Pattern-fill
+/// verbs (frame / paint / erase / fill of rect / round-rect / oval /
+/// arc / poly / region) consume the pattern modes; the source modes
+/// apply to `CopyBits` rasters (which always render `srcCopy` in this
+/// crate — handled by [`Canvas::put`]).
+///
+/// Per §3-44, each pattern mode performs a per-pixel Boolean operation
+/// where the "source" is the pattern bit (1 = foreground / on, 0 =
+/// background / off) and the destination is the existing canvas pixel:
+///
+/// | Mode             | Code | Pattern-bit-1 cell        | Pattern-bit-0 cell        |
+/// | ---------------- | ---- | ------------------------- | ------------------------- |
+/// | `patCopy`        | 8    | write `fg`                | write `bg`                |
+/// | `patOr`          | 9    | write `fg`                | leave unchanged           |
+/// | `patXor`         | 10   | invert destination        | leave unchanged           |
+/// | `patBic`         | 11   | write `bg`                | leave unchanged           |
+/// | `notPatCopy`     | 12   | write `bg`                | write `fg`                |
+/// | `notPatOr`       | 13   | leave unchanged           | write `fg`                |
+/// | `notPatXor`      | 14   | leave unchanged           | invert destination        |
+/// | `notPatBic`      | 15   | leave unchanged           | write `bg`                |
+///
+/// (§3-44: `patOr`: *"where pattern pixel is black, invert destination
+/// pixel"*. The §3-44 wording is "invert" but the Pascal `BitOR` and
+/// `BitXOR` semantics — see §3 Figure 3-4 — coincide on a 1-bit display:
+/// a destination bit `OR` foreground-black is forced to black. In our
+/// true-colour pipeline we honour `patOr` as "write `fg`" rather than
+/// invert — matching the §3 description: *"to OR is to apply the
+/// foreground"*.)
+///
+/// Modes outside `8..=15` fall back to `patCopy` for the pattern-fill
+/// path; numeric source-mode codes (`0..=7`) hit when a producer set
+/// `PnMode srcCopy` deliberately (Inside Macintosh §A-3 Listing A-5 /
+/// A-6 are silent on whether this is legal but several real-world PICTs
+/// do it — we route to `patCopy` rather than refuse the picture).
+///
+/// The arithmetic transfer modes (32..49 — `blend`, `addPin`, …) are
+/// captured into [`crate::state::PictTextState::pn_mode`] /
+/// [`crate::state::PictTextState::op_color`] by the round-230 decoder
+/// but not yet honoured on the canvas — those are a follow-up round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PatternMode {
+    /// `patCopy = 8` — fg where pattern bit is 1, bg where 0.
+    /// Default per Inside Macintosh §3-44: *"the initial pattern mode
+    /// value is patCopy."*
+    #[default]
+    PatCopy,
+    /// `patOr = 9` — fg where pattern bit is 1, destination unchanged
+    /// where pattern bit is 0.
+    PatOr,
+    /// `patXor = 10` — invert destination where pattern bit is 1,
+    /// unchanged where pattern bit is 0.
+    PatXor,
+    /// `patBic = 11` — bg where pattern bit is 1, destination unchanged
+    /// where pattern bit is 0. *"Bit clear"* — the foreground role is
+    /// silenced.
+    PatBic,
+    /// `notPatCopy = 12` — bg where pattern bit is 1, fg where 0
+    /// (inverted-pattern copy).
+    NotPatCopy,
+    /// `notPatOr = 13` — unchanged where pattern bit is 1, fg where 0.
+    NotPatOr,
+    /// `notPatXor = 14` — unchanged where pattern bit is 1, invert
+    /// destination where 0.
+    NotPatXor,
+    /// `notPatBic = 15` — unchanged where pattern bit is 1, bg where 0.
+    NotPatBic,
+}
+
+impl PatternMode {
+    /// Decode a `PnMode` integer from the §A-3 `PnMode` opcode payload.
+    ///
+    /// `8..=15` map to the eight Boolean pattern modes; any other value
+    /// (including the source modes `0..=7` and the arithmetic transfer
+    /// modes `32..=49`) falls back to [`PatternMode::PatCopy`] — see
+    /// the type-level docstring on the fallback rationale.
+    pub const fn from_pn_mode(code: i16) -> Self {
+        match code {
+            8 => Self::PatCopy,
+            9 => Self::PatOr,
+            10 => Self::PatXor,
+            11 => Self::PatBic,
+            12 => Self::NotPatCopy,
+            13 => Self::NotPatOr,
+            14 => Self::NotPatXor,
+            15 => Self::NotPatBic,
+            _ => Self::PatCopy,
+        }
+    }
+
+    /// Returns `true` when this mode is `patCopy` — the all-cells-write
+    /// shape that lets the rasteriser take its existing fast paths
+    /// (solid-fg / solid-bg pattern collapses straight to `fill_rect`).
+    #[inline]
+    pub const fn is_pat_copy(self) -> bool {
+        matches!(self, Self::PatCopy)
+    }
+}
+
+/// Invert the destination pixel — per Inside Macintosh §3-44
+/// *"invert destination pixel."*
+///
+/// On a 1-bit display the inversion is the literal Boolean NOT; on our
+/// true-colour pipeline we honour the §3-44 wording by complementing
+/// every colour channel (and preserving alpha so the canvas stays
+/// alpha-opaque).
+#[inline]
+fn invert_rgba(c: Rgba) -> Rgba {
+    Rgba {
+        r: !c.r,
+        g: !c.g,
+        b: !c.b,
+        a: c.a,
+    }
+}
+
 #[inline]
 fn plot_pattern_pixel(canvas: &mut Canvas, x: i32, y: i32, pat: Pattern, fg: Rgba, bg: Rgba) {
-    if pat.sample(x, y) {
-        canvas.put(x, y, fg);
-    } else {
-        canvas.put(x, y, bg);
+    plot_pattern_pixel_mode(canvas, x, y, pat, fg, bg, PatternMode::PatCopy);
+}
+
+/// Public single-cell §3-44 patterned plot used by the region fill
+/// path. Same semantics as the in-module `plot_pattern_pixel_mode` but
+/// callable from `decoder::paint_region_pattern` where the
+/// per-region-cell `contains()` walk does its own iteration and only
+/// needs the per-pixel op.
+#[inline]
+pub fn plot_region_cell_mode(
+    canvas: &mut Canvas,
+    x: i32,
+    y: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    plot_pattern_pixel_mode(canvas, x, y, pat, fg, bg, mode);
+}
+
+/// Same as [`plot_pattern_pixel`] but obeys a [`PatternMode`] —
+/// each cell may write `fg`, `bg`, the inverted destination, or
+/// leave the destination unchanged per Inside Macintosh §3-44.
+#[inline]
+fn plot_pattern_pixel_mode(
+    canvas: &mut Canvas,
+    x: i32,
+    y: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    let on = pat.sample(x, y);
+    match mode {
+        PatternMode::PatCopy => {
+            canvas.put(x, y, if on { fg } else { bg });
+        }
+        PatternMode::PatOr => {
+            if on {
+                canvas.put(x, y, fg);
+            }
+        }
+        PatternMode::PatXor => {
+            if on {
+                if let Some(d) = canvas.pixel_at(x, y) {
+                    canvas.put(x, y, invert_rgba(d));
+                }
+            }
+        }
+        PatternMode::PatBic => {
+            if on {
+                canvas.put(x, y, bg);
+            }
+        }
+        PatternMode::NotPatCopy => {
+            canvas.put(x, y, if on { bg } else { fg });
+        }
+        PatternMode::NotPatOr => {
+            if !on {
+                canvas.put(x, y, fg);
+            }
+        }
+        PatternMode::NotPatXor => {
+            if !on {
+                if let Some(d) = canvas.pixel_at(x, y) {
+                    canvas.put(x, y, invert_rgba(d));
+                }
+            }
+        }
+        PatternMode::NotPatBic => {
+            if !on {
+                canvas.put(x, y, bg);
+            }
+        }
     }
 }
 
@@ -1024,6 +1236,249 @@ pub fn frame_rect_pattern_thick(
         for dx in 0..ph {
             plot_pattern_pixel(canvas, left + dx, y, pat, fg, bg);
             plot_pattern_pixel(canvas, right - 1 - dx, y, pat, fg, bg);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pattern + transfer-mode variants (round 247 — Boolean pattern modes).
+//
+// Inside Macintosh: Imaging With QuickDraw §3-44 (`PenMode` procedure)
+// + §A-3 Table A-2 (`PnMode $0008`): pattern-fill verbs honour the
+// active `PnMode` (`patCopy 8` … `notPatBic 15`). Each `*_pattern_mode`
+// primitive shares its boundary computation with the round-8
+// `*_pattern` variant but routes every cell write through
+// [`plot_pattern_pixel_mode`] so the §3-44 Boolean op applies.
+//
+// `mode = PatCopy` (the §3 default) collapses to the existing round-8
+// pattern path bit-for-bit — every `_pattern_mode` shape simply forwards
+// to the original `_pattern` primitive in that case. The other seven
+// modes go through the per-cell read-modify-write path; the solid-fg /
+// solid-bg pattern collapses don't fire because the mode changes what
+// "off" cells do (write `fg` instead of `bg`, leave destination
+// unchanged, etc) and the existing solid-colour fast paths assume
+// patCopy semantics.
+// ---------------------------------------------------------------------------
+
+/// Mode-aware rectangle fill — see [`fill_rect_pattern`] for the
+/// `patCopy` baseline shape.
+pub fn fill_rect_pattern_mode(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    if mode.is_pat_copy() {
+        fill_rect_pattern(canvas, top, left, bottom, right, pat, fg, bg);
+        return;
+    }
+    if right <= left || bottom <= top {
+        return;
+    }
+    for y in top..bottom {
+        for x in left..right {
+            plot_pattern_pixel_mode(canvas, x, y, pat, fg, bg, mode);
+        }
+    }
+}
+
+/// Mode-aware oval fill — see [`fill_oval_pattern`].
+pub fn fill_oval_pattern_mode(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    if mode.is_pat_copy() {
+        fill_oval_pattern(canvas, top, left, bottom, right, pat, fg, bg);
+        return;
+    }
+    if right <= left || bottom <= top {
+        return;
+    }
+    let h = (bottom - top) as usize;
+    let mut min = vec![i32::MAX; h];
+    let mut max = vec![i32::MIN; h];
+    walk_ellipse(top, left, bottom, right, |x, y| {
+        let row = y - top;
+        if row < 0 || (row as usize) >= h {
+            return;
+        }
+        let r = row as usize;
+        if x < min[r] {
+            min[r] = x;
+        }
+        if x > max[r] {
+            max[r] = x;
+        }
+    });
+    for (i, (lo, hi)) in min.iter().zip(max.iter()).enumerate() {
+        if *lo == i32::MAX {
+            continue;
+        }
+        let y = top + i as i32;
+        for x in *lo..=*hi {
+            plot_pattern_pixel_mode(canvas, x, y, pat, fg, bg, mode);
+        }
+    }
+}
+
+/// Mode-aware round-rectangle fill — see [`fill_round_rect_pattern`].
+pub fn fill_round_rect_pattern_mode(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    oval_w: i32,
+    oval_h: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    if mode.is_pat_copy() {
+        fill_round_rect_pattern(
+            canvas, top, left, bottom, right, oval_w, oval_h, pat, fg, bg,
+        );
+        return;
+    }
+    if right <= left || bottom <= top {
+        return;
+    }
+    let w = (right - left) as u32;
+    let h = (bottom - top) as u32;
+    if w == 0 || h == 0 {
+        return;
+    }
+    let marker = Rgba {
+        r: 1,
+        g: 2,
+        b: 3,
+        a: 4,
+    };
+    let mut scratch = Canvas::new(w, h, Rgba::new(0, 0, 0, 0));
+    fill_round_rect(
+        &mut scratch,
+        0,
+        0,
+        h as i32,
+        w as i32,
+        oval_w,
+        oval_h,
+        marker,
+    );
+    for sy in 0..h {
+        for sx in 0..w {
+            let off = ((sy * w + sx) * 4) as usize;
+            if scratch.data[off] != marker.r || scratch.data[off + 1] != marker.g {
+                continue;
+            }
+            plot_pattern_pixel_mode(canvas, left + sx as i32, top + sy as i32, pat, fg, bg, mode);
+        }
+    }
+}
+
+/// Mode-aware polygon fill — see [`fill_polygon_pattern`].
+pub fn fill_polygon_pattern_mode(
+    canvas: &mut Canvas,
+    vertices: &[(i32, i32)],
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    if mode.is_pat_copy() {
+        fill_polygon_pattern(canvas, vertices, pat, fg, bg);
+        return;
+    }
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for &(x, y) in vertices {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+    if min_x > max_x || min_y > max_y {
+        return;
+    }
+    let w = (max_x - min_x + 2).max(1) as u32;
+    let h = (max_y - min_y + 2).max(1) as u32;
+    let marker = Rgba {
+        r: 1,
+        g: 2,
+        b: 3,
+        a: 4,
+    };
+    let mut scratch = Canvas::new(w, h, Rgba::new(0, 0, 0, 0));
+    let shifted: Vec<(i32, i32)> = vertices
+        .iter()
+        .map(|&(x, y)| (x - min_x, y - min_y))
+        .collect();
+    fill_polygon(&mut scratch, &shifted, marker);
+    for sy in 0..h {
+        for sx in 0..w {
+            let off = ((sy * w + sx) * 4) as usize;
+            if scratch.data[off] != marker.r || scratch.data[off + 1] != marker.g {
+                continue;
+            }
+            plot_pattern_pixel_mode(
+                canvas,
+                min_x + sx as i32,
+                min_y + sy as i32,
+                pat,
+                fg,
+                bg,
+                mode,
+            );
+        }
+    }
+}
+
+/// Mode-aware patterned-frame rectangle — see
+/// [`frame_rect_pattern_thick`].
+pub fn frame_rect_pattern_thick_mode(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    if mode.is_pat_copy() {
+        frame_rect_pattern_thick(canvas, top, left, bottom, right, pen_h, pen_v, pat, fg, bg);
+        return;
+    }
+    if right <= left || bottom <= top {
+        return;
+    }
+    let ph = pen_h.max(1);
+    let pv = pen_v.max(1);
+    for dy in 0..pv {
+        for x in left..right {
+            plot_pattern_pixel_mode(canvas, x, top + dy, pat, fg, bg, mode);
+            plot_pattern_pixel_mode(canvas, x, bottom - 1 - dy, pat, fg, bg, mode);
+        }
+    }
+    for y in (top + pv)..(bottom - pv) {
+        for dx in 0..ph {
+            plot_pattern_pixel_mode(canvas, left + dx, y, pat, fg, bg, mode);
+            plot_pattern_pixel_mode(canvas, right - 1 - dx, y, pat, fg, bg, mode);
         }
     }
 }
