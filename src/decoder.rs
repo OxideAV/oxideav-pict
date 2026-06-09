@@ -651,7 +651,7 @@ fn dispatch_v2_opcode(
             Ok(true)
         }
         OP_TX_FACE => {
-            state.text_state.tx_face = r.read_u8()?;
+            state.text_state.tx_face = crate::state::PictTextFace::from(r.read_u8()?);
             Ok(true)
         }
         OP_TX_MODE => {
@@ -2454,7 +2454,7 @@ fn dispatch_v1_opcode(
         }
         0x04 => {
             // TxFace (0..255)
-            state.text_state.tx_face = r.read_u8()?;
+            state.text_state.tx_face = crate::state::PictTextFace::from(r.read_u8()?);
             Ok(true)
         }
         0x05 => {

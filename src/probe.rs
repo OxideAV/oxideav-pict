@@ -597,7 +597,7 @@ fn probe_v2_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             Ok(OpStep::Continue)
         }
         OP_TX_FACE => {
-            p.text_state.tx_face = r.read_u8()?;
+            p.text_state.tx_face = crate::state::PictTextFace::from(r.read_u8()?);
             p.text_state_op_count += 1;
             Ok(OpStep::Continue)
         }
@@ -804,7 +804,7 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             Ok(OpStep::Continue)
         }
         0x04 => {
-            p.text_state.tx_face = r.read_u8()?;
+            p.text_state.tx_face = crate::state::PictTextFace::from(r.read_u8()?);
             p.text_state_op_count += 1;
             Ok(OpStep::Continue)
         }

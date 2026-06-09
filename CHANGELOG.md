@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 266: **Typed `PictTextFace` newtype for the `TxFace` style
+  byte.** Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 row
+  `$0004` / Table A-3 row `$04` describes the `TxFace` payload as
+  *"Text's font style (0..255)"* — a classic-Mac `Style` bitfield. Round
+  266 promotes the storage on `PictTextState::tx_face` from raw `u8` to
+  a typed [`PictTextFace`] newtype with named-bit predicates
+  ([`PictTextFace::bold`] / `italic` / `underline` / `outline` /
+  `shadow` / `condense` / `extend`), bit-mask constants
+  ([`PictTextFace::BOLD`] etc), an [`PictTextFace::is_plain`] predicate,
+  and a [`PictTextFace::PLAIN`] default. `From<u8>` + `Into<u8>` round-
+  trip the on-disk byte verbatim, and a `PartialEq<u8>` impl lets
+  pre-r266 call sites that compared `tx_face` to a raw byte keep
+  working unchanged. The encoder side (`build_tx_face` /
+  `PictBuilder::tx_face`) keeps taking a raw `u8` so existing producers
+  do not need to migrate. Reserved bit 7 (`0x80`) is preserved verbatim
+  on the raw byte but masked off by `is_plain` per the §A-3 caption
+  (which only names bits 0..=6). Eight new state-mod tests + new
+  `PictTextFace` lib export.
+
 - Round 252: **`Invert*` verbs honoured on round-rect / oval / arc /
   polygon shapes.** Inside Macintosh: Imaging With QuickDraw §3
   ("QuickDraw Drawing Reference") and §A-3 Table A-2 specify five

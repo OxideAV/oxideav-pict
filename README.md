@@ -832,6 +832,61 @@ These opcodes are v2-only — §A-3 Table A-3 (v1) does not include
 struct lost its `Copy` impl in round 236 (the `Vec<u8>` font name is
 the reason), but kept `Clone + Default + PartialEq + Eq`.
 
+## Typed `TxFace` style byte (round 266)
+
+Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 row `$0004` /
+Table A-3 row `$04` describes the `TxFace` opcode's 1-byte payload as
+*"Text's font style (0..255)"* — a classic-Mac `Style` bitfield. Round
+266 promotes the storage on [`PictTextState::tx_face`] from raw `u8` to
+the typed [`PictTextFace`] newtype so consumers can decode the per-bit
+treatment via named predicates instead of re-deriving the bit positions
+at every call site:
+
+| Bit  | Mask   | Predicate                  |
+| ---- | ------ | -------------------------- |
+| 0    | `0x01` | [`PictTextFace::bold`]     |
+| 1    | `0x02` | [`PictTextFace::italic`]   |
+| 2    | `0x04` | [`PictTextFace::underline`]|
+| 3    | `0x08` | [`PictTextFace::outline`]  |
+| 4    | `0x10` | [`PictTextFace::shadow`]   |
+| 5    | `0x20` | [`PictTextFace::condense`] |
+| 6    | `0x40` | [`PictTextFace::extend`]   |
+| 7    | `0x80` | reserved — preserved verbatim through [`PictTextFace::bits`] |
+
+```rust
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::{parse_pict, PictTextFace};
+
+let mut b = PictBuilder::new(0, 0, 4, 4);
+b.tx_face(0x05); // bold + underline
+b.fg_color(0, 0, 0).rect(Verb::Paint, 0, 0, 4, 4);
+let bytes = b.finish();
+
+let img = parse_pict(&bytes)?;
+assert!(img.text_state.tx_face.bold());
+assert!(img.text_state.tx_face.underline());
+assert!(!img.text_state.tx_face.italic());
+assert_eq!(img.text_state.tx_face.bits(), 0x05);
+
+// `From<u8>` ↔ `Into<u8>` round-trip preserves the on-disk byte verbatim.
+assert_eq!(u8::from(PictTextFace::from(0x42)), 0x42);
+// `PartialEq<u8>` lets pre-r266 call sites that compared the field to a
+// raw byte keep working through the typed migration.
+assert!(img.text_state.tx_face == 0x05u8);
+
+// Fresh-GrafPort default is plain text (`PictTextFace::PLAIN`).
+assert!(PictTextFace::default().is_plain());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The encoder helper `build_tx_face(face: u8)` and the chainable
+`PictBuilder::tx_face(face: u8)` keep taking a raw `u8` so existing
+producers don't have to migrate. Bit 7 (`0x80`) is unassigned in §A-3's
+caption and the newtype preserves it verbatim through
+[`PictTextFace::bits`] so round-trip encoders don't drop reserved bits a
+future producer might set; the [`PictTextFace::is_plain`] predicate
+masks bit 7 off when reporting "no named style bits set."
+
 ## What's not yet in
 
 * **Non-8×8 PixPat tiles.** Inside Macintosh §A-3 nominally permits

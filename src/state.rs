@@ -308,6 +308,157 @@ impl RectI32 {
     }
 }
 
+/// Decoded `TxFace` (`$0004` / `$04`) `Style` byte per Inside
+/// Macintosh: Imaging With QuickDraw §A-3 Table A-2 / A-3.
+///
+/// The on-disk payload is a single byte (`0..=255`) describing a classic
+/// Mac `Style` bitfield. §A-3's "Text's font style (0..255)" caption
+/// pairs each set bit with one of the classic-Mac glyph treatments:
+///
+/// | Bit  | Mask   | Treatment   |
+/// | ---- | ------ | ----------- |
+/// | 0    | `0x01` | `bold`      |
+/// | 1    | `0x02` | `italic`    |
+/// | 2    | `0x04` | `underline` |
+/// | 3    | `0x08` | `outline`   |
+/// | 4    | `0x10` | `shadow`    |
+/// | 5    | `0x20` | `condense`  |
+/// | 6    | `0x40` | `extend`    |
+/// | 7    | `0x80` | reserved    |
+///
+/// The fresh-GrafPort default is [`PictTextFace::PLAIN`] (`0x00`),
+/// matching Color QuickDraw's plain-text style: no `bold`, no `italic`,
+/// etc.
+///
+/// Round 266 promotes [`PictTextState::tx_face`] from raw `u8` storage
+/// to this newtype so consumers can decode the per-bit treatment via
+/// named predicates without re-deriving the bit positions at every call
+/// site. The wire-format encoder helper [`crate::build_tx_face`] keeps
+/// taking a `u8` (the on-disk byte) so existing producers don't have to
+/// migrate; the newtype's `From<u8>` / `Into<u8>` round-trip makes the
+/// transition mechanical (`PictTextFace::from(0x05)` `==` `0x05u8`).
+///
+/// Bit 7 (`0x80`) is unassigned in §A-3's caption; the decoder preserves
+/// it verbatim through [`PictTextFace::bits`] so round-trip encoders
+/// don't drop reserved bits a future producer might set. The named-bit
+/// predicates only read bits 0..=6.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub struct PictTextFace(u8);
+
+impl PictTextFace {
+    /// Bold-glyph bit (`0x01`).
+    pub const BOLD: u8 = 0x01;
+    /// Italic-glyph bit (`0x02`).
+    pub const ITALIC: u8 = 0x02;
+    /// Underline bit (`0x04`).
+    pub const UNDERLINE: u8 = 0x04;
+    /// Outline-glyph bit (`0x08`).
+    pub const OUTLINE: u8 = 0x08;
+    /// Shadow-glyph bit (`0x10`).
+    pub const SHADOW: u8 = 0x10;
+    /// Condense (negative tracking) bit (`0x20`).
+    pub const CONDENSE: u8 = 0x20;
+    /// Extend (positive tracking) bit (`0x40`).
+    pub const EXTEND: u8 = 0x40;
+
+    /// The §A-3 plain-text default: no style bits set. Equivalent to
+    /// `PictTextFace::from(0)` and to the Color QuickDraw fresh-GrafPort
+    /// `tx_face` slot.
+    pub const PLAIN: Self = Self(0);
+
+    /// Wrap a raw on-disk style byte verbatim.
+    #[inline]
+    pub const fn new(byte: u8) -> Self {
+        Self(byte)
+    }
+
+    /// Read the raw on-disk style byte back out.
+    #[inline]
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// `true` when the `bold` bit (`0x01`) is set.
+    #[inline]
+    pub const fn bold(self) -> bool {
+        self.0 & Self::BOLD != 0
+    }
+
+    /// `true` when the `italic` bit (`0x02`) is set.
+    #[inline]
+    pub const fn italic(self) -> bool {
+        self.0 & Self::ITALIC != 0
+    }
+
+    /// `true` when the `underline` bit (`0x04`) is set.
+    #[inline]
+    pub const fn underline(self) -> bool {
+        self.0 & Self::UNDERLINE != 0
+    }
+
+    /// `true` when the `outline` bit (`0x08`) is set.
+    #[inline]
+    pub const fn outline(self) -> bool {
+        self.0 & Self::OUTLINE != 0
+    }
+
+    /// `true` when the `shadow` bit (`0x10`) is set.
+    #[inline]
+    pub const fn shadow(self) -> bool {
+        self.0 & Self::SHADOW != 0
+    }
+
+    /// `true` when the `condense` bit (`0x20`) is set.
+    #[inline]
+    pub const fn condense(self) -> bool {
+        self.0 & Self::CONDENSE != 0
+    }
+
+    /// `true` when the `extend` bit (`0x40`) is set.
+    #[inline]
+    pub const fn extend(self) -> bool {
+        self.0 & Self::EXTEND != 0
+    }
+
+    /// `true` when every named-bit treatment is off (the §A-3
+    /// fresh-GrafPort default). Reserved bit 7 (`0x80`) is ignored — a
+    /// producer that flips it without flipping any of the named bits
+    /// still reports `is_plain() == true`, matching the §A-3 caption
+    /// which only names bits 0..=6.
+    #[inline]
+    pub const fn is_plain(self) -> bool {
+        self.0 & 0x7F == 0
+    }
+}
+
+impl From<u8> for PictTextFace {
+    #[inline]
+    fn from(byte: u8) -> Self {
+        Self(byte)
+    }
+}
+
+impl From<PictTextFace> for u8 {
+    #[inline]
+    fn from(face: PictTextFace) -> u8 {
+        face.0
+    }
+}
+
+impl PartialEq<u8> for PictTextFace {
+    #[inline]
+    fn eq(&self, other: &u8) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<PictTextFace> for u8 {
+    #[inline]
+    fn eq(&self, other: &PictTextFace) -> bool {
+        *self == other.0
+    }
+}
+
 /// Tracked text / pen-mode / highlight state captured from the §A-3
 /// opcodes the rasteriser walks past today.
 ///
@@ -345,11 +496,14 @@ pub struct PictTextState {
     /// this crate.
     pub tx_font: i16,
     /// Text face / style flags set by `TxFace` (`$0004` v2 / `$04` v1,
-    /// 0..255). §A-3 Table A-2: 1-byte payload. Bitfield with bold
-    /// (`0x01`), italic (`0x02`), underline (`0x04`), outline (`0x08`),
-    /// shadow (`0x10`), condense (`0x20`) and extend (`0x40`) flags per
-    /// the classic Mac `Style` byte; surfaced unmodified for now.
-    pub tx_face: u8,
+    /// 0..255). §A-3 Table A-2: 1-byte payload. The on-disk byte is a
+    /// classic-Mac `Style` bitfield; round 266 promotes the storage from
+    /// a raw `u8` to a typed [`PictTextFace`] newtype that decodes the
+    /// per-bit predicates ([`PictTextFace::bold`] / `italic` /
+    /// `underline` / `outline` / `shadow` / `condense` / `extend`) plus
+    /// `From<u8>` / `Into<u8>` round-trip so existing call sites and
+    /// encoder helpers keep working unchanged.
+    pub tx_face: PictTextFace,
     /// Source-mode raster transfer mode set by `TxMode` (`$0005` v2 /
     /// `$05` v1, `Integer`). §A-3 Table A-2: 2-byte payload, named
     /// `srcCopy = 0`, `srcOr = 1`, …, `notSrcXor = 7`, plus the
@@ -437,7 +591,7 @@ impl PictTextState {
     pub const fn fresh_graf_port() -> Self {
         Self {
             tx_font: 0,
-            tx_face: 0,
+            tx_face: PictTextFace::PLAIN,
             tx_mode: 0, // srcCopy
             sp_extra: crate::header::Fixed(0),
             pn_mode: 8, // patCopy — Inside Macintosh default
@@ -751,5 +905,98 @@ mod tests {
         assert_eq!(pat.sample(-1, 0), pat.sample(7, 0));
         assert_eq!(pat.sample(-8, 0), pat.sample(0, 0));
         assert_eq!(pat.sample(-9, 0), pat.sample(7, 0));
+    }
+
+    #[test]
+    fn pict_text_face_plain_default() {
+        let f = PictTextFace::default();
+        assert_eq!(f, PictTextFace::PLAIN);
+        assert_eq!(f.bits(), 0);
+        assert!(f.is_plain());
+        assert!(!f.bold());
+        assert!(!f.italic());
+        assert!(!f.underline());
+        assert!(!f.outline());
+        assert!(!f.shadow());
+        assert!(!f.condense());
+        assert!(!f.extend());
+    }
+
+    #[test]
+    fn pict_text_face_named_bit_predicates() {
+        // Per §A-3 caption: bold=0x01, italic=0x02, underline=0x04,
+        // outline=0x08, shadow=0x10, condense=0x20, extend=0x40.
+        assert!(PictTextFace::from(0x01).bold());
+        assert!(PictTextFace::from(0x02).italic());
+        assert!(PictTextFace::from(0x04).underline());
+        assert!(PictTextFace::from(0x08).outline());
+        assert!(PictTextFace::from(0x10).shadow());
+        assert!(PictTextFace::from(0x20).condense());
+        assert!(PictTextFace::from(0x40).extend());
+
+        // 0x05 = bold + underline (the round-230 test value).
+        let f = PictTextFace::from(0x05);
+        assert!(f.bold());
+        assert!(!f.italic());
+        assert!(f.underline());
+        assert!(!f.outline());
+        assert!(!f.is_plain());
+    }
+
+    #[test]
+    fn pict_text_face_all_named_bits_set() {
+        // 0x7F = every named bit (bold..extend) set; bit 7 stays clear.
+        let f = PictTextFace::from(0x7F);
+        assert!(f.bold());
+        assert!(f.italic());
+        assert!(f.underline());
+        assert!(f.outline());
+        assert!(f.shadow());
+        assert!(f.condense());
+        assert!(f.extend());
+        assert!(!f.is_plain());
+        assert_eq!(f.bits(), 0x7F);
+    }
+
+    #[test]
+    fn pict_text_face_reserved_bit7_ignored_by_is_plain() {
+        // Reserved bit 7 (`0x80`) is preserved on the raw byte but does
+        // not flip `is_plain` — §A-3's caption only names bits 0..=6.
+        let f = PictTextFace::from(0x80);
+        assert!(f.is_plain());
+        assert_eq!(f.bits(), 0x80);
+        assert!(!f.bold());
+    }
+
+    #[test]
+    fn pict_text_face_u8_roundtrip() {
+        // `From<u8>` ↔ `Into<u8>` preserves the on-disk byte verbatim
+        // for the whole 0..=255 range — no bit is dropped or aliased.
+        for byte in 0u8..=255 {
+            let f = PictTextFace::from(byte);
+            assert_eq!(u8::from(f), byte);
+            assert_eq!(f.bits(), byte);
+        }
+    }
+
+    #[test]
+    fn pict_text_face_equality_with_u8() {
+        // PartialEq<u8> lets existing call sites that compared
+        // `tx_face == 0x05` keep working through the typed migration.
+        let f = PictTextFace::from(0x05);
+        assert!(f == 0x05u8);
+        assert!(0x05u8 == f);
+        assert!(f != 0x06u8);
+    }
+
+    #[test]
+    fn pict_text_face_fresh_graf_port_is_plain() {
+        // The §A-3 fresh-GrafPort default is plain text (no style bits).
+        let ts = PictTextState::fresh_graf_port();
+        assert_eq!(ts.tx_face, PictTextFace::PLAIN);
+        assert!(ts.tx_face.is_plain());
+        // Round-230 callers comparing the field to a raw byte still work
+        // through the `PartialEq<u8>` impl.
+        assert!(ts.tx_face == 0u8);
     }
 }
