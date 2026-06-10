@@ -870,10 +870,12 @@ pub fn frame_oval_thick(
 /// A-6 are silent on whether this is legal but several real-world PICTs
 /// do it — we route to `patCopy` rather than refuse the picture).
 ///
-/// The arithmetic transfer modes (32..49 — `blend`, `addPin`, …) are
-/// captured into [`crate::state::PictTextState::pn_mode`] /
-/// [`crate::state::PictTextState::op_color`] by the round-230 decoder
-/// but not yet honoured on the canvas — those are a follow-up round.
+/// The arithmetic transfer modes (32..39 — `blend`, `addPin`, …) are
+/// carried by the [`PatternMode::Arith`] variant, decoded from the
+/// `PnMode` opcode plus the active `OpColor` / background colour via
+/// [`PatternMode::from_pn_mode_with`] (round 273). The bare
+/// [`PatternMode::from_pn_mode`] constructor still folds them to
+/// `patCopy` for callers that have no colour context to supply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PatternMode {
     /// `patCopy = 8` — fg where pattern bit is 1, bg where 0.
@@ -901,6 +903,133 @@ pub enum PatternMode {
     NotPatXor,
     /// `notPatBic = 15` — unchanged where pattern bit is 1, bg where 0.
     NotPatBic,
+    /// One of the Color QuickDraw arithmetic transfer modes
+    /// (`blend = 32` … `adMin = 39`, Inside Macintosh §4 pages
+    /// 4-38..4-40). Every cell combines its *source* colour (the
+    /// pattern's on-bit fg / off-bit bg) with the existing destination
+    /// pixel per [`ArithMode`], parameterised by the active `OpColor`
+    /// (`op_color`) and — for `transparent` — the background colour
+    /// (`bg_key`). Built by [`PatternMode::from_pn_mode_with`].
+    Arith {
+        /// The specific §4 arithmetic operation.
+        mode: ArithMode,
+        /// `OpColor` — the max-pin (`addPin`), min-pin (`subPin`) or
+        /// per-channel blend weight (`blend`). Ignored by the other
+        /// arithmetic modes.
+        op_color: Rgba,
+        /// Background colour used as the transparent-mode key (a source
+        /// cell equal to this colour leaves the destination unchanged).
+        bg_key: Rgba,
+    },
+}
+
+/// The eight Color QuickDraw arithmetic transfer modes from Inside
+/// Macintosh: Imaging With QuickDraw §4 ("Color QuickDraw"), pages
+/// 4-38..4-40. Each combines a *source* RGB colour with the existing
+/// *destination* pixel on a per-channel basis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArithMode {
+    /// `blend = 32` — weighted average per §4-39:
+    /// `dest = src·w/MAX + dst·(1 − w/MAX)`, where `w` is the per-channel
+    /// `OpColor` weight. (On this crate's 8-bit canvas `MAX = 255`.)
+    Blend,
+    /// `addPin = 33` — `dst = min(src + dst, opColor)` per channel; the
+    /// `OpColor` supplies the per-channel maximum (white in a basic
+    /// port).
+    AddPin,
+    /// `addOver = 34` — `dst = (src + dst) mod (MAX + 1)` per channel
+    /// (wrapping add).
+    AddOver,
+    /// `subPin = 35` — `dst = max(dst − src, opColor)` per channel; the
+    /// `OpColor` supplies the per-channel minimum (black in a basic
+    /// port).
+    SubPin,
+    /// `transparent = 36` — `dst = src` unless the source colour equals
+    /// the background colour, in which case the destination is left
+    /// unchanged.
+    Transparent,
+    /// `addMax = 37` — `dst = max(src, dst)` per channel (greater
+    /// saturation of each component wins).
+    AddMax,
+    /// `subOver = 38` — `dst = (dst − src) mod (MAX + 1)` per channel
+    /// (wrapping subtract — negative results wrap up).
+    SubOver,
+    /// `adMin = 39` — `dst = min(src, dst)` per channel (lesser
+    /// saturation of each component wins).
+    AdMin,
+}
+
+impl ArithMode {
+    /// Map a `PnMode` integer in `32..=39` to its arithmetic mode.
+    /// Codes outside that band return `None`.
+    pub const fn from_code(code: i16) -> Option<Self> {
+        Some(match code {
+            32 => Self::Blend,
+            33 => Self::AddPin,
+            34 => Self::AddOver,
+            35 => Self::SubPin,
+            36 => Self::Transparent,
+            37 => Self::AddMax,
+            38 => Self::SubOver,
+            39 => Self::AdMin,
+            _ => return None,
+        })
+    }
+}
+
+/// Combine a source colour with the destination pixel per the §4
+/// arithmetic transfer-mode formulas (worked at 8-bit channel
+/// precision — the §4 "truncated RGB" direct-pixel path). `op_color`
+/// supplies the per-channel pin / weight; `bg_key` is the
+/// transparent-mode background key. Alpha is taken from the source for
+/// modes that write a fresh colour and preserved for pin / wrap modes
+/// (the canvas is alpha-opaque throughout, so the choice is cosmetic).
+#[inline]
+pub fn blend_arith(mode: ArithMode, src: Rgba, dst: Rgba, op_color: Rgba, bg_key: Rgba) -> Rgba {
+    // Per-channel arithmetic at u16 working width to avoid overflow.
+    let ch = |s: u8, d: u8, o: u8| -> u8 {
+        let (s, d, o) = (s as i32, d as i32, o as i32);
+        match mode {
+            // dest = src·w/255 + dst·(255 − w)/255, rounded to nearest.
+            ArithMode::Blend => {
+                let v = (s * o + d * (255 - o) + 127) / 255;
+                v.clamp(0, 255) as u8
+            }
+            // sum pinned to the OpColor per-channel maximum.
+            ArithMode::AddPin => (s + d).min(o) as u8,
+            // wrapping add (mod 256).
+            ArithMode::AddOver => ((s + d) & 0xFF) as u8,
+            // difference pinned to the OpColor per-channel minimum.
+            ArithMode::SubPin => (d - s).max(o) as u8,
+            // greater saturation wins.
+            ArithMode::AddMax => s.max(d) as u8,
+            // wrapping subtract (mod 256).
+            ArithMode::SubOver => ((d - s) & 0xFF) as u8,
+            // lesser saturation wins.
+            ArithMode::AdMin => s.min(d) as u8,
+            // handled below — never reached per channel.
+            ArithMode::Transparent => d as u8,
+        }
+    };
+    if let ArithMode::Transparent = mode {
+        // Whole-pixel decision: source pixels equal to the background
+        // colour are holes (destination unchanged); others copy through.
+        if src.r == bg_key.r && src.g == bg_key.g && src.b == bg_key.b {
+            return dst;
+        }
+        return Rgba {
+            r: src.r,
+            g: src.g,
+            b: src.b,
+            a: dst.a,
+        };
+    }
+    Rgba {
+        r: ch(src.r, dst.r, op_color.r),
+        g: ch(src.g, dst.g, op_color.g),
+        b: ch(src.b, dst.b, op_color.b),
+        a: dst.a,
+    }
 }
 
 impl PatternMode {
@@ -908,8 +1037,10 @@ impl PatternMode {
     ///
     /// `8..=15` map to the eight Boolean pattern modes; any other value
     /// (including the source modes `0..=7` and the arithmetic transfer
-    /// modes `32..=49`) falls back to [`PatternMode::PatCopy`] — see
-    /// the type-level docstring on the fallback rationale.
+    /// modes `32..=39`) falls back to [`PatternMode::PatCopy`]. Use
+    /// [`PatternMode::from_pn_mode_with`] when the active `OpColor` /
+    /// background colour are available so the arithmetic modes can be
+    /// honoured instead of folded to `patCopy`.
     pub const fn from_pn_mode(code: i16) -> Self {
         match code {
             8 => Self::PatCopy,
@@ -921,6 +1052,42 @@ impl PatternMode {
             14 => Self::NotPatXor,
             15 => Self::NotPatBic,
             _ => Self::PatCopy,
+        }
+    }
+
+    /// Decode a `PnMode` integer with the colour context the arithmetic
+    /// transfer modes (`32..=39`) need. `8..=15` resolve to the Boolean
+    /// pattern modes exactly as [`PatternMode::from_pn_mode`]; `32..=39`
+    /// resolve to [`PatternMode::Arith`] carrying `op_color` (the
+    /// `OpColor` pin / blend weight) and `bg_key` (the transparent-mode
+    /// background key); every other code falls back to `patCopy`.
+    ///
+    /// Per §4-39/4-40 a missing `OpColor` defaults to the basic-port
+    /// pins: white for the max-pin / blend modes (`addPin`, `blend`),
+    /// black for the min-pin mode (`subPin`). When `op_color` is `None`
+    /// the per-mode default is substituted so an absent `OpColor` opcode
+    /// produces the no-clamp behaviour the §4 basic-port text describes
+    /// (max pin = white ⇒ never clamps a sum down; min pin = black ⇒
+    /// never clamps a difference up).
+    pub fn from_pn_mode_with(code: i16, op_color: Option<Rgba>, bg_key: Rgba) -> Self {
+        if let Some(mode) = ArithMode::from_code(code) {
+            let op_color = op_color.unwrap_or(match mode {
+                // min-pin: basic-port minimum is black (§4-39).
+                ArithMode::SubPin => Rgba::BLACK,
+                // blend: basic-port weight is "50 percent gray" (§4-39),
+                // i.e. equal weights of source and destination.
+                ArithMode::Blend => Rgba::new(128, 128, 128, 255),
+                // max-pin + everything else: basic-port maximum is white.
+                // (Modes that ignore OpColor are unaffected.)
+                _ => Rgba::WHITE,
+            });
+            Self::Arith {
+                mode,
+                op_color,
+                bg_key,
+            }
+        } else {
+            Self::from_pn_mode(code)
         }
     }
 
@@ -1026,6 +1193,19 @@ fn plot_pattern_pixel_mode(
         PatternMode::NotPatBic => {
             if !on {
                 canvas.put(x, y, bg);
+            }
+        }
+        PatternMode::Arith {
+            mode,
+            op_color,
+            bg_key,
+        } => {
+            // The pattern still selects the *source* colour per cell
+            // (on-bit ⇒ fg, off-bit ⇒ bg); the §4 arithmetic mode then
+            // combines that source with the existing destination pixel.
+            let src = if on { fg } else { bg };
+            if let Some(d) = canvas.pixel_at(x, y) {
+                canvas.put(x, y, blend_arith(mode, src, d, op_color, bg_key));
             }
         }
     }

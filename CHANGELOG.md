@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 273: **Color QuickDraw arithmetic transfer modes honoured on
+  patterned shape fills.** Inside Macintosh: Imaging With QuickDraw §4
+  ("Color QuickDraw") pages 4-38..4-40 define eight arithmetic transfer
+  modes (`blend = 32`, `addPin = 33`, `addOver = 34`, `subPin = 35`,
+  `transparent = 36`, `addMax = 37`, `subOver = 38`, `adMin = 39`).
+  Round 230 captured the `PnMode` code + `OpColor` into `PictTextState`;
+  round 247 honoured the Boolean pattern modes (`8..=15`). Round 273
+  wires the arithmetic modes into every patterned `frame` / `paint` /
+  `erase` / `fill` of rect / round-rect / oval / poly / region via the
+  shared per-cell dispatch path established in round 247. New public
+  [`ArithMode`] enum (the eight §4 modes) + `ArithMode::from_code`, a
+  pure [`blend_arith`] combiner implementing the §4 per-channel
+  formulas at 8-bit ("truncated RGB" direct-pixel) precision, and a new
+  [`PatternMode::Arith`] variant carrying the active `OpColor` pin /
+  blend weight + the transparent-mode background key. The new
+  `PatternMode::from_pn_mode_with(code, op_color, bg_key)` constructor
+  resolves the arithmetic modes when colour context is available;
+  absent `OpColor` defaults per §4-39/4-40 (max-pin → white, min-pin →
+  black, blend → 50% gray). The bare const `PatternMode::from_pn_mode`
+  still folds the arithmetic codes to `patCopy` for callers without
+  colour context, so producers that never emit `PnMode` render
+  bit-for-bit identically to pre-r273. 15 new synth tests covering each
+  mode + the pin / weight defaults + the cross-shape dispatch +
+  `blend_arith` directly. New `ArithMode` / `blend_arith` / `Rgba` lib
+  re-exports.
+
 - Round 266: **Typed `PictTextFace` newtype for the `TxFace` style
   byte.** Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 row
   `$0004` / Table A-3 row `$04` describes the `TxFace` payload as

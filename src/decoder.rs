@@ -861,6 +861,23 @@ fn read_rgb16(r: &mut Reader<'_>) -> Result<(u16, u16, u16)> {
     Ok((r_, g_, b_))
 }
 
+/// Resolve the active pattern transfer mode from the drawing state.
+///
+/// Folds the §A-3 `PnMode` code together with the §4 colour context the
+/// arithmetic transfer modes (`blend = 32` … `adMin = 39`) need — the
+/// declared `OpColor` (`state.text_state.op_color`, defaulting per-mode
+/// when absent) and the active background colour (`state.bg`, the
+/// transparent-mode key). Boolean pattern modes (`8..=15`) ignore the
+/// colour context and resolve exactly as before.
+#[inline]
+fn pattern_mode(state: &PictState) -> PatternMode {
+    PatternMode::from_pn_mode_with(
+        state.text_state.pn_mode,
+        state.text_state.op_color,
+        state.bg,
+    )
+}
+
 /// Apply a `frame|paint|erase|invert|fill Rect` opcode (`opcode` ∈
 /// `0x30..=0x34`) to the canvas. Inside Macintosh §2 / §A-3 ties each
 /// verb to a distinct pattern slot:
@@ -877,7 +894,7 @@ fn read_rgb16(r: &mut Reader<'_>) -> Result<(u16, u16, u16)> {
 fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
     let (ph, pv) = state.pen_size;
-    let mode = PatternMode::from_pn_mode(state.text_state.pn_mode);
+    let mode = pattern_mode(state);
     match opcode & 0x000F {
         0 => {
             if let Some(pp) = &state.pen_pix_pat {
@@ -957,7 +974,7 @@ fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
 fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
     let (ow, oh) = state.oval_size;
-    let mode = PatternMode::from_pn_mode(state.text_state.pn_mode);
+    let mode = pattern_mode(state);
     match opcode & 0x000F {
         0 => frame_round_rect(canvas, top, left, bottom, right, ow, oh, state.fg),
         1 => {
@@ -1031,7 +1048,7 @@ fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: R
 fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
     let (ph, pv) = state.pen_size;
-    let mode = PatternMode::from_pn_mode(state.text_state.pn_mode);
+    let mode = pattern_mode(state);
     match opcode & 0x000F {
         0 => frame_oval_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
         1 => {
@@ -1118,7 +1135,7 @@ fn apply_arc_verb(
 }
 
 fn apply_poly_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, verts: &[(i32, i32)]) {
-    let mode = PatternMode::from_pn_mode(state.text_state.pn_mode);
+    let mode = pattern_mode(state);
     match opcode & 0x000F {
         0 => frame_polygon(canvas, verts, state.fg),
         1 => {
@@ -1192,7 +1209,7 @@ fn paint_region_pattern(
     if bb_w == 0 || bb_h == 0 {
         return;
     }
-    let mode = PatternMode::from_pn_mode(state.text_state.pn_mode);
+    let mode = pattern_mode(state);
     let solid = if mode.is_pat_copy() {
         if pat.is_solid_fg() {
             Some(fg)

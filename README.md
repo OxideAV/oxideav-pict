@@ -753,8 +753,70 @@ assert_eq!(&img.data[off..off + 3], &[0x7F, 0x7F, 0x7F]);
 
 A new [`raster::Canvas::invert_span`] primitive carries the channel-
 wise-NOT-with-clip-honoured shape that the four shape helpers iterate
-through. The arithmetic transfer modes (32..=49) still need a separate
-round to honour the per-pixel `OpColor` arithmetic blend on the canvas.
+through.
+
+## Arithmetic transfer modes (round 273 — `blend`…`adMin` honoured)
+
+Inside Macintosh: Imaging With QuickDraw §4 ("Color QuickDraw") pages
+4-38..4-40 define eight **arithmetic transfer modes** that combine a
+source colour with the existing destination pixel per RGB channel.
+Round 230 captured the `PnMode` code + the `OpColor` parameter into
+[`PictTextState`]; round 247 honoured the Boolean pattern modes
+(`patCopy = 8` … `notPatBic = 15`). Round 273 wires the arithmetic band
+into the same per-cell pattern-fill dispatch:
+
+| Mode          | Code | Per-channel result                                    |
+| ------------- | ---- | ----------------------------------------------------- |
+| `blend`       | 32   | `src·w/255 + dst·(255−w)/255` (`w` = `OpColor`)        |
+| `addPin`      | 33   | `min(src + dst, OpColor)` (max-pin; default white)     |
+| `addOver`     | 34   | `(src + dst) mod 256` (wrapping add)                    |
+| `subPin`      | 35   | `max(dst − src, OpColor)` (min-pin; default black)     |
+| `transparent` | 36   | `src` unless `src == bg` (then unchanged)              |
+| `addMax`      | 37   | `max(src, dst)` (greater saturation)                   |
+| `subOver`     | 38   | `(dst − src) mod 256` (wrapping sub)                   |
+| `adMin`       | 39   | `min(src, dst)` (lesser saturation)                    |
+
+The "source" colour is the pattern's on-bit foreground / off-bit
+background, exactly as the Boolean modes; the §4 arithmetic op then
+combines it with the destination. The new pure combiner
+[`blend_arith`] implements the per-channel formulas at 8-bit ("truncated
+RGB" direct-pixel) precision, and a new [`PatternMode::Arith`] variant
+carries the active `OpColor` pin / blend weight + the transparent-mode
+background key. `PatternMode::from_pn_mode_with(code, op_color, bg_key)`
+resolves the arithmetic modes when the decoder has the colour context;
+an absent `OpColor` opcode defaults per §4-39/4-40 — max-pin → white,
+min-pin → black, `blend` → 50 % gray — so a producer that never emits
+an `OpColor` gets the basic-port behaviour the spec describes. The bare
+const `PatternMode::from_pn_mode` still folds the arithmetic codes to
+`patCopy`, so a picture that never sets `PnMode` renders bit-for-bit
+identically to pre-r273.
+
+```rust
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::parse_pict;
+
+// Wash mid-grey, then addOver-paint a darker grey: (100+50) mod 256.
+let mut b = PictBuilder::new(0, 0, 2, 2);
+b.fg_color(100, 100, 100).bg_color(100, 100, 100)
+    .pn_mode(8).pen_pattern([0xFF; 8])
+    .rect(Verb::Paint, 0, 0, 2, 2);
+b.fg_color(50, 50, 50).bg_color(50, 50, 50)
+    .pn_mode(34)              // addOver
+    .pen_pattern([0xFF; 8])
+    .rect(Verb::Paint, 0, 0, 2, 2);
+let img = parse_pict(&b.finish())?;
+assert_eq!(&img.data[0..3], &[150, 150, 150]);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Coverage scope: round 273 honours the arithmetic modes for the
+**pattern-fill** verbs (paint / erase / fill of every shape, plus the
+patterned thick-frame variant) — the same dispatch surface round 247
+established. The §4-40 1-bit-environment revert table (`blend → srcCopy`,
+`addOver/subOver → srcXor`, …) is not needed here: this crate's canvas
+is always true-colour RGBA, so the direct-pixel arithmetic path is the
+correct one. Wiring the arithmetic modes through the `CopyBits` raster
+blit (`TxMode` on DirectBits / PackBits) remains a separate concern.
 
 ## Structured `fontName` / `lineJustify` / `glyphState` (round 236)
 
@@ -894,16 +956,16 @@ masks bit 7 off when reporting "no named style bits set."
   falls back to the monochrome `Pat1Data` for other tile sizes.
 * **Text glyphs.** `LongText` / `DH/DV/DHDVText` are walked past but
   not rasterised — a TrueType engine is a separate round.
-* **Arithmetic transfer modes on the canvas.** Round 230 captures
-  `TxMode` / `PnMode` / `OpColor` into `text_state` and round 247
-  honours the Boolean pattern modes (`patCopy = 8` … `notPatBic = 15`)
-  for every patterned shape verb. The arithmetic transfer modes
-  (`blend = 32`, `addPin = 33`, `addOver = 34`, `subPin = 35`,
-  `transparent = 36`, `addMax = 37`, `subOver = 38`, `adMin = 39`,
-  `grayishTextOr = 49`) per Inside Macintosh §4 ("Color QuickDraw")
-  pages 4-38..40 are still captured-but-not-honoured — they need a
-  Color QuickDraw colour-arithmetic pipeline + the `OpColor` weight
-  / pin colour threaded into every per-cell write.
+* **Arithmetic transfer modes on rasters.** Round 230 captures
+  `TxMode` / `PnMode` / `OpColor` into `text_state`; round 247 honours
+  the Boolean pattern modes (`patCopy = 8` … `notPatBic = 15`) and round
+  273 honours the eight arithmetic transfer modes (`blend = 32` …
+  `adMin = 39`) per Inside Macintosh §4 ("Color QuickDraw") pages
+  4-38..40 — both for every patterned shape verb. What remains: threading
+  the arithmetic / Boolean transfer modes through the `CopyBits` raster
+  blit (DirectBits / PackBits), which still always render `srcCopy`, and
+  the `grayishTextOr = 49` text-shading mode (text glyphs aren't
+  rasterised yet — see "Text glyphs" below).
 * **`TxMode` / source transfer modes on rasters.** §3-44 source modes
   (`srcCopy = 0` … `notSrcBic = 7`) apply to `CopyBits` rasters
   (DirectBits / PackBits) which still render `srcCopy` here — wiring

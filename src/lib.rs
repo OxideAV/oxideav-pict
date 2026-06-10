@@ -79,10 +79,10 @@ pub use ops::{
     PictBuilder, Verb,
 };
 pub use probe::{probe_pict, PictProbe, ProbeRect, ProbeTermination, ProbeVersion};
-pub use raster::PatternMode;
+pub use raster::{blend_arith, ArithMode, PatternMode};
 pub use state::{
     Pattern, PictFontName, PictGlyphState, PictLineJustify, PictPattern, PictTextFace,
-    PictTextState, PixPattern, TextRatio,
+    PictTextState, PixPattern, Rgba, TextRatio,
 };
 
 #[cfg(feature = "registry")]
