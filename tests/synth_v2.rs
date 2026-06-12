@@ -9,7 +9,7 @@
 //! All synthesised streams here use the canonical layout per Inside
 //! Macintosh: Imaging With QuickDraw §A-3.
 
-use oxideav_pict::{parse_pict, PictError, PictPixelFormat};
+use oxideav_pict::{blend_source, parse_pict, PictError, PictPixelFormat, Rgba, SourceMode};
 
 /// Build a v2 PICT body (no 512-byte launch-stub prefix) containing a
 /// single `DirectBitsRect` (`0x009A`) that holds `width × height`
@@ -302,7 +302,27 @@ fn opcode_stream_with_state_then_raster() {
     // Now the actual DirectBitsRect (everything from offset 40 onwards).
     buf.extend_from_slice(&raster[40..]);
     let img = parse_pict(&buf).expect("state+raster decode failed");
-    assert_eq!(img.data, rgba);
+    // The spliced `RGBFgCol` set the foreground to (0xFF, 0xAA, 0x12)
+    // (high byte of each 16-bit channel), so the DirectBitsRect's
+    // `mode = 0` (srcCopy) word colorizes the blit per Inside
+    // Macintosh Â§4 Table 4-1 / Â§4-33: each source channel's
+    // closeness to black applies that portion of the foreground, the
+    // remainder applies the (default white) background.
+    let fg = Rgba::new(0xFF, 0xAA, 0x12, 0xFF);
+    for px in 0..4usize {
+        let src = Rgba::new(
+            rgba[px * 4],
+            rgba[px * 4 + 1],
+            rgba[px * 4 + 2],
+            rgba[px * 4 + 3],
+        );
+        let want = blend_source(SourceMode::SrcCopy, src, Rgba::WHITE, fg, Rgba::WHITE);
+        assert_eq!(
+            &img.data[px * 4..px * 4 + 4],
+            &[want.r, want.g, want.b, want.a],
+            "pixel {px}"
+        );
+    }
 }
 
 #[test]

@@ -262,6 +262,81 @@ impl Canvas {
         }
         self.dirty = true;
     }
+
+    /// [`Canvas::blit`] obeying a `CopyBits` source transfer mode
+    /// (Inside Macintosh: Imaging With QuickDraw §3 Table 3-1 /
+    /// §4 Table 4-1 — book pages 3-9 and 4-33). Every destination
+    /// pixel is combined with its source pixel through
+    /// [`blend_source`] under the active foreground / background
+    /// colours.
+    ///
+    /// `SrcCopy` with a black foreground and a white background is
+    /// the §4-34 identity case (*"Drawing into a white background
+    /// with a black foreground always reproduces the source image,
+    /// regardless of the pixel depth"*) and short-circuits to the
+    /// plain [`Canvas::blit`] fast path, bit-for-bit.
+    pub fn blit_mode(
+        &mut self,
+        src_rgba: &[u8],
+        src_w: u32,
+        src_h: u32,
+        dst_top: i32,
+        dst_left: i32,
+        dst_bot: i32,
+        dst_right: i32,
+        mode: SourceMode,
+        fg: Rgba,
+        bg: Rgba,
+    ) {
+        if mode.is_identity_copy(fg, bg) {
+            self.blit(
+                src_rgba, src_w, src_h, dst_top, dst_left, dst_bot, dst_right,
+            );
+            return;
+        }
+        if src_w == 0 || src_h == 0 {
+            return;
+        }
+        let dst_w = (dst_right - dst_left).max(0) as u32;
+        let dst_h = (dst_bot - dst_top).max(0) as u32;
+        if dst_w == 0 || dst_h == 0 {
+            return;
+        }
+        for dy in 0..dst_h {
+            let sy = (dy as u64 * src_h as u64 / dst_h as u64) as u32;
+            let cy = dst_top + dy as i32;
+            if cy < 0 || (cy as u32) >= self.height {
+                continue;
+            }
+            for dx in 0..dst_w {
+                let sx = (dx as u64 * src_w as u64 / dst_w as u64) as u32;
+                let cx = dst_left + dx as i32;
+                if !self.in_clip(cx, cy) {
+                    continue;
+                }
+                let s_off = ((sy * src_w + sx) * 4) as usize;
+                let src = Rgba::new(
+                    src_rgba[s_off],
+                    src_rgba[s_off + 1],
+                    src_rgba[s_off + 2],
+                    src_rgba[s_off + 3],
+                );
+                let d_off = ((cy as u32 * self.width + cx as u32) * 4) as usize;
+                let dst = Rgba::new(
+                    self.data[d_off],
+                    self.data[d_off + 1],
+                    self.data[d_off + 2],
+                    self.data[d_off + 3],
+                );
+                let out = blend_source(mode, src, dst, fg, bg);
+                self.data[d_off] = out.r;
+                self.data[d_off + 1] = out.g;
+                self.data[d_off + 2] = out.b;
+                self.data[d_off + 3] = out.a;
+            }
+        }
+        self.dirty = true;
+    }
 }
 
 /// Bresenham line from `(x0, y0)` to `(x1, y1)`, inclusive of both
@@ -1097,6 +1172,211 @@ impl PatternMode {
     #[inline]
     pub const fn is_pat_copy(self) -> bool {
         matches!(self, Self::PatCopy)
+    }
+}
+
+/// A `CopyBits` source transfer mode, resolved with the colour context
+/// the §4 semantics need.
+///
+/// Inside Macintosh: Imaging With QuickDraw §3 ("QuickDraw Drawing")
+/// pages 3-113..3-114 define the eight Boolean source modes
+/// (`srcCopy = 0`, `srcOr = 1`, `srcXor = 2`, `srcBic = 3`,
+/// `notSrcCopy = 4`, `notSrcOr = 5`, `notSrcXor = 6`, `notSrcBic = 7`)
+/// consumed by the `CopyBits` family — in PICT terms, the `mode` word
+/// every `BitsRect` / `BitsRgn` / `PackBitsRect` / `PackBitsRgn` /
+/// `DirectBitsRect` / `DirectBitsRgn` record carries between `dstRect`
+/// and the pixel data (§A-3 Listings A-2 / A-3 — *"mode: Mode;
+/// {transfer mode}"*).
+///
+/// On destinations deeper than 1 bit the Boolean ops take the §4
+/// Table 4-1 (book page 4-33) colour shape: the source pixel's
+/// per-channel closeness to black applies that portion of the
+/// *foreground* colour (or *background* for the BIC ops), and "any
+/// other color" applies weighted portions per §4-33's worked
+/// `CopyBits` description. The §4 arithmetic transfer modes
+/// (`blend = 32` … `adMin = 39`) are legal in the same mode word
+/// (§4-40 Note — *"your application can pass them in parameters to
+/// the PenMode, CopyBits, CopyDeepMask, and TextMode routines"*) and
+/// are carried by [`SourceMode::Arith`], reusing the round-273
+/// [`blend_arith`] combiner with the decoded raster pixel as the
+/// source colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SourceMode {
+    /// `srcCopy = 0` — §4 Table 4-1: black source applies the
+    /// foreground colour, white applies the background colour, any
+    /// other colour applies weighted portions of both. With the
+    /// fresh-GrafPort black-fg / white-bg this reproduces the source
+    /// image exactly (§4-34).
+    #[default]
+    SrcCopy,
+    /// `notSrcCopy = 4` — `srcCopy` with the foreground and background
+    /// roles reversed (§4-34: *"the notSrcCopy mode reverses the
+    /// foreground and background colors"*).
+    NotSrcCopy,
+    /// `srcOr = 1` — black source applies the foreground colour, white
+    /// leaves the destination alone, other colours apply weighted
+    /// portions of the foreground.
+    SrcOr,
+    /// `notSrcOr = 5` — white source applies the foreground colour,
+    /// black leaves the destination alone.
+    NotSrcOr,
+    /// `srcXor = 2` — a black source pixel inverts the destination
+    /// pixel; white and coloured source pixels leave it alone
+    /// (§4 Table 4-1 marks the invert *"undefined for colored
+    /// destination pixel"* — we honour it as the channel-wise NOT the
+    /// rest of this crate's invert paths use).
+    SrcXor,
+    /// `notSrcXor = 6` — a white source pixel inverts the destination
+    /// pixel; black and coloured source pixels leave it alone.
+    NotSrcXor,
+    /// `srcBic = 3` — black source applies the *background* colour
+    /// ("bit clear"), white leaves the destination alone, other
+    /// colours apply weighted portions of the background.
+    SrcBic,
+    /// `notSrcBic = 7` — white source applies the background colour,
+    /// black leaves the destination alone.
+    NotSrcBic,
+    /// One of the §4 arithmetic transfer modes (`blend = 32` …
+    /// `adMin = 39`) applied to the blit: every destination pixel is
+    /// `blend_arith(mode, src, dst, op_color, bg_key)` with the decoded
+    /// raster pixel as `src`.
+    Arith {
+        /// The specific §4 arithmetic operation.
+        mode: ArithMode,
+        /// `OpColor` — max-pin (`addPin`), min-pin (`subPin`) or
+        /// per-channel blend weight (`blend`); ignored by the rest.
+        op_color: Rgba,
+        /// Background colour used as the transparent-mode key.
+        bg_key: Rgba,
+    },
+}
+
+impl SourceMode {
+    /// `ditherCopy = 64` — §3-114 / §4-37: additive on any source
+    /// mode to request dithering. Dithering approximates colours on
+    /// *indexed* destinations; this crate's canvas is always
+    /// true-colour RGBA, so the bit is recognised and stripped (the
+    /// §4-37 contract — mix existing colours to approximate one the
+    /// destination can't represent — is satisfied exactly by writing
+    /// the requested colour itself).
+    pub const DITHER_COPY: i16 = 64;
+
+    /// Resolve a raster opcode's on-disk `mode` word.
+    ///
+    /// `0..=7` map to the eight §3-113 Boolean source modes;
+    /// `32..=39` resolve to [`SourceMode::Arith`] carrying `op_color`
+    /// (the declared `OpColor`, defaulting per §4-39/4-40 when absent:
+    /// max-pin → white, min-pin → black, blend → 50 % gray) and
+    /// `bg_key` (the transparent-mode background key). The additive
+    /// `ditherCopy = 64` bit is stripped first. Any other code falls
+    /// back to `srcCopy` — the total-function posture the round-247
+    /// pattern path established.
+    pub fn from_mode_word(code: i16, op_color: Option<Rgba>, bg_key: Rgba) -> Self {
+        let base = code & !Self::DITHER_COPY;
+        if let Some(mode) = ArithMode::from_code(base) {
+            let op_color = op_color.unwrap_or(match mode {
+                // min-pin: basic-port minimum is black (§4-40).
+                ArithMode::SubPin => Rgba::BLACK,
+                // blend: basic-port weight is "50 percent gray" (§4-40).
+                ArithMode::Blend => Rgba::new(128, 128, 128, 255),
+                // max-pin + everything else: basic-port maximum is white.
+                _ => Rgba::WHITE,
+            });
+            return Self::Arith {
+                mode,
+                op_color,
+                bg_key,
+            };
+        }
+        match base {
+            0 => Self::SrcCopy,
+            1 => Self::SrcOr,
+            2 => Self::SrcXor,
+            3 => Self::SrcBic,
+            4 => Self::NotSrcCopy,
+            5 => Self::NotSrcOr,
+            6 => Self::NotSrcXor,
+            7 => Self::NotSrcBic,
+            _ => Self::SrcCopy,
+        }
+    }
+
+    /// Returns `true` when this mode is the §4-34 identity shape —
+    /// `srcCopy` with a black foreground and a white background —
+    /// which *"always reproduces the source image, regardless of the
+    /// pixel depth"* and therefore short-circuits to the raw
+    /// [`Canvas::blit`] fast path.
+    #[inline]
+    pub fn is_identity_copy(self, fg: Rgba, bg: Rgba) -> bool {
+        matches!(self, Self::SrcCopy) && fg == Rgba::BLACK && bg == Rgba::WHITE
+    }
+}
+
+/// Combine one source pixel with the destination pixel per the
+/// `CopyBits` source transfer-mode semantics of §4 Table 4-1 (worked
+/// at 8-bit channel precision).
+///
+/// The weighted-portion shape follows §4-33's `CopyBits` description:
+/// per channel, the source's closeness to black (`255 − src`) selects
+/// that relative amount of the mode's "apply" colour (foreground for
+/// COPY / OR, background for BIC), and the remainder keeps the mode's
+/// "leave" colour (the background for the COPY ops, the existing
+/// destination for OR / BIC). The `not*` variants swap the black /
+/// white roles. XOR is a whole-pixel decision per Table 4-1 — only an
+/// exactly-black (`srcXor`) or exactly-white (`notSrcXor`) source
+/// pixel inverts the destination; *"any other color"* leaves it alone.
+///
+/// Alpha: the COPY modes take the source's alpha (matching the raw
+/// blit they generalise); every other mode preserves the
+/// destination's.
+#[inline]
+pub fn blend_source(mode: SourceMode, src: Rgba, dst: Rgba, fg: Rgba, bg: Rgba) -> Rgba {
+    // `w/255` of `a` + `(255 − w)/255` of `b`, rounded to nearest.
+    #[inline]
+    fn mix(w: u8, a: u8, b: u8) -> u8 {
+        ((w as u32 * a as u32 + (255 - w as u32) * b as u32 + 127) / 255) as u8
+    }
+    // Apply `mix` channel-wise: weight = closeness of the source
+    // channel to black (`to_black = true`) or to white, applying that
+    // portion of `apply` and the remainder of the per-channel `keep`.
+    #[inline]
+    fn mix_rgb(src: Rgba, apply: Rgba, keep: Rgba, to_black: bool, alpha: u8) -> Rgba {
+        let w = |s: u8| if to_black { 255 - s } else { s };
+        Rgba {
+            r: mix(w(src.r), apply.r, keep.r),
+            g: mix(w(src.g), apply.g, keep.g),
+            b: mix(w(src.b), apply.b, keep.b),
+            a: alpha,
+        }
+    }
+    let is_black = src.r == 0 && src.g == 0 && src.b == 0;
+    let is_white = src.r == 0xFF && src.g == 0xFF && src.b == 0xFF;
+    match mode {
+        SourceMode::SrcCopy => mix_rgb(src, fg, bg, true, src.a),
+        SourceMode::NotSrcCopy => mix_rgb(src, bg, fg, true, src.a),
+        SourceMode::SrcOr => mix_rgb(src, fg, dst, true, dst.a),
+        SourceMode::NotSrcOr => mix_rgb(src, fg, dst, false, dst.a),
+        SourceMode::SrcBic => mix_rgb(src, bg, dst, true, dst.a),
+        SourceMode::NotSrcBic => mix_rgb(src, bg, dst, false, dst.a),
+        SourceMode::SrcXor => {
+            if is_black {
+                invert_rgba(dst)
+            } else {
+                dst
+            }
+        }
+        SourceMode::NotSrcXor => {
+            if is_white {
+                invert_rgba(dst)
+            } else {
+                dst
+            }
+        }
+        SourceMode::Arith {
+            mode,
+            op_color,
+            bg_key,
+        } => blend_arith(mode, src, dst, op_color, bg_key),
     }
 }
 

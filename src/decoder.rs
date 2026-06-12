@@ -48,7 +48,7 @@ use crate::raster::{
     fill_round_rect_pattern_mode, fill_round_rect_pix_pattern, frame_arc, frame_oval_thick,
     frame_polygon, frame_rect, frame_rect_pattern_thick_mode, frame_rect_pix_pattern_thick,
     frame_round_rect, invert_arc, invert_oval, invert_polygon, invert_round_rect,
-    line_thick as draw_line_thick, Canvas, PatternMode,
+    line_thick as draw_line_thick, Canvas, PatternMode, SourceMode,
 };
 use crate::reader::Reader;
 use crate::region::{parse_region, Region};
@@ -1388,11 +1388,27 @@ struct RasterSub {
     width: u32,
     height: u32,
     data: Vec<u8>,
+    /// The record's on-disk `mode` (transfer mode) word — §A-3
+    /// Listings A-2 / A-3 place it between `dstRect` and the pixel
+    /// data on every raster opcode. Resolved against the active
+    /// foreground / background / `OpColor` state at blit time.
+    mode: u16,
 }
 
 fn blit_subimage(canvas: &mut Canvas, state: &PictState, img: &RasterSub, dst: &RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, *dst);
-    canvas.blit(&img.data, img.width, img.height, top, left, bottom, right);
+    // §3-113 / §4 Table 4-1: the record's transfer-mode word governs
+    // how source pixels combine with the destination. The §4
+    // arithmetic band (32..=39) picks up the declared `OpColor`
+    // (per-§4-40 defaults when absent) and the background colour as
+    // the transparent-mode key — the same colour context the round-273
+    // pattern path resolves. `srcCopy` under the fresh-GrafPort
+    // black-fg / white-bg state is the §4-34 identity and takes the
+    // raw-copy fast path inside `blit_mode`.
+    let mode = SourceMode::from_mode_word(img.mode as i16, state.text_state.op_color, state.bg);
+    canvas.blit_mode(
+        &img.data, img.width, img.height, top, left, bottom, right, mode, state.fg, state.bg,
+    );
 }
 
 /// Blit with a transient region clip honoured for this opcode only.
@@ -1490,7 +1506,7 @@ fn decode_pack_bits_rect(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32)> {
     let bounds = r.read_rect()?;
     let _src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
-    let _mode = r.read_u16()?;
+    let mode = r.read_u16()?;
 
     let width = (bounds.3 - bounds.1).max(0) as u32;
     let height = (bounds.2 - bounds.0).max(0) as u32;
@@ -1516,6 +1532,7 @@ fn decode_pack_bits_rect(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32)> {
     let rgba = expand_1bpp_to_rgba(&bitmap, width, height, row_bytes);
     Ok((
         RasterSub {
+            mode,
             width,
             height,
             data: rgba,
@@ -1570,7 +1587,7 @@ fn decode_bits_rect_v2(
     let bounds = r.read_rect()?;
     let _src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
-    let _mode = r.read_u16()?;
+    let mode = r.read_u16()?;
     let rgn = if with_region {
         Some(parse_region(r)?)
     } else {
@@ -1588,6 +1605,7 @@ fn decode_bits_rect_v2(
     let rgba = expand_1bpp_to_rgba(&bitmap, width, height, row_bytes);
     Ok((
         RasterSub {
+            mode,
             width,
             height,
             data: rgba,
@@ -1619,7 +1637,7 @@ fn decode_pack_bits_rgn(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32, Regio
     let bounds = r.read_rect()?;
     let _src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
-    let _mode = r.read_u16()?;
+    let mode = r.read_u16()?;
     let rgn = parse_region(r)?;
 
     let width = (bounds.3 - bounds.1).max(0) as u32;
@@ -1645,6 +1663,7 @@ fn decode_pack_bits_rgn(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32, Regio
     let rgba = expand_1bpp_to_rgba(&bitmap, width, height, row_bytes);
     Ok((
         RasterSub {
+            mode,
             width,
             height,
             data: rgba,
@@ -1755,7 +1774,7 @@ fn decode_indexed_pixmap_payload(
 
     let _src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
-    let _mode = r.read_u16()?;
+    let mode = r.read_u16()?;
     let rgn = if with_region {
         Some(parse_region(r)?)
     } else {
@@ -1789,6 +1808,7 @@ fn decode_indexed_pixmap_payload(
     let rgba = resolve_indexed_pixmap(&pix_data, width, height, row_bytes, pixel_size, &palette)?;
     Ok((
         RasterSub {
+            mode,
             width,
             height,
             data: rgba,
@@ -1838,11 +1858,12 @@ fn decode_direct_bits_rgn(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32, Reg
     let header = read_pixmap_header(r)?;
     let _src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
-    let _mode = r.read_u16()?;
+    let mode = r.read_u16()?;
     let rgn = parse_region(r)?;
     let (rgba, dst) = decode_direct_bits_pixels(r, &header, dst_rect)?;
     Ok((
         RasterSub {
+            mode,
             width: header.width,
             height: header.height,
             data: rgba,
@@ -1906,10 +1927,11 @@ fn decode_direct_bits_rect(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32)> {
     let header = read_pixmap_header(r)?;
     let _src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
-    let _mode = r.read_u16()?;
+    let mode = r.read_u16()?;
     let (rgba, dst) = decode_direct_bits_pixels(r, &header, dst_rect)?;
     Ok((
         RasterSub {
+            mode,
             width: header.width,
             height: header.height,
             data: rgba,

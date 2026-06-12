@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 282: **`CopyBits` transfer modes honoured on the raster blit.**
+  Every PICT raster opcode record (`BitsRect 0x0090` / `BitsRgn 0x0091`
+  / `PackBitsRect 0x0098` / `PackBitsRgn 0x0099` / `DirectBitsRect
+  0x009A` / `DirectBitsRgn 0x009B`) carries a `mode` (transfer mode)
+  word between `dstRect` and the pixel data per Inside Macintosh:
+  Imaging With QuickDraw §A-3 Listings A-2 / A-3. Rounds 1..273 parsed
+  and discarded it — every blit rendered `srcCopy` against a black-fg /
+  white-bg port. Round 282 resolves the word into the new public
+  [`SourceMode`] enum and honours it per pixel through the new
+  [`blend_source`] combiner + `Canvas::blit_mode`:
+  - the eight §3 Boolean source modes (`srcCopy = 0` … `notSrcBic = 7`,
+    book pages 3-113..3-114) with the §4 Table 4-1 (page 4-33) colour
+    semantics — per channel, the source's closeness to black applies
+    that portion of the foreground colour (background for the BIC ops),
+    white applies the mode's "leave" colour, *"any other color"*
+    applies weighted portions per the §4-33 `CopyBits` description;
+    XOR is a whole-pixel decision (only exactly-black / exactly-white
+    source pixels invert the destination, channel-wise NOT);
+  - the eight §4 arithmetic transfer modes (`blend = 32` … `adMin =
+    39`) — legal in the `CopyBits` mode parameter per the §4-40 Note —
+    reusing the round-273 `blend_arith` combiner with the decoded
+    raster pixel as the source, the declared `OpColor` (per-§4-39/4-40
+    defaults when absent) and the background colour as the
+    transparent-mode key;
+  - the additive `ditherCopy = 64` bit (§3-114), recognised and
+    stripped (dithering approximates colours on indexed destinations;
+    the canvas here is true-colour RGBA). Unknown codes (including the
+    pattern band `8..=15`) fall back to `srcCopy`, mirroring the
+    round-247 total-function posture; the additive `hilite = 50` and
+    `grayishTextOr = 49` remain unresolved pending glyph rasterisation.
+
+  `srcCopy` under the fresh-GrafPort black-fg / white-bg state is the
+  §4-34 identity (*"always reproduces the source image, regardless of
+  the pixel depth"*) and short-circuits to the raw-copy fast path, so
+  pre-r282 streams decode bit-for-bit unchanged; a non-default port
+  now colorizes `srcCopy` blits per §4-33 (the Listing 4-5 coloration
+  effect) including 1-bpp BitMap sources (black bits → foreground).
+  Encoder side: `build_direct_bits_rect_op_with_mode` /
+  `PictBuilder::raster_with_mode` emit a `DirectBitsRect` with an
+  explicit mode word (`build_direct_bits_rect_op` keeps emitting
+  `mode = 0`, byte-for-byte unchanged). 25 new tests in
+  `tests/synth_v2_round282.rs`: encoder byte layout (mode word at
+  record offset 68), `SourceMode::from_mode_word` band mapping +
+  dither-strip + `OpColor` defaults + fallback, hand-pinned
+  `blend_source` weighted formulas, full decode round-trips for each
+  Boolean mode + `addOver` / `addPin` / `transparent` on the blit, the
+  identity fast path, and 1-bpp `BitsRect` port-colorization
+  (`srcCopy` + `srcOr`). One pre-existing test
+  (`synth_v2::opcode_stream_with_state_then_raster`) spliced a
+  non-black `RGBFgCol` before its raster and asserted a raw copy — its
+  expectation now follows the §4-33 colorization it always requested.
+
 - Round 273: **Color QuickDraw arithmetic transfer modes honoured on
   patterned shape fills.** Inside Macintosh: Imaging With QuickDraw §4
   ("Color QuickDraw") pages 4-38..4-40 define eight arithmetic transfer

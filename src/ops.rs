@@ -1253,6 +1253,31 @@ impl PictBuilder {
         Ok(self)
     }
 
+    /// [`PictBuilder::raster`] with an explicit transfer-mode word in
+    /// the `DirectBitsRect` record's `mode` field (§A-3 Listing A-2):
+    /// `0..=7` are the §3-113 Boolean source modes (`srcCopy` …
+    /// `notSrcBic`), `32..=39` the §4 arithmetic transfer modes
+    /// (`blend` … `adMin`), `+ 64` adds `ditherCopy`. The decoder
+    /// honours the word at blit time against the active foreground /
+    /// background / `OpColor` state.
+    #[allow(clippy::too_many_arguments)]
+    pub fn raster_with_mode(
+        &mut self,
+        top: i16,
+        left: i16,
+        bottom: i16,
+        right: i16,
+        data: &[u8],
+        pack: crate::encoder::PackType,
+        mode: u16,
+    ) -> Result<&mut Self> {
+        let bytes = crate::encoder::build_direct_bits_rect_op_with_mode(
+            top, left, bottom, right, data, pack, mode,
+        )?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
     /// Word-align then append `OpEndPic` (`0x00FF`) and return the
     /// final byte stream.
     pub fn finish(mut self) -> Vec<u8> {

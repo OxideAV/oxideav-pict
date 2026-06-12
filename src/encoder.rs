@@ -432,6 +432,10 @@ pub fn encode_pict_v1_with(
 ///
 /// This is the building block [`crate::ops::PictBuilder::raster`] uses
 /// to fold a raster into a drawing-only stream.
+///
+/// The record's `mode` (transfer mode) word is `0` (`srcCopy`); use
+/// [`build_direct_bits_rect_op_with_mode`] to emit one of the other
+/// §3-113 Boolean source modes or a §4 arithmetic transfer mode.
 pub fn build_direct_bits_rect_op(
     top: i16,
     left: i16,
@@ -439,6 +443,26 @@ pub fn build_direct_bits_rect_op(
     right: i16,
     data: &[u8],
     pack: PackType,
+) -> Result<Vec<u8>> {
+    build_direct_bits_rect_op_with_mode(top, left, bottom, right, data, pack, 0)
+}
+
+/// [`build_direct_bits_rect_op`] with an explicit transfer-mode word.
+///
+/// `mode` is written verbatim into the record's `mode` field (§A-3
+/// Listing A-2 — *"mode: Mode; {transfer mode}"*): `0..=7` are the
+/// §3-113 Boolean source modes (`srcCopy` … `notSrcBic`), `32..=39`
+/// the §4 arithmetic transfer modes (`blend` … `adMin`), and `+ 64`
+/// requests dithering (`ditherCopy`, additive per §3-114).
+#[allow(clippy::too_many_arguments)]
+pub fn build_direct_bits_rect_op_with_mode(
+    top: i16,
+    left: i16,
+    bottom: i16,
+    right: i16,
+    data: &[u8],
+    pack: PackType,
+    mode: u16,
 ) -> Result<Vec<u8>> {
     if bottom <= top || right <= left {
         return Err(PictError::invalid(format!(
@@ -511,8 +535,8 @@ pub fn build_direct_bits_rect_op(
     write_i16(&mut buf, left);
     write_i16(&mut buf, bottom);
     write_i16(&mut buf, right);
-    // mode = srcCopy.
-    write_u16(&mut buf, 0);
+    // mode — the record's transfer-mode word.
+    write_u16(&mut buf, mode);
     // Pixel rows.
     write_pixel_rows(&mut buf, width, height, data, pack, row_bytes_raw)?;
     Ok(buf)

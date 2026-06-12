@@ -693,15 +693,12 @@ assert_eq!(PatternMode::from_pn_mode(13), PatternMode::NotPatOr);
 
 Coverage scope: round 247 honours `PnMode` for the **pattern-fill**
 verbs (paint / erase / fill of every shape, plus the patterned
-thick-frame variant). The §3-44 source modes (`srcCopy = 0` …
+thick-frame variant). The §3 source modes (`srcCopy = 0` …
 `notSrcBic = 7`) apply to `CopyBits` rasters (DirectBits / PackBits)
-which always render `srcCopy` in this crate — wiring `TxMode` /
-`pnMode srcCopy` through to the blit path is a separate concern. The
-arithmetic transfer modes (32..=49 — `blend`, `addPin`, `addOver`,
-`subPin`, `addMax`, `subOver`, `addMin`, `transparent`, `hilite`,
-`grayishTextOr`) are still captured-but-not-honoured per round 230 —
-those need a Color QuickDraw colour-arithmetic pipeline on top of the
-per-cell write path round 247 establishes.
+— honoured via each record's own `mode` word since round 282 (see
+"CopyBits transfer modes on the raster blit" below). The arithmetic
+transfer modes (`blend = 32` … `adMin = 39`) are honoured on pattern
+fills since round 273 and on raster blits since round 282.
 
 ## `Invert*` verbs on round-rect / oval / arc / polygon (round 252)
 
@@ -815,8 +812,82 @@ patterned thick-frame variant) — the same dispatch surface round 247
 established. The §4-40 1-bit-environment revert table (`blend → srcCopy`,
 `addOver/subOver → srcXor`, …) is not needed here: this crate's canvas
 is always true-colour RGBA, so the direct-pixel arithmetic path is the
-correct one. Wiring the arithmetic modes through the `CopyBits` raster
-blit (`TxMode` on DirectBits / PackBits) remains a separate concern.
+correct one. Round 282 carries the same arithmetic band through the
+`CopyBits` raster blit (the record's own `mode` word — see the next
+section).
+
+## CopyBits transfer modes on the raster blit (round 282)
+
+Every PICT raster opcode record — `BitsRect $0090` / `BitsRgn $0091` /
+`PackBitsRect $0098` / `PackBitsRgn $0099` / `DirectBitsRect $009A` /
+`DirectBitsRgn $009B` — carries a `mode` (transfer mode) word between
+`dstRect` and the pixel data (Inside Macintosh: Imaging With QuickDraw
+§A-3 Listings A-2 / A-3 — *"mode: Mode; {transfer mode}"*). Rounds
+1..273 parsed and discarded it, rendering every blit as `srcCopy`
+against a black-fg / white-bg port. Round 282 resolves the word into a
+new [`SourceMode`] and honours it per pixel:
+
+* **Boolean source modes** (`srcCopy = 0`, `srcOr = 1`, `srcXor = 2`,
+  `srcBic = 3`, `notSrcCopy = 4`, `notSrcOr = 5`, `notSrcXor = 6`,
+  `notSrcBic = 7` — §3 book pages 3-113..3-114) with the §4 Table 4-1
+  (book page 4-33) colour semantics. Per channel, the source pixel's
+  closeness to black applies that portion of the **foreground** colour
+  (**background** for the BIC ops); a white source applies the mode's
+  "leave" colour (the background for COPY, the existing destination
+  for OR / BIC); *"any other color"* applies weighted portions per the
+  §4-33 `CopyBits` worked description. The `not*` variants swap the
+  black / white roles. XOR is a whole-pixel decision per Table 4-1 —
+  only an exactly-black (`srcXor`) or exactly-white (`notSrcXor`)
+  source pixel inverts the destination (channel-wise NOT, the same
+  invert the round-252 verbs use).
+* **Arithmetic transfer modes** (`blend = 32` … `adMin = 39`) — legal
+  in the same mode word per the §4-40 Note (*"your application can
+  pass them in parameters to the PenMode, CopyBits, CopyDeepMask, and
+  TextMode routines"*). Resolved with the declared `OpColor`
+  (§4-39/4-40 defaults when absent: max-pin → white, min-pin → black,
+  blend → 50 % gray) and the active background colour as the
+  transparent-mode key, then combined through the round-273
+  [`blend_arith`] path with the decoded raster pixel as the source.
+* **`ditherCopy = 64`** (additive, §3-114) — recognised and stripped:
+  dithering approximates colours on *indexed* destinations, and this
+  crate's canvas is true-colour RGBA, so writing the requested colour
+  itself satisfies the §4-37 contract exactly.
+
+`srcCopy` under the fresh-GrafPort black-fg / white-bg state is the
+§4-34 identity (*"Drawing into a white background with a black
+foreground always reproduces the source image, regardless of the pixel
+depth"*) and short-circuits to the raw-copy fast path, so every
+pre-round-282 stream decodes bit-for-bit unchanged. Conversely a
+non-default foreground / background now colorizes `srcCopy` blits the
+way §4-33 describes (grayscale ramps land as shades of the port
+colours — the Listing 4-5 coloration effect), and 1-bpp BitMap sources
+take the foreground colour on their black bits per Table 4-1.
+
+```rust
+use oxideav_pict::ops::PictBuilder;
+use oxideav_pict::{parse_pict, PackType};
+
+// Copy a grayscale source through srcCopy with a blue foreground and
+// a red background — black → blue, white → red (§4 Listing 4-5).
+let mut b = PictBuilder::new(0, 0, 1, 2);
+b.fg_color(0, 0, 0xFF).bg_color(0xFF, 0, 0);
+let src = [0u8, 0, 0, 255, /* black */ 255, 255, 255, 255 /* white */];
+b.raster_with_mode(0, 0, 1, 2, &src, PackType::Raw, 0)?;
+let img = parse_pict(&b.finish())?;
+assert_eq!(&img.data[0..3], &[0, 0, 0xFF]); // black → fg
+assert_eq!(&img.data[4..7], &[0xFF, 0, 0]); // white → bg
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Unknown mode codes (including the pattern band `8..=15`, which §3
+defines only for line / shape drawing) fall back to `srcCopy`, the
+same total-function posture as the round-247 pattern path. The
+additive `hilite = 50` and the `grayishTextOr = 49` text-shading mode
+are not resolved (text glyphs aren't rasterised yet). Encoder side:
+[`build_direct_bits_rect_op_with_mode`] /
+[`PictBuilder::raster_with_mode`] emit a `DirectBitsRect` with an
+explicit mode word; the pre-existing builders keep emitting
+`mode = 0`.
 
 ## Structured `fontName` / `lineJustify` / `glyphState` (round 236)
 
@@ -956,21 +1027,15 @@ masks bit 7 off when reporting "no named style bits set."
   falls back to the monochrome `Pat1Data` for other tile sizes.
 * **Text glyphs.** `LongText` / `DH/DV/DHDVText` are walked past but
   not rasterised — a TrueType engine is a separate round.
-* **Arithmetic transfer modes on rasters.** Round 230 captures
-  `TxMode` / `PnMode` / `OpColor` into `text_state`; round 247 honours
-  the Boolean pattern modes (`patCopy = 8` … `notPatBic = 15`) and round
-  273 honours the eight arithmetic transfer modes (`blend = 32` …
-  `adMin = 39`) per Inside Macintosh §4 ("Color QuickDraw") pages
-  4-38..40 — both for every patterned shape verb. What remains: threading
-  the arithmetic / Boolean transfer modes through the `CopyBits` raster
-  blit (DirectBits / PackBits), which still always render `srcCopy`, and
-  the `grayishTextOr = 49` text-shading mode (text glyphs aren't
-  rasterised yet — see "Text glyphs" below).
-* **`TxMode` / source transfer modes on rasters.** §3-44 source modes
-  (`srcCopy = 0` … `notSrcBic = 7`) apply to `CopyBits` rasters
-  (DirectBits / PackBits) which still render `srcCopy` here — wiring
-  `state.text_state.tx_mode` through `blit` is a separate concern from
-  the round-247 pattern path.
+* **Text-only transfer modes.** Transfer modes are honoured on
+  patterned shape fills (Boolean — round 247; arithmetic — round 273)
+  and on the `CopyBits` raster blit via each record's `mode` word
+  (Boolean source modes + arithmetic + `ditherCopy` — round 282).
+  What remains is the text channel: `TxMode` and the
+  `grayishTextOr = 49` shading mode apply to glyph drawing, and text
+  glyphs aren't rasterised yet (see "Text glyphs" above). The additive
+  `hilite = 50` highlight bit is also unresolved (falls back to
+  `srcCopy` / `patCopy`).
 * **CompressedQuickTime decode.** The opcode is parsed (length-prefixed
   payload skipped cleanly so the surrounding decode keeps going), but
   the embedded image (typically JPEG) is not decoded — that needs
