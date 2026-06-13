@@ -106,21 +106,36 @@ fn plain_builder_is_mode_zero() {
 #[test]
 fn from_mode_word_boolean_band() {
     let w = Rgba::WHITE;
-    assert_eq!(SourceMode::from_mode_word(0, None, w), SourceMode::SrcCopy);
-    assert_eq!(SourceMode::from_mode_word(1, None, w), SourceMode::SrcOr);
-    assert_eq!(SourceMode::from_mode_word(2, None, w), SourceMode::SrcXor);
-    assert_eq!(SourceMode::from_mode_word(3, None, w), SourceMode::SrcBic);
     assert_eq!(
-        SourceMode::from_mode_word(4, None, w),
+        SourceMode::from_mode_word(0, None, w, None),
+        SourceMode::SrcCopy
+    );
+    assert_eq!(
+        SourceMode::from_mode_word(1, None, w, None),
+        SourceMode::SrcOr
+    );
+    assert_eq!(
+        SourceMode::from_mode_word(2, None, w, None),
+        SourceMode::SrcXor
+    );
+    assert_eq!(
+        SourceMode::from_mode_word(3, None, w, None),
+        SourceMode::SrcBic
+    );
+    assert_eq!(
+        SourceMode::from_mode_word(4, None, w, None),
         SourceMode::NotSrcCopy
     );
-    assert_eq!(SourceMode::from_mode_word(5, None, w), SourceMode::NotSrcOr);
     assert_eq!(
-        SourceMode::from_mode_word(6, None, w),
+        SourceMode::from_mode_word(5, None, w, None),
+        SourceMode::NotSrcOr
+    );
+    assert_eq!(
+        SourceMode::from_mode_word(6, None, w, None),
         SourceMode::NotSrcXor
     );
     assert_eq!(
-        SourceMode::from_mode_word(7, None, w),
+        SourceMode::from_mode_word(7, None, w, None),
         SourceMode::NotSrcBic
     );
 }
@@ -130,13 +145,16 @@ fn from_mode_word_boolean_band() {
 #[test]
 fn from_mode_word_strips_dither_copy() {
     let w = Rgba::WHITE;
-    assert_eq!(SourceMode::from_mode_word(64, None, w), SourceMode::SrcCopy);
     assert_eq!(
-        SourceMode::from_mode_word(64 + 3, None, w),
+        SourceMode::from_mode_word(64, None, w, None),
+        SourceMode::SrcCopy
+    );
+    assert_eq!(
+        SourceMode::from_mode_word(64 + 3, None, w, None),
         SourceMode::SrcBic
     );
     assert_eq!(
-        SourceMode::from_mode_word(64 + 34, None, w),
+        SourceMode::from_mode_word(64 + 34, None, w, None),
         SourceMode::Arith {
             mode: ArithMode::AddOver,
             op_color: Rgba::WHITE,
@@ -150,7 +168,7 @@ fn from_mode_word_strips_dither_copy() {
 #[test]
 fn from_mode_word_arith_op_color_defaults() {
     let key = Rgba::new(1, 2, 3, 255);
-    match SourceMode::from_mode_word(33, None, key) {
+    match SourceMode::from_mode_word(33, None, key, None) {
         SourceMode::Arith {
             mode,
             op_color,
@@ -162,11 +180,11 @@ fn from_mode_word_arith_op_color_defaults() {
         }
         other => panic!("expected Arith, got {other:?}"),
     }
-    match SourceMode::from_mode_word(35, None, key) {
+    match SourceMode::from_mode_word(35, None, key, None) {
         SourceMode::Arith { op_color, .. } => assert_eq!(op_color, Rgba::BLACK),
         other => panic!("expected Arith, got {other:?}"),
     }
-    match SourceMode::from_mode_word(32, None, key) {
+    match SourceMode::from_mode_word(32, None, key, None) {
         SourceMode::Arith { op_color, .. } => assert_eq!(op_color, Rgba::new(128, 128, 128, 255)),
         other => panic!("expected Arith, got {other:?}"),
     }
@@ -178,10 +196,14 @@ fn from_mode_word_arith_op_color_defaults() {
 #[test]
 fn from_mode_word_unknown_codes_fall_back_to_src_copy() {
     let w = Rgba::WHITE;
-    assert_eq!(SourceMode::from_mode_word(8, None, w), SourceMode::SrcCopy);
-    assert_eq!(SourceMode::from_mode_word(50, None, w), SourceMode::SrcCopy);
     assert_eq!(
-        SourceMode::from_mode_word(0x0100, None, w),
+        SourceMode::from_mode_word(8, None, w, None),
+        SourceMode::SrcCopy
+    );
+    // `hilite = 50` is handled separately (see the round-290 hilite
+    // tests); every other out-of-band code falls back to `srcCopy`.
+    assert_eq!(
+        SourceMode::from_mode_word(0x0100, None, w, None),
         SourceMode::SrcCopy
     );
 }

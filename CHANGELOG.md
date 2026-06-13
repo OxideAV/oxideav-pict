@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 290: **`hilite = 50` highlighting transfer mode honoured.**
+  Inside Macintosh: Imaging With QuickDraw §4 ("Color QuickDraw"),
+  "Highlighting" (book pages 4-41..4-43), defines the `hilite = 50`
+  transfer-mode constant (*"add to source or pattern mode for
+  highlighting"*). Rounds 247 / 273 / 282 folded it to `patCopy` /
+  `srcCopy`. Round 290 resolves it on both the `PnMode` pattern-fill
+  path and the `CopyBits` raster-blit `mode` word into new
+  [`PatternMode::Hilite`] / [`SourceMode::Hilite`] variants. Per §4
+  (*"replaces the background color with the highlight color … only bits
+  that are on in the pattern or source image can be highlighted"*),
+  every on-bit cell exchanges the destination's background colour for
+  the highlight colour and vice versa (every other colour unchanged) —
+  a reversible exchange matching the §4-40 Table 4-2 1-bit revert
+  (`hilite → srcXor`). The highlight colour is the `HiliteColor` opcode
+  (`$001D`); when absent the §4-40 revert folds the mode to `patXor` /
+  `srcXor`. `from_pn_mode_with` / `from_mode_word` gain a
+  `hilite_color` parameter; the public `HILITE_MODE` constant (= 50) is
+  exported. +12 tests (`tests/synth_v2_round290.rs`).
 - Round 282: **`CopyBits` transfer modes honoured on the raster blit.**
   Every PICT raster opcode record (`BitsRect 0x0090` / `BitsRgn 0x0091`
   / `PackBitsRect 0x0098` / `PackBitsRgn 0x0099` / `DirectBitsRect

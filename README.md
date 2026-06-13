@@ -882,12 +882,75 @@ assert_eq!(&img.data[4..7], &[0xFF, 0, 0]); // white → bg
 Unknown mode codes (including the pattern band `8..=15`, which §3
 defines only for line / shape drawing) fall back to `srcCopy`, the
 same total-function posture as the round-247 pattern path. The
-additive `hilite = 50` and the `grayishTextOr = 49` text-shading mode
-are not resolved (text glyphs aren't rasterised yet). Encoder side:
+additive `hilite = 50` highlighting mode is honoured on both pattern
+fills and the raster blit since round 290 (see "Highlighting transfer
+mode" below); the `grayishTextOr = 49` text-shading mode is not
+resolved (text glyphs aren't rasterised yet). Encoder side:
 [`build_direct_bits_rect_op_with_mode`] /
 [`PictBuilder::raster_with_mode`] emit a `DirectBitsRect` with an
 explicit mode word; the pre-existing builders keep emitting
 `mode = 0`.
+
+## Highlighting transfer mode (round 290 — `hilite = 50` honoured)
+
+Inside Macintosh: Imaging With QuickDraw §4 ("Color QuickDraw"),
+section "Highlighting" (book pages 4-41..4-43), defines the
+`hilite = 50` transfer-mode constant — *"add to source or pattern mode
+for highlighting."* Rounds 247 / 273 / 282 left it folding to
+`patCopy` / `srcCopy`. Round 290 resolves it on both the `PnMode`
+pattern-fill path and the `CopyBits` raster-blit `mode` word into a new
+[`PatternMode::Hilite`] / [`SourceMode::Hilite`] variant carrying the
+active highlight colour + the background key.
+
+The §4 contract: *"When highlighting, Color QuickDraw replaces the
+background color with the highlight color … Highlighting uses the
+pattern or source image to decide which bits to exchange; only bits
+that are on in the pattern or source image can be highlighted in the
+destination."* On this crate's true-colour RGBA canvas that reduces to
+a per-cell exchange at every **on** cell (pattern on-bit, or a
+non-white source pixel): a destination pixel equal to the background
+colour becomes the highlight colour, a pixel already in the highlight
+colour reverts to the background colour, and every other colour is
+left unchanged. The exchange is its own inverse on the `{bg, hilite}`
+pair — applying hilite twice restores the destination, matching the
+§4-40 Table 4-2 1-bit revert (`hilite → srcXor`).
+
+The highlight colour comes from the `HiliteColor` opcode (`$001D`,
+captured into [`PictTextState::hilite_color`] since round 230). When
+**no** `HiliteColor` was emitted, the §4-40 Table 4-2 revert applies
+and the mode folds to `patXor` / `srcXor` (the basic-QuickDraw
+highlight equivalent the §4-41 text describes — *"any drawing or
+image-copying routine that uses the patXor or srcXor transfer
+mode"*). The `ditherCopy = 64` additive bit is stripped before
+resolution, so `hilite | ditherCopy` (114) still resolves to the
+hilite mode.
+
+```rust
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::{parse_pict, HILITE_MODE};
+
+// Wash the canvas a light-blue background (§4 Listing 4-7), set the
+// highlight colour to red, then paint over it with the hilite pen
+// mode: every on-bit cell whose destination is the background colour
+// takes the highlight colour.
+let bg = (0xA0, 0xFF, 0xE0);
+let mut b = PictBuilder::new(0, 0, 4, 4);
+b.fg_color(bg.0, bg.1, bg.2).bg_color(bg.0, bg.1, bg.2)
+    .pn_mode(8).pen_pattern([0xFF; 8])
+    .rect(Verb::Paint, 0, 0, 4, 4);
+b.hilite_color(0xFF, 0x00, 0x00).bg_color(bg.0, bg.1, bg.2)
+    .pn_mode(HILITE_MODE).pen_pattern([0xFF; 8])
+    .rect(Verb::Paint, 0, 0, 4, 4);
+let img = parse_pict(&b.finish())?;
+assert_eq!(&img.data[0..3], &[0xFF, 0x00, 0x00]); // bg → highlight
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Coverage scope: round 290 honours `hilite` for the pattern-fill verbs
+(paint / erase / fill of every shape, the same dispatch surface rounds
+247 / 273 established) and for the `CopyBits` raster blit (each
+record's `mode` word, the round-282 surface). `TxMode`-driven text
+highlighting still waits on a text-glyph rasteriser.
 
 ## Structured `fontName` / `lineJustify` / `glyphState` (round 236)
 
@@ -1028,14 +1091,13 @@ masks bit 7 off when reporting "no named style bits set."
 * **Text glyphs.** `LongText` / `DH/DV/DHDVText` are walked past but
   not rasterised — a TrueType engine is a separate round.
 * **Text-only transfer modes.** Transfer modes are honoured on
-  patterned shape fills (Boolean — round 247; arithmetic — round 273)
-  and on the `CopyBits` raster blit via each record's `mode` word
-  (Boolean source modes + arithmetic + `ditherCopy` — round 282).
-  What remains is the text channel: `TxMode` and the
-  `grayishTextOr = 49` shading mode apply to glyph drawing, and text
-  glyphs aren't rasterised yet (see "Text glyphs" above). The additive
-  `hilite = 50` highlight bit is also unresolved (falls back to
-  `srcCopy` / `patCopy`).
+  patterned shape fills (Boolean — round 247; arithmetic — round 273;
+  `hilite` — round 290) and on the `CopyBits` raster blit via each
+  record's `mode` word (Boolean source modes + arithmetic +
+  `ditherCopy` — round 282; `hilite` — round 290). What remains is the
+  text channel: `TxMode`, the `grayishTextOr = 49` shading mode and the
+  text-side `hilite` apply to glyph drawing, and text glyphs aren't
+  rasterised yet (see "Text glyphs" above).
 * **CompressedQuickTime decode.** The opcode is parsed (length-prefixed
   payload skipped cleanly so the surrounding decode keeps going), but
   the embedded image (typically JPEG) is not decoded — that needs

@@ -217,7 +217,7 @@ fn arith_mode_applies_across_shapes() {
 fn pattern_mode_resolves_arith_variant() {
     // from_pn_mode_with maps 32..=39 to the Arith variant; the bare
     // from_pn_mode folds them to patCopy.
-    let m = PatternMode::from_pn_mode_with(34, None, Rgba::BLACK);
+    let m = PatternMode::from_pn_mode_with(34, None, Rgba::BLACK, None);
     assert!(matches!(
         m,
         PatternMode::Arith {

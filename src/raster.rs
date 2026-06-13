@@ -996,6 +996,27 @@ pub enum PatternMode {
         /// cell equal to this colour leaves the destination unchanged).
         bg_key: Rgba,
     },
+    /// `hilite = 50` — the Color QuickDraw highlighting transfer mode
+    /// (Inside Macintosh: Imaging With QuickDraw §4 "Highlighting", book
+    /// pages 4-41..4-43). *"When highlighting, Color QuickDraw replaces
+    /// the background color with the highlight color … Highlighting uses
+    /// the pattern or source image to decide which bits to exchange;
+    /// only bits that are on in the pattern or source image can be
+    /// highlighted in the destination."* At every on-bit cell the
+    /// destination pixel is exchanged between the background colour and
+    /// the highlight colour (`bg → hilite`, `hilite → bg`, every other
+    /// colour left unchanged) — the reversible exchange the §4-40
+    /// Table 4-2 1-bit revert (`hilite → srcXor`) describes. Off-bit
+    /// cells are left unchanged.
+    Hilite {
+        /// The active highlight colour — `HiliteColor` (`$001D`) if the
+        /// producer set one, otherwise the §4-40 `srcXor` revert is used
+        /// instead (signalled by [`PatternMode::from_pn_mode_with`]
+        /// resolving to `PatXor` when no highlight colour is available).
+        hilite: Rgba,
+        /// Background colour exchanged with `hilite` at on-bit cells.
+        bg_key: Rgba,
+    },
 }
 
 /// The eight Color QuickDraw arithmetic transfer modes from Inside
@@ -1033,6 +1054,12 @@ pub enum ArithMode {
     /// saturation of each component wins).
     AdMin,
 }
+
+/// `hilite = 50` — the Color QuickDraw highlighting transfer-mode code
+/// (Inside Macintosh: Imaging With QuickDraw §4 "Highlighting", book
+/// page 4-43: *"CONST hilite = 50; {add to source or pattern mode for
+/// highlighting}"*). Legal in the `PenMode` / `CopyBits` mode word.
+pub const HILITE_MODE: i16 = 50;
 
 impl ArithMode {
     /// Map a `PnMode` integer in `32..=39` to its arithmetic mode.
@@ -1144,7 +1171,29 @@ impl PatternMode {
     /// produces the no-clamp behaviour the §4 basic-port text describes
     /// (max pin = white ⇒ never clamps a sum down; min pin = black ⇒
     /// never clamps a difference up).
-    pub fn from_pn_mode_with(code: i16, op_color: Option<Rgba>, bg_key: Rgba) -> Self {
+    ///
+    /// `hilite = 50` (§4 "Highlighting", book pages 4-41..4-43) resolves
+    /// to [`PatternMode::Hilite`] carrying the active highlight colour
+    /// when `hilite_color` is `Some`; when no `HiliteColor` opcode was
+    /// emitted the §4-40 Table 4-2 1-bit revert applies (`hilite →
+    /// srcXor`), so the mode folds to [`PatternMode::PatXor`] — the
+    /// basic-QuickDraw highlight equivalent the §4-41 text describes
+    /// (*"use … any drawing or image-copying routine that uses the
+    /// patXor or srcXor transfer mode"*).
+    pub fn from_pn_mode_with(
+        code: i16,
+        op_color: Option<Rgba>,
+        bg_key: Rgba,
+        hilite_color: Option<Rgba>,
+    ) -> Self {
+        if code == HILITE_MODE {
+            return match hilite_color {
+                Some(hilite) => Self::Hilite { hilite, bg_key },
+                // §4-40 Table 4-2: with no explicit highlight colour the
+                // hilite mode reverts to srcXor / patXor.
+                None => Self::PatXor,
+            };
+        }
         if let Some(mode) = ArithMode::from_code(code) {
             let op_color = op_color.unwrap_or(match mode {
                 // min-pin: basic-port minimum is black (§4-39).
@@ -1249,6 +1298,19 @@ pub enum SourceMode {
         /// Background colour used as the transparent-mode key.
         bg_key: Rgba,
     },
+    /// `hilite = 50` — the §4 highlighting mode (book pages
+    /// 4-41..4-43) on the `CopyBits` blit. Per *"only bits that are on
+    /// in the … source image can be highlighted"*, a source pixel that
+    /// is not white (i.e. an "on" bit of the source image) exchanges the
+    /// destination's background colour for the highlight colour (and the
+    /// reverse), leaving every other destination colour unchanged. A
+    /// white source pixel leaves the destination alone.
+    Hilite {
+        /// The active highlight colour (`HiliteColor`).
+        hilite: Rgba,
+        /// Background colour exchanged with `hilite` at on-source pixels.
+        bg_key: Rgba,
+    },
 }
 
 impl SourceMode {
@@ -1267,12 +1329,27 @@ impl SourceMode {
     /// `32..=39` resolve to [`SourceMode::Arith`] carrying `op_color`
     /// (the declared `OpColor`, defaulting per §4-39/4-40 when absent:
     /// max-pin → white, min-pin → black, blend → 50 % gray) and
-    /// `bg_key` (the transparent-mode background key). The additive
-    /// `ditherCopy = 64` bit is stripped first. Any other code falls
-    /// back to `srcCopy` — the total-function posture the round-247
-    /// pattern path established.
-    pub fn from_mode_word(code: i16, op_color: Option<Rgba>, bg_key: Rgba) -> Self {
+    /// `bg_key` (the transparent-mode background key). `hilite = 50`
+    /// (§4 "Highlighting") resolves to [`SourceMode::Hilite`] when a
+    /// `HiliteColor` is available, otherwise to `srcXor` per the §4-40
+    /// Table 4-2 1-bit revert. The additive `ditherCopy = 64` bit is
+    /// stripped first. Any other code falls back to `srcCopy` — the
+    /// total-function posture the round-247 pattern path established.
+    pub fn from_mode_word(
+        code: i16,
+        op_color: Option<Rgba>,
+        bg_key: Rgba,
+        hilite_color: Option<Rgba>,
+    ) -> Self {
         let base = code & !Self::DITHER_COPY;
+        if base == HILITE_MODE {
+            return match hilite_color {
+                Some(hilite) => Self::Hilite { hilite, bg_key },
+                // §4-40 Table 4-2: hilite reverts to srcXor with no
+                // explicit highlight colour.
+                None => Self::SrcXor,
+            };
+        }
         if let Some(mode) = ArithMode::from_code(base) {
             let op_color = op_color.unwrap_or(match mode {
                 // min-pin: basic-port minimum is black (§4-40).
@@ -1377,6 +1454,16 @@ pub fn blend_source(mode: SourceMode, src: Rgba, dst: Rgba, fg: Rgba, bg: Rgba) 
             op_color,
             bg_key,
         } => blend_arith(mode, src, dst, op_color, bg_key),
+        SourceMode::Hilite { hilite, bg_key } => {
+            // §4 "Highlighting": only the source image's on bits (every
+            // non-white source pixel) participate; each exchanges the
+            // destination's background colour for the highlight colour.
+            if is_white {
+                dst
+            } else {
+                hilite_exchange(dst, bg_key, hilite)
+            }
+        }
     }
 }
 
@@ -1488,6 +1575,35 @@ fn plot_pattern_pixel_mode(
                 canvas.put(x, y, blend_arith(mode, src, d, op_color, bg_key));
             }
         }
+        PatternMode::Hilite { hilite, bg_key } => {
+            // §4 "Highlighting": only on-bit cells exchange; the
+            // destination's background colour becomes the highlight
+            // colour (and vice versa — the reversible exchange).
+            if on {
+                if let Some(d) = canvas.pixel_at(x, y) {
+                    canvas.put(x, y, hilite_exchange(d, bg_key, hilite));
+                }
+            }
+        }
+    }
+}
+
+/// The Color QuickDraw highlighting exchange (Inside Macintosh §4
+/// "Highlighting", book page 4-41): a destination pixel equal to the
+/// background colour becomes the highlight colour, a pixel already in
+/// the highlight colour reverts to the background colour, and every
+/// other colour is left unchanged. The exchange is its own inverse on
+/// the `{bg, hilite}` pair, matching the §4-40 Table 4-2 `srcXor`
+/// revert (applying the hilite mode twice restores the destination).
+#[inline]
+fn hilite_exchange(dst: Rgba, bg: Rgba, hilite: Rgba) -> Rgba {
+    let same = |a: Rgba, b: Rgba| a.r == b.r && a.g == b.g && a.b == b.b;
+    if same(dst, bg) {
+        Rgba { a: dst.a, ..hilite }
+    } else if same(dst, hilite) {
+        Rgba { a: dst.a, ..bg }
+    } else {
+        dst
     }
 }
 

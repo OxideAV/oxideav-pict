@@ -867,14 +867,17 @@ fn read_rgb16(r: &mut Reader<'_>) -> Result<(u16, u16, u16)> {
 /// arithmetic transfer modes (`blend = 32` … `adMin = 39`) need — the
 /// declared `OpColor` (`state.text_state.op_color`, defaulting per-mode
 /// when absent) and the active background colour (`state.bg`, the
-/// transparent-mode key). Boolean pattern modes (`8..=15`) ignore the
-/// colour context and resolve exactly as before.
+/// transparent-mode key). The §4 highlighting mode (`hilite = 50`)
+/// additionally folds in the active `HiliteColor`
+/// (`state.text_state.hilite_color`). Boolean pattern modes (`8..=15`)
+/// ignore the colour context and resolve exactly as before.
 #[inline]
 fn pattern_mode(state: &PictState) -> PatternMode {
     PatternMode::from_pn_mode_with(
         state.text_state.pn_mode,
         state.text_state.op_color,
         state.bg,
+        state.text_state.hilite_color,
     )
 }
 
@@ -1405,7 +1408,12 @@ fn blit_subimage(canvas: &mut Canvas, state: &PictState, img: &RasterSub, dst: &
     // pattern path resolves. `srcCopy` under the fresh-GrafPort
     // black-fg / white-bg state is the §4-34 identity and takes the
     // raw-copy fast path inside `blit_mode`.
-    let mode = SourceMode::from_mode_word(img.mode as i16, state.text_state.op_color, state.bg);
+    let mode = SourceMode::from_mode_word(
+        img.mode as i16,
+        state.text_state.op_color,
+        state.bg,
+        state.text_state.hilite_color,
+    );
     canvas.blit_mode(
         &img.data, img.width, img.height, top, left, bottom, right, mode, state.fg, state.bg,
     );
