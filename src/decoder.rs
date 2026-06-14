@@ -115,6 +115,20 @@ pub fn parse_pict(bytes: &[u8]) -> Result<PictImage> {
     Ok(img)
 }
 
+/// Advance the QuickDraw text-drawing pen by a `(dh, dv)` delta from the
+/// `DHText` / `DVText` / `DHDVText` opcodes (§A-3 Table A-2).
+///
+/// The deltas are relative to the position the previous text opcode left
+/// in [`crate::state::PictTextState::text_pen`]. With no prior `LongText`
+/// the running pen starts at the graphics origin `(0, 0)`. Also bumps the
+/// text-op counter so callers can see how many text-glyph opcodes a
+/// picture carried even without a font rasteriser. Round 295.
+fn advance_text_pen(state: &mut PictState, dh: i32, dv: i32) {
+    let (h, v) = state.text_state.text_pen.unwrap_or((0, 0));
+    state.text_state.text_pen = Some((h + dh, v + dv));
+    state.text_state.text_op_count += 1;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PictVersion {
     V1,
@@ -506,25 +520,49 @@ fn dispatch_v2_opcode(
             Ok(true)
         }
         OP_LONG_TEXT => {
-            // Text glyphs: round 2 doesn't have a font rasteriser
-            // (would require a TrueType engine), so we skip silently.
-            // This keeps the opcode walker in sync without wedging
-            // the decoder when a PICT just has a label on it.
-            r.skip(4)?;
+            // LongText ($0028): txLoc (Point), count, text. No font
+            // rasteriser, so glyph bytes are walked past — but the
+            // explicit text-pen origin IS recorded. Inside Macintosh:
+            // Imaging With QuickDraw, "About Basic QuickDraw" (page 2-13):
+            // text baseline sits at the pen location, and `txLoc` is the
+            // absolute Point that establishes it. Point order on disk is
+            // (v, h); the crate's pen tuple is (h, v).
+            let v = r.read_i16()? as i32;
+            let h = r.read_i16()? as i32;
             let n = r.read_u8()? as usize;
             r.skip(n)?;
+            state.text_state.text_pen = Some((h, v));
+            state.text_state.text_op_count += 1;
             Ok(true)
         }
-        OP_DH_TEXT | OP_DV_TEXT => {
-            r.skip(1)?;
+        OP_DH_TEXT => {
+            // DHText ($0029): dh (0..255 unsigned), count, text. Advances
+            // the running text pen rightward by `dh` relative to the
+            // position the previous text opcode left. With no prior
+            // LongText the pen advances from the graphics origin (0, 0).
+            let dh = r.read_u8()? as i32;
             let n = r.read_u8()? as usize;
             r.skip(n)?;
+            advance_text_pen(state, dh, 0);
+            Ok(true)
+        }
+        OP_DV_TEXT => {
+            // DVText ($002A): dv (0..255 unsigned), count, text. Advances
+            // the running text pen downward by `dv`.
+            let dv = r.read_u8()? as i32;
+            let n = r.read_u8()? as usize;
+            r.skip(n)?;
+            advance_text_pen(state, 0, dv);
             Ok(true)
         }
         OP_DHDV_TEXT => {
-            r.skip(2)?;
+            // DHDVText ($002B): dh, dv (each 0..255 unsigned), count,
+            // text. Advances the running text pen by both deltas.
+            let dh = r.read_u8()? as i32;
+            let dv = r.read_u8()? as i32;
             let n = r.read_u8()? as usize;
             r.skip(n)?;
+            advance_text_pen(state, dh, dv);
             Ok(true)
         }
         OP_FONT_NAME => {
@@ -2615,28 +2653,43 @@ fn dispatch_v1_opcode(
             state.pen = (nx, ny);
             Ok(true)
         }
-        // §A-3 Table A-3 text opcodes — walked past identically to v2.
-        // No font rasteriser yet, so the operand bytes (count + glyph
-        // bytes, with the offset point varying per opcode) are skipped.
+        // §A-3 Table A-3 text opcodes — same pen-tracking as v2. No font
+        // rasteriser, so glyph bytes are walked past, but the explicit
+        // text-pen origin / inter-call movement is recorded.
         0x28 => {
-            // LongText: txLoc (Point=4) + count (byte) + text (count bytes).
-            r.skip(4)?;
+            // LongText: txLoc (Point=v,h) + count (byte) + text. Point
+            // order on disk is (v, h); the crate's pen tuple is (h, v).
+            let v = r.read_i16()? as i32;
+            let h = r.read_i16()? as i32;
             let n = r.read_u8()? as usize;
             r.skip(n)?;
+            state.text_state.text_pen = Some((h, v));
+            state.text_state.text_op_count += 1;
             Ok(true)
         }
-        0x29 | 0x2A => {
-            // DHText / DVText: dh|dv (byte) + count (byte) + text.
-            r.skip(1)?;
+        0x29 => {
+            // DHText: dh (byte, 0..255) + count (byte) + text.
+            let dh = r.read_u8()? as i32;
             let n = r.read_u8()? as usize;
             r.skip(n)?;
+            advance_text_pen(state, dh, 0);
+            Ok(true)
+        }
+        0x2A => {
+            // DVText: dv (byte, 0..255) + count (byte) + text.
+            let dv = r.read_u8()? as i32;
+            let n = r.read_u8()? as usize;
+            r.skip(n)?;
+            advance_text_pen(state, 0, dv);
             Ok(true)
         }
         0x2B => {
             // DHDVText: dh (byte) + dv (byte) + count (byte) + text.
-            r.skip(2)?;
+            let dh = r.read_u8()? as i32;
+            let dv = r.read_u8()? as i32;
             let n = r.read_u8()? as usize;
             r.skip(n)?;
+            advance_text_pen(state, dh, dv);
             Ok(true)
         }
         0x30..=0x34 | 0x40..=0x44 | 0x50..=0x54 => {

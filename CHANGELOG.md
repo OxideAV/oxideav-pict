@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 295: **QuickDraw text-drawing pen-location tracking.** The
+  text-glyph opcodes `LongText` (`$0028`), `DHText` (`$0029`),
+  `DVText` (`$002A`) and `DHDVText` (`$002B`) — previously walked past
+  without effect — now drive the running text pen recorded on
+  [`PictTextState::text_pen`] (an `Option<(h, v)>` in picture-frame
+  coordinates) plus a [`PictTextState::text_op_count`] counter. Inside
+  Macintosh: Imaging With QuickDraw, "About Basic QuickDraw" (book page
+  2-13): *"Text is drawn with the base line positioned at the pen
+  location."* `LongText` carries an absolute `txLoc` Point that sets
+  the pen; the compact `DH/DV/DHDV` variants carry positive `(0..255)`
+  deltas (Appendix A, Table A-2 / v1 Table A-3) that advance the pen
+  relative to the position the previous text opcode left — the reason
+  the compact forms exist (successive `DrawText` calls on one line
+  record only the increment). A delta with no prior `LongText`
+  advances from the graphics origin `(0, 0)`. The slot is `None` until
+  the first text opcode and is surfaced on `PictImage::text_state` for
+  both the v1 and v2 dispatchers. Glyph bytes are still walked past
+  without rendering (no font rasteriser) and the per-character pen
+  advance the glyph widths would add is not modelled — only the
+  explicit stream-encoded text origin / inter-call movement, which is
+  fully spec-determined. 10 new synth tests (`synth_v2_round295`).
+
 - Round 290: **`hilite = 50` highlighting transfer mode honoured.**
   Inside Macintosh: Imaging With QuickDraw §4 ("Color QuickDraw"),
   "Highlighting" (book pages 4-41..4-43), defines the `hilite = 50`

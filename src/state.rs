@@ -580,6 +580,34 @@ pub struct PictTextState {
     /// `fractional widths`, `scaling disabled`) carried inside a
     /// length-prefixed block. Round 236.
     pub glyph_state: Option<PictGlyphState>,
+    /// QuickDraw **text-drawing pen location**, in picture-frame
+    /// coordinates, after the most recent text-glyph opcode
+    /// (`LongText $0028` / `DHText $0029` / `DVText $002A` /
+    /// `DHDVText $002B`). Inside Macintosh: Imaging With QuickDraw, "About
+    /// Basic QuickDraw" (book page 2-13): *"Text is drawn with the base
+    /// line positioned at the pen location."* — so the `(h, v)` recorded
+    /// here is where the text baseline sits.
+    ///
+    /// `LongText` carries an absolute `txLoc` Point that sets this slot
+    /// directly; the compact `DHText` / `DVText` / `DHDVText` variants
+    /// carry positive `(0..255)` deltas (§A-3 Table A-2) that advance the
+    /// running text pen relative to the position left by the previous
+    /// text opcode — which is precisely why the compact forms exist
+    /// (successive `DrawText` calls on one line record only the
+    /// increment). The first such delta opcode in a picture with no prior
+    /// `LongText` advances from the graphics pen origin `(0, 0)`.
+    ///
+    /// `None` until the picture emits its first text opcode. This crate
+    /// has no font rasteriser, so glyph bytes are still walked past
+    /// without rendering and without the per-character pen advance the
+    /// glyph widths would add; the slot tracks only the explicit
+    /// stream-encoded text origin / inter-call movement, which is fully
+    /// spec-determined. Round 295.
+    pub text_pen: Option<(i32, i32)>,
+    /// Number of text-glyph opcodes (`LongText` / `DHText` / `DVText` /
+    /// `DHDVText`) observed in the stream. `0` for a picture with no
+    /// text. Round 295.
+    pub text_op_count: u32,
 }
 
 impl PictTextState {
@@ -611,6 +639,8 @@ impl PictTextState {
             font_name: None,
             line_justify: None,
             glyph_state: None,
+            text_pen: None,
+            text_op_count: 0,
         }
     }
 }

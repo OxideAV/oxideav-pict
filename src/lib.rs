@@ -26,7 +26,11 @@
 //! embedded image (typically JPEG) is not yet decoded.
 //!
 //! Text glyph opcodes (`LongText` / `DH/DV/DHDVText`) are walked but
-//! not rasterised — that needs a TrueType engine.
+//! not rasterised — that needs a TrueType engine. The spec-determined
+//! **text-drawing pen location** they carry (the baseline origin from
+//! `LongText`'s `txLoc`, advanced by the compact `DH/DV/DHDV` deltas)
+//! is tracked into `PictTextState::text_pen` / `text_op_count` (round
+//! 295) so callers see where text would land even without glyphs.
 //!
 //! ## Standalone vs registry-integrated
 //!

@@ -28,7 +28,7 @@ colour (white) and returned as the decoded `PictImage`.
 | `0x000A` | **FillPat**         | 8-byte fill pattern → `state.fill_pat`      |
 | `0x0003`-`0x0008`, `0x000B`-`0x0010`, `0x0015`, `0x0016`, `0x001A`-`0x001F` | pen / colour / text state | rasteriser tracks fg/bg colour, pen size, oval-corner size, origin; round 230 also captures `TxFont` / `TxFace` / `TxMode` / `SpExtra` / `PnMode` / `TxSize` / `TxRatio` / `PnLocHFrac` / `ChExtra` / `HiliteMode` / `HiliteColor` / `DefHilite` / `OpColor` into [`PictTextState`] |
 | `0x0020`-`0x0023` | Line / LineFrom / ShortLine[From] | **draw via Bresenham** |
-| `0x0028`-`0x002B` | Long/DH/DV/DHDV Text  | length-prefixed skip (no font rasteriser) |
+| `0x0028`-`0x002B` | Long/DH/DV/DHDV Text  | **track text-drawing pen** → `PictTextState::text_pen` / `text_op_count` (round 295); glyph bytes still walked past (no font rasteriser) |
 | `0x002C` | **FontName**          | parse → `PictTextState::font_name` (`Option<PictFontName>`; round 236)        |
 | `0x002D` | **LineJustify**       | parse → `PictTextState::line_justify` (`Option<PictLineJustify>`; round 236) |
 | `0x002E` | **GlyphState**        | parse → `PictTextState::glyph_state` (`Option<PictGlyphState>`; round 236)   |
