@@ -9,6 +9,8 @@
 //! opcodes (low-byte nibble `8`) can re-draw without needing the
 //! geometry repeated. Inside Macintosh: Imaging With QuickDraw §A-3.
 
+use crate::raster::SourceMode;
+
 /// 8-bit RGBA colour. Decoder normalises `RGBColor` (Mac u16-per-
 /// channel) and Pascal 32-bit colour codes to this layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -679,6 +681,39 @@ impl PictTextState {
             text_op_count: 0,
         }
     }
+
+    /// Resolve the captured `TxMode` (`$0005`) word into a structured
+    /// [`SourceMode`].
+    ///
+    /// §A-3 Table A-2 describes `TxMode` as a *"Source mode (Integer)"* —
+    /// the same numeric transfer-mode catalog the `CopyBits` raster
+    /// records carry in their own `mode` word (§3 book pages 3-113..3-114
+    /// Boolean source modes `srcCopy = 0` … `notSrcBic = 7`; §4 pages
+    /// 4-38..4-43 arithmetic modes `blend = 32` … `adMin = 39` plus
+    /// `hilite = 50`). Round 282 resolved that word for the raster blit;
+    /// this accessor exposes the identical resolution for the text channel
+    /// so round-trip tooling and content inspectors can read the producer's
+    /// declared text transfer mode without re-deriving the numeric codes.
+    ///
+    /// The arithmetic / highlight modes pull their colour context from this
+    /// same text state: `op_color` is the captured `OpColor` (`$001F`,
+    /// defaulting per §4-39/4-40 when absent — max-pin → white, min-pin →
+    /// black, blend → 50 % gray inside [`SourceMode::from_mode_word`]),
+    /// `hilite_color` is the captured `HiliteColor` (`$001D`, falling back
+    /// to `srcXor` per the §4-40 Table 4-2 revert when absent), and
+    /// `bg_key` is supplied by the caller (the active background colour,
+    /// the transparent-mode key §4 uses). Codes outside the catalog fold
+    /// to `srcCopy`, the total-function posture every other mode resolver
+    /// in this crate shares.
+    ///
+    /// This is an interpretation-only accessor: text glyphs are still not
+    /// rasterised (see the crate README "Text glyphs"), so the resolved
+    /// mode is not yet applied to any drawn glyph — it surfaces the
+    /// structured shape of the captured word for consumers that need it.
+    #[inline]
+    pub fn tx_source_mode(&self, bg_key: Rgba) -> SourceMode {
+        SourceMode::from_mode_word(self.tx_mode, self.op_color, bg_key, self.hilite_color)
+    }
 }
 
 /// Decoded `fontName` (`$002C`) record per Inside Macintosh: Imaging
@@ -1096,5 +1131,72 @@ mod tests {
         // Round-230 callers comparing the field to a raw byte still work
         // through the `PartialEq<u8>` impl.
         assert!(ts.tx_face == 0u8);
+    }
+
+    #[test]
+    fn tx_source_mode_fresh_graf_port_is_src_copy() {
+        // §A-3: fresh-GrafPort `TxMode` is `srcCopy = 0`.
+        let ts = PictTextState::fresh_graf_port();
+        assert_eq!(ts.tx_source_mode(Rgba::WHITE), SourceMode::SrcCopy);
+    }
+
+    #[test]
+    fn tx_source_mode_resolves_boolean_modes() {
+        // The eight §3 Boolean source modes map by their numeric code,
+        // identical to the `CopyBits` raster `mode` word.
+        let mut ts = PictTextState::fresh_graf_port();
+        for (code, expect) in [
+            (0, SourceMode::SrcCopy),
+            (1, SourceMode::SrcOr),
+            (2, SourceMode::SrcXor),
+            (3, SourceMode::SrcBic),
+            (4, SourceMode::NotSrcCopy),
+            (5, SourceMode::NotSrcOr),
+            (6, SourceMode::NotSrcXor),
+            (7, SourceMode::NotSrcBic),
+        ] {
+            ts.tx_mode = code;
+            assert_eq!(ts.tx_source_mode(Rgba::WHITE), expect);
+        }
+    }
+
+    #[test]
+    fn tx_source_mode_arith_uses_captured_op_color() {
+        // An arithmetic `TxMode` (`addOver = 34`) carries the captured
+        // `OpColor` through to the resolved `SourceMode::Arith`.
+        let mut ts = PictTextState::fresh_graf_port();
+        ts.tx_mode = 34;
+        ts.op_color = Some(Rgba::new(0x10, 0x20, 0x30, 0xFF));
+        let bg = Rgba::new(0x40, 0x50, 0x60, 0xFF);
+        match ts.tx_source_mode(bg) {
+            SourceMode::Arith {
+                mode,
+                op_color,
+                bg_key,
+            } => {
+                assert_eq!(mode, crate::raster::ArithMode::AddOver);
+                assert_eq!(op_color, Rgba::new(0x10, 0x20, 0x30, 0xFF));
+                assert_eq!(bg_key, bg);
+            }
+            other => panic!("expected Arith, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tx_source_mode_hilite_falls_back_without_color() {
+        // §4-40 Table 4-2: `hilite` with no `HiliteColor` reverts to
+        // `srcXor`; with one it resolves to `SourceMode::Hilite`.
+        let mut ts = PictTextState::fresh_graf_port();
+        ts.tx_mode = crate::raster::HILITE_MODE;
+        assert_eq!(ts.tx_source_mode(Rgba::WHITE), SourceMode::SrcXor);
+        ts.hilite_color = Some(Rgba::new(0xFF, 0, 0, 0xFF));
+        let bg = Rgba::new(0xA0, 0xFF, 0xE0, 0xFF);
+        assert_eq!(
+            ts.tx_source_mode(bg),
+            SourceMode::Hilite {
+                hilite: Rgba::new(0xFF, 0, 0, 0xFF),
+                bg_key: bg,
+            }
+        );
     }
 }

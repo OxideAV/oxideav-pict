@@ -649,6 +649,25 @@ not yet honour the arithmetic transfer modes on the canvas — that is a
 follow-up round on top of `state.text_state.pn_mode` /
 `state.text_state.tx_mode` dispatch.
 
+The captured `tx_mode` integer is exposed in structured form by
+[`PictTextState::tx_source_mode`] (round 308): it resolves the §A-3
+*"Source mode"* word into the same [`SourceMode`] catalog the `CopyBits`
+raster blit uses (Boolean `srcCopy = 0` … `notSrcBic = 7`; arithmetic
+`blend = 32` … `adMin = 39`; `hilite = 50`), pulling its colour context
+from this same text state (`op_color`, `hilite_color`) plus a
+caller-supplied background key. It is an interpretation-only accessor —
+the resolved mode is not yet applied because text glyphs aren't
+rasterised — but it lets round-trip tooling read the declared text
+transfer mode without re-deriving the codes.
+
+```rust
+use oxideav_pict::{PictTextState, Rgba, SourceMode};
+
+let mut ts = PictTextState::fresh_graf_port();
+ts.tx_mode = 2; // srcXor
+assert_eq!(ts.tx_source_mode(Rgba::WHITE), SourceMode::SrcXor);
+```
+
 ## Boolean pattern transfer modes (round 247 — `PnMode` honoured)
 
 Inside Macintosh: Imaging With QuickDraw §3 ("QuickDraw Drawing
@@ -1120,10 +1139,15 @@ masks bit 7 off when reporting "no named style bits set."
   patterned shape fills (Boolean — round 247; arithmetic — round 273;
   `hilite` — round 290) and on the `CopyBits` raster blit via each
   record's `mode` word (Boolean source modes + arithmetic +
-  `ditherCopy` — round 282; `hilite` — round 290). What remains is the
-  text channel: `TxMode`, the `grayishTextOr = 49` shading mode and the
-  text-side `hilite` apply to glyph drawing, and text glyphs aren't
-  rasterised yet (see "Text glyphs" above).
+  `ditherCopy` — round 282; `hilite` — round 290). The captured `TxMode`
+  (`$0005`) word is now resolved into a structured [`SourceMode`] via
+  [`PictTextState::tx_source_mode`] (round 308) using the same
+  `from_mode_word` catalog the raster blit uses — so round-trip tooling
+  and content inspectors can read the producer's declared text transfer
+  mode without re-deriving the codes. What remains is *applying* it: the
+  resolved mode, the `grayishTextOr = 49` shading mode and the text-side
+  `hilite` only take visible effect once glyphs are drawn, and text
+  glyphs aren't rasterised yet (see "Text glyphs" above).
 * **CompressedQuickTime decode.** The opcode is parsed (length-prefixed
   payload skipped cleanly so the surrounding decode keeps going), but
   the embedded image (typically JPEG) is not decoded — that needs
