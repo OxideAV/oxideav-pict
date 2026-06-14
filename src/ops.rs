@@ -1160,6 +1160,32 @@ impl PictBuilder {
         Ok(self)
     }
 
+    /// Push a `PnPixPat` opcode (colour pen pattern) carrying an
+    /// arbitrary power-of-2 `width`×`height` tile.
+    ///
+    /// Inside Macintosh §3 (book page 3-40): *"A pixel pattern … can be
+    /// of any width and height that's a power of 2."* `pixels` is
+    /// row-major and must hold exactly `width * height` RGBA cells.
+    /// Returns `InvalidData` when the dimensions aren't powers of two or
+    /// the cell count doesn't match (round 302).
+    pub fn pen_pix_pattern_sized(
+        &mut self,
+        fallback: [u8; 8],
+        width: u16,
+        height: u16,
+        pixels: &[[u8; 4]],
+    ) -> Result<&mut Self> {
+        let bytes = crate::encoder::build_pix_pat_op_sized(
+            crate::encoder::PixPatSlot::Pen,
+            fallback,
+            width,
+            height,
+            pixels,
+        )?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
     /// Push a `BkPixPat` opcode (colour background pattern). See
     /// [`pen_pix_pattern`](Self::pen_pix_pattern).
     pub fn bg_pix_pattern(

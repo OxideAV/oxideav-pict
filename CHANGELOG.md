@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Round 302: **Arbitrary power-of-2 PixPat tiles.** Inside Macintosh §3
+  ("QuickDraw Drawing Reference", book page 3-40): *"A pixel pattern …
+  can use additional colors and can be of any width and height that's a
+  power of 2."* Round 91 honoured only the universal 8×8 colour-pixmap
+  tile; round 302 wires up the full power-of-2 `bounds`. [`PixPattern`]
+  now carries `width` / `height` + a row-major `Vec<Rgba>`, and
+  [`PixPattern::sample`] wraps modulo the actual tile dimensions, so a
+  4×2 / 2×4 / 16×16 (etc.) colour pattern tiles correctly across the
+  canvas through every existing `fill_*_pix_pattern` rasteriser (paint /
+  fill / erase of rect / round-rect / oval / poly / region). The
+  `decode_pix_pat` reader builds the tile from the PixMap `bounds`
+  (`rowBytes < 8` flat rows, `rowBytes ≥ 8` per-row byteCount +
+  PackBits, per §A-3 "PixData"). A degenerate or non-power-of-2 tile
+  still falls back to the `Pat1Data` monochrome interpretation. New
+  encoder helpers `build_pix_pat_op_sized` and
+  `PictBuilder::pen_pix_pattern_sized` emit arbitrary power-of-2
+  colour-pixmap `PixPat` opcodes; `build_pix_pat_op` / `pen_pix_pattern`
+  remain the 8×8 special case. `PixPattern::new(width, height, pixels,
+  fallback)` constructs a tile with the cell-count invariant enforced.
+  Six new round-trip tests (`tests/synth_v2_round302.rs`) cover 4×2,
+  2×4, 16×16, 1×1, the probe walk, and encoder validation.
+
+  *API change:* [`PixPattern`]'s `pixels` field changes from a fixed
+  `[Rgba; 64]` to a `Vec<Rgba>`, and the struct gains `width: u16` /
+  `height: u16` fields. Construct via `PixPattern::new(width, height,
+  pixels, fallback)` rather than the struct literal.
 - Round 295: **QuickDraw text-drawing pen-location tracking.** The
   text-glyph opcodes `LongText` (`$0028`), `DHText` (`$0029`),
   `DVText` (`$002A`) and `DHDVText` (`$002B`) — previously walked past

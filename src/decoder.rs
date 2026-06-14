@@ -2366,19 +2366,27 @@ fn decode_pix_pat(r: &mut Reader<'_>) -> Result<(Pattern, Option<PixPattern>)> {
                 }
             }
 
-            // Resolve indexed-pixel PixData against the palette into an
-            // 8×8 RGBA grid. We only honour the 8×8 case (the universal
-            // QuickDraw tile size); non-8×8 patterns fall back to Pat1
-            // for round 91 — see crate README for the follow-up.
-            if width != 8 || height != 8 {
+            // Resolve indexed-pixel PixData against the palette into a
+            // `width`×`height` RGBA grid. Inside Macintosh §3 (book page
+            // 3-40) — *"A pixel pattern … can be of any width and height
+            // that's a power of 2."* — so we honour any power-of-2 tile,
+            // not just the universal 8×8 case (round 91). A degenerate
+            // (zero-dimension) or non-power-of-2 tile, or a tile too large
+            // to back with the PixData we read, falls back to the Pat1Data
+            // monochrome interpretation (`None`).
+            if width == 0
+                || height == 0
+                || !width.is_power_of_two()
+                || !height.is_power_of_two()
+            {
                 return Ok((pat1, None));
             }
 
-            let mut pixels = [Rgba::BLACK; 64];
-            for y in 0..8 {
-                for x in 0..8 {
+            let mut pixels = vec![Rgba::BLACK; width * height];
+            for y in 0..height {
+                for x in 0..width {
                     let idx = read_indexed_pixel(&pix_data, x, y, row_bytes, pixel_size)?;
-                    pixels[y * 8 + x] = if (idx as usize) < palette.len() {
+                    pixels[y * width + x] = if (idx as usize) < palette.len() {
                         palette[idx as usize]
                     } else {
                         // Out-of-range index → fall back to Pat1's
@@ -2396,7 +2404,10 @@ fn decode_pix_pat(r: &mut Reader<'_>) -> Result<(Pattern, Option<PixPattern>)> {
             }
             let _ = ct_seed; // unused; retained in read order.
 
-            Ok((pat1, Some(PixPattern { fallback: pat1, pixels })))
+            Ok((
+                pat1,
+                Some(PixPattern::new(width as u16, height as u16, pixels, pat1)),
+            ))
         }
         PAT_TYPE_DITHER => {
             // Dither sub-type — `RGBColor` (6 bytes: r16, g16, b16)

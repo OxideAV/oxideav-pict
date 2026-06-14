@@ -227,10 +227,34 @@ assert_eq!(&img.data[16 * 4..16 * 4 + 4], &[0, 0xFF, 0, 0xFF]);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Tile sizes other than 8×8 fall back to `Pat1Data`. Inside Macintosh
-§A-3 nominally permits arbitrary `bounds` rectangles in the PixMap
-record, but every real-world PICT we've audited carries an 8×8 tile
-(matching the `PixPat` record's 8-byte `Pat1Data` field).
+### Arbitrary power-of-2 tiles (round 302)
+
+Inside Macintosh §3 ("QuickDraw Drawing Reference", book page 3-40)
+states: *"A pixel pattern … can use additional colors and can be of any
+width and height that's a power of 2."* Round 91 honoured only the
+universal 8×8 tile; round 302 wires up the full power-of-2 `bounds` the
+spec permits. The `PixPat` PixMap `bounds` now drives the decoded tile
+dimensions — [`PixPattern`] carries `width` / `height` + a row-major
+`Vec<Rgba>` and [`PixPattern::sample`] wraps modulo the actual tile
+size, so a 4×2, 2×4, 16×16 (etc.) pattern tiles correctly across the
+canvas. Every `fill_*_pix_pattern` rasteriser routes through `sample`,
+so the change reaches paint / fill / erase of rect / round-rect / oval
+/ poly / region with no per-verb edits.
+
+A `bounds` with a zero dimension, or whose width / height isn't a power
+of two, still falls back to the `Pat1Data` monochrome interpretation
+(`None`) — the §3 power-of-2 constraint is enforced rather than
+silently mis-tiled. The on-disk PixData reader handles both the
+`rowBytes < 8` flat (unpacked) rows and the `rowBytes ≥ 8` per-row
+`byteCount` + PackBits rows per §A-3 "PixData", at the row stride the
+`bounds` width implies.
+
+Encoder side: `build_pix_pat_op_sized(slot, fallback, width, height,
+pixels)` and `PictBuilder::pen_pix_pattern_sized` emit an arbitrary
+power-of-2 colour-pixmap `PixPat`; `build_pix_pat_op` /
+`pen_pix_pattern` remain the 8×8 special case. The sized encoder
+rejects non-power-of-2 dimensions and `pixels.len()` / `width * height`
+mismatches with `PictError::InvalidData`.
 
 ## Dithered PixPat (round 95 — `patType=2`)
 
@@ -1085,9 +1109,11 @@ masks bit 7 off when reporting "no named style bits set."
 
 ## What's not yet in
 
-* **Non-8×8 PixPat tiles.** Inside Macintosh §A-3 nominally permits
-  arbitrary `bounds` in the PixMap; round 91 honours 8×8 only and
-  falls back to the monochrome `Pat1Data` for other tile sizes.
+* **Non-power-of-2 PixPat tiles.** Inside Macintosh §3 (book page 3-40)
+  constrains pixel-pattern tiles to power-of-2 width / height; round 302
+  honours any such tile (e.g. 4×2, 16×16). A `bounds` that isn't a
+  power of two on both axes still falls back to the monochrome
+  `Pat1Data` (the spec doesn't define those tiles).
 * **Text glyphs.** `LongText` / `DH/DV/DHDVText` are walked past but
   not rasterised — a TrueType engine is a separate round.
 * **Text-only transfer modes.** Transfer modes are honoured on

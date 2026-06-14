@@ -598,16 +598,57 @@ pub fn build_pix_pat_op(
     fallback: [u8; 8],
     pixels: &[[u8; 4]; 64],
 ) -> Result<Vec<u8>> {
+    build_pix_pat_op_sized(slot, fallback, 8, 8, pixels)
+}
+
+/// Build the bytes for a single PICT v2 PixPat opcode (`0x0012` /
+/// `0x0013` / `0x0014`) carrying a **colour-pixmap** (`patType=1`)
+/// pixel pattern of an arbitrary power-of-2 `width`×`height` tile.
+///
+/// Inside Macintosh §3 (book page 3-40): *"A pixel pattern … can be of
+/// any width and height that's a power of 2."* — round 302 exposes the
+/// arbitrary-tile encoder so the decoder's new power-of-2 path can be
+/// round-trip tested; [`build_pix_pat_op`] is the 8×8 special case.
+///
+/// * `width` / `height` must both be powers of two and `width * height`
+///   must equal `pixels.len()`, else `InvalidData`.
+/// * `pixels` — `width * height` RGBA cells, row-major.
+///
+/// The on-disk PixData uses 8 bpp indexed pixels against a deduplicated
+/// ColorTable (≤ 256 entries). Per Inside Macintosh §A-3 "PixData":
+/// rows with `rowBytes < 8` are emitted unpacked (flat), wider rows are
+/// emitted as per-row `byteCount` + PackBits (matching the decoder's
+/// `decode_pix_pat` reader).
+pub fn build_pix_pat_op_sized(
+    slot: PixPatSlot,
+    fallback: [u8; 8],
+    width: u16,
+    height: u16,
+    pixels: &[[u8; 4]],
+) -> Result<Vec<u8>> {
+    if width == 0 || height == 0 || !width.is_power_of_two() || !height.is_power_of_two() {
+        return Err(PictError::invalid(format!(
+            "build_pix_pat_op_sized: width/height must be non-zero powers of two (got {width}×{height})"
+        )));
+    }
+    let cells = width as usize * height as usize;
+    if pixels.len() != cells {
+        return Err(PictError::invalid(format!(
+            "build_pix_pat_op_sized: pixels.len()={} != width*height={cells}",
+            pixels.len()
+        )));
+    }
+
     // Build a deduplicated palette + per-cell indices.
-    let mut palette: Vec<[u8; 4]> = Vec::with_capacity(64);
-    let mut indices = [0u8; 64];
+    let mut palette: Vec<[u8; 4]> = Vec::new();
+    let mut indices = vec![0u8; cells];
     for (i, px) in pixels.iter().enumerate() {
         let idx = match palette.iter().position(|p| p == px) {
             Some(j) => j,
             None => {
                 if palette.len() >= 256 {
                     return Err(PictError::invalid(format!(
-                        "build_pix_pat_op: palette overflowed 256 entries at cell {i}"
+                        "build_pix_pat_op_sized: palette overflowed 256 entries at cell {i}"
                     )));
                 }
                 palette.push(*px);
@@ -617,7 +658,9 @@ pub fn build_pix_pat_op(
         indices[i] = idx as u8;
     }
 
-    let mut buf: Vec<u8> = Vec::with_capacity(2 + 10 + 46 + 8 + palette.len() * 8 + 64);
+    let row_bytes = width as usize; // 8 bpp → 1 byte per pixel.
+    let mut buf: Vec<u8> =
+        Vec::with_capacity(2 + 10 + 46 + 8 + palette.len() * 8 + row_bytes * height as usize);
 
     // Opcode word + patType + Pat1Data.
     write_u16(&mut buf, slot.opcode());
@@ -625,17 +668,16 @@ pub fn build_pix_pat_op(
     buf.extend_from_slice(&fallback);
 
     // PixMap (sans baseAddr) — 46 bytes.
-    // rowBytes (PixMap flag set + 8 byte row stride).
-    let row_bytes_raw = 8u16; // 8 cols × 8 bpp = 8 bytes per row
-    write_u16(&mut buf, row_bytes_raw | 0x8000);
-    // bounds: 0,0,8,8.
+    // rowBytes (PixMap flag set + row stride).
+    write_u16(&mut buf, (row_bytes as u16) | 0x8000);
+    // bounds: 0,0,height,width.
     write_i16(&mut buf, 0);
     write_i16(&mut buf, 0);
-    write_i16(&mut buf, 8);
-    write_i16(&mut buf, 8);
+    write_i16(&mut buf, height as i16);
+    write_i16(&mut buf, width as i16);
     // pmVersion, packType, packSize.
     write_u16(&mut buf, 0);
-    write_u16(&mut buf, 0); // packType = 0 (no packing — used because rowBytes < 8 means unpacked PixData)
+    write_u16(&mut buf, 0);
     write_u32(&mut buf, 0);
     // hRes / vRes = 72 dpi.
     write_u32(&mut buf, 0x00480000);
@@ -663,16 +705,22 @@ pub fn build_pix_pat_op(
         write_u16(&mut buf, ((rgba[2] as u16) << 8) | rgba[2] as u16);
     }
 
-    // PixData: row_bytes (8) < 8 is false, but per Inside Macintosh §A-3
-    // PixData pseudocode, the "unpacked" path applies when rowBytes < 8.
-    // We hit rowBytes = 8 exactly, so the "packed" path applies — we
-    // emit a per-row byteCount + PackBits-encoded row.
-    for y in 0..8 {
-        let row = &indices[y * 8..(y + 1) * 8];
-        let enc = packbits::encode(row);
-        // row_bytes = 8 ≤ 250, so the byteCount prefix is 1 byte.
-        buf.push(enc.len() as u8);
-        buf.extend_from_slice(&enc);
+    // PixData per Inside Macintosh §A-3 "PixData": rowBytes < 8 → flat
+    // (unpacked); otherwise per-row byteCount + PackBits (1-byte prefix
+    // when rowBytes ≤ 250, else 2-byte).
+    if row_bytes < 8 {
+        buf.extend_from_slice(&indices);
+    } else {
+        for y in 0..height as usize {
+            let row = &indices[y * row_bytes..(y + 1) * row_bytes];
+            let enc = packbits::encode(row);
+            if row_bytes > 250 {
+                write_u16(&mut buf, enc.len() as u16);
+            } else {
+                buf.push(enc.len() as u8);
+            }
+            buf.extend_from_slice(&enc);
+        }
     }
 
     Ok(buf)

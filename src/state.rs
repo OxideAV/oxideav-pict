@@ -124,7 +124,7 @@ impl Default for Pattern {
     }
 }
 
-/// QuickDraw multi-colour 8×8 pixel pattern.
+/// QuickDraw multi-colour pixel pattern.
 ///
 /// Inside Macintosh: Imaging With QuickDraw §A-3 Listing A-1 — the
 /// `BkPixPat` (`0x0012`), `PnPixPat` (`0x0013`) and `FillPixPat`
@@ -139,37 +139,71 @@ impl Default for Pattern {
 /// 5. `PixData: PixData`  — per-row PackBits / raw pixel bytes per §A-3.
 ///
 /// The decoder resolves the indexed-pixel PixData against the
-/// `ColorTable` and stores the result as an 8×8 [`Rgba`] grid here.
-/// Patterns whose `PixMap.bounds` doesn't match `8×8` are treated as
-/// the `Pat1Data` fallback only (a future round can wire up arbitrary
-/// pattern tile sizes — Inside Macintosh §A-3 nominally permits them,
-/// though every real-world PICT we've audited carries an 8×8 tile).
+/// `ColorTable` and stores the result as a `width`×`height` [`Rgba`]
+/// grid here. Inside Macintosh §3 ("QuickDraw Drawing Reference",
+/// book page 3-40) states *"A pixel pattern can use additional colors
+/// and can be of any width and height that's a power of 2."* — so the
+/// tile is no longer constrained to `8×8` (round 91 only honoured the
+/// universal `8×8` tile; round 302 wires up the arbitrary power-of-2
+/// `bounds` the spec permits). A pattern whose `bounds` is degenerate
+/// (zero width or height) or whose dimensions aren't both powers of two
+/// still falls back to the `Pat1Data` monochrome interpretation.
 ///
 /// Sampling semantics mirror [`Pattern::sample`]: the tile wraps on
-/// `(x mod 8, y mod 8)`, with the most-significant byte/row mapping to
-/// top-left. Stippling cells take their fully-resolved RGB directly from
-/// `pixels`; the current foreground / background colour state is NOT
-/// consulted (PixPat is *colour-explicit*, unlike monochrome `Pattern`
-/// which selects between fg / bg per cell).
+/// `(x mod width, y mod height)`, with the most-significant byte/row
+/// mapping to top-left. Stippling cells take their fully-resolved RGB
+/// directly from `pixels`; the current foreground / background colour
+/// state is NOT consulted (PixPat is *colour-explicit*, unlike
+/// monochrome `Pattern` which selects between fg / bg per cell).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PixPattern {
     /// 8-byte monochrome fallback (the `Pat1Data` field of the on-disk
     /// PixPat record). Used by callers that want a black/white render
     /// of the pattern without consulting the colour grid.
     pub fallback: Pattern,
-    /// 8 rows × 8 columns of RGBA, row-major.
-    pub pixels: [Rgba; 64],
+    /// Tile width in pixels (the `bounds` right − left). Always a power
+    /// of two per §3 (book page 3-40); commonly `8`.
+    pub width: u16,
+    /// Tile height in pixels (the `bounds` bottom − top). Always a power
+    /// of two per §3; commonly `8`.
+    pub height: u16,
+    /// `width` × `height` cells of RGBA, row-major (the top-left cell is
+    /// `pixels[0]`). Length is exactly `width as usize * height as usize`.
+    pub pixels: Vec<Rgba>,
 }
 
 impl PixPattern {
+    /// Construct an arbitrary `width`×`height` colour tile.
+    ///
+    /// `pixels` is row-major and must contain exactly
+    /// `width * height` cells; on a length mismatch the constructor
+    /// pads with [`Rgba::BLACK`] / truncates so the invariant
+    /// `pixels.len() == width * height` always holds (a defensive
+    /// posture so a malformed producer can't desync the sampler).
+    pub fn new(width: u16, height: u16, mut pixels: Vec<Rgba>, fallback: Pattern) -> Self {
+        let want = width as usize * height as usize;
+        pixels.resize(want, Rgba::BLACK);
+        Self {
+            fallback,
+            width,
+            height,
+            pixels,
+        }
+    }
+
     /// Sample the pattern at picture-frame coordinates `(x, y)`. The
-    /// 8×8 tile wraps modulo 8 along both axes; the QuickDraw origin
-    /// corresponds to cell `[0][0]`.
+    /// tile wraps modulo `width` / `height` along the two axes; the
+    /// QuickDraw origin corresponds to cell `[0][0]`.
     #[inline]
     pub fn sample(&self, x: i32, y: i32) -> Rgba {
-        let row = y.rem_euclid(8) as usize;
-        let col = x.rem_euclid(8) as usize;
-        self.pixels[row * 8 + col]
+        // A degenerate (zero-dimension) tile can't be sampled; treat it
+        // as solid black rather than panicking on a `% 0`.
+        if self.width == 0 || self.height == 0 || self.pixels.is_empty() {
+            return Rgba::BLACK;
+        }
+        let row = y.rem_euclid(self.height as i32) as usize;
+        let col = x.rem_euclid(self.width as i32) as usize;
+        self.pixels[row * self.width as usize + col]
     }
 
     /// Construct an 8×8 colour tile that approximates the target
@@ -208,7 +242,9 @@ impl PixPattern {
     pub fn from_dither_rgb(rgb: Rgba, fallback: Pattern) -> Self {
         Self {
             fallback,
-            pixels: [rgb; 64],
+            width: 8,
+            height: 8,
+            pixels: vec![rgb; 64],
         }
     }
 }
@@ -905,10 +941,7 @@ mod tests {
         pixels[0] = Rgba::new(0xFF, 0, 0, 0xFF);
         // Bottom-right cell = green.
         pixels[63] = Rgba::new(0, 0xFF, 0, 0xFF);
-        let pp = PixPattern {
-            fallback: Pattern::BLACK,
-            pixels,
-        };
+        let pp = PixPattern::new(8, 8, pixels.to_vec(), Pattern::BLACK);
         assert_eq!(pp.sample(0, 0).r, 0xFF);
         assert_eq!(pp.sample(8, 8).r, 0xFF, "wraps modulo 8");
         assert_eq!(pp.sample(7, 7).g, 0xFF, "bottom-right is green");
@@ -916,13 +949,48 @@ mod tests {
     }
 
     #[test]
+    fn pix_pattern_sample_wraps_non_8x8() {
+        // A 4×2 tile: row 0 = red, row 1 = green; columns alternate.
+        // Confirms the sampler wraps modulo width / height for the
+        // arbitrary power-of-2 tile sizes §3 (book page 3-40) permits.
+        let red = Rgba::new(0xFF, 0, 0, 0xFF);
+        let green = Rgba::new(0, 0xFF, 0, 0xFF);
+        let pixels = vec![red, red, red, red, green, green, green, green];
+        let pp = PixPattern::new(4, 2, pixels, Pattern::BLACK);
+        assert_eq!(pp.sample(0, 0), red);
+        assert_eq!(pp.sample(3, 0), red);
+        assert_eq!(pp.sample(4, 0), red, "wraps modulo width 4");
+        assert_eq!(pp.sample(0, 1), green);
+        assert_eq!(pp.sample(0, 2), red, "wraps modulo height 2");
+        assert_eq!(pp.sample(-1, -1), green, "negative coords wrap");
+    }
+
+    #[test]
+    fn pix_pattern_new_pads_short_pixels() {
+        // A length mismatch is padded with black so the sampler invariant
+        // holds.
+        let pp = PixPattern::new(2, 2, vec![Rgba::WHITE], Pattern::BLACK);
+        assert_eq!(pp.pixels.len(), 4);
+        assert_eq!(pp.sample(0, 0), Rgba::WHITE);
+        assert_eq!(pp.sample(1, 0), Rgba::BLACK);
+    }
+
+    #[test]
+    fn pix_pattern_degenerate_is_black() {
+        let pp = PixPattern::new(0, 0, vec![], Pattern::BLACK);
+        assert_eq!(pp.sample(0, 0), Rgba::BLACK);
+    }
+
+    #[test]
     fn pict_pattern_mono_unwrap() {
         let p = PictPattern::Mono(Pattern([0xAA; 8]));
         assert_eq!(p.mono(), Pattern([0xAA; 8]));
-        let cp = PictPattern::ColourPixmap(Box::new(PixPattern {
-            fallback: Pattern([0x55; 8]),
-            pixels: [Rgba::BLACK; 64],
-        }));
+        let cp = PictPattern::ColourPixmap(Box::new(PixPattern::new(
+            8,
+            8,
+            vec![Rgba::BLACK; 64],
+            Pattern([0x55; 8]),
+        )));
         assert_eq!(cp.mono(), Pattern([0x55; 8]));
     }
 
