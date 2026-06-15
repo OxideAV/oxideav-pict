@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/OxideAV/oxideav-pict/compare/v0.0.3...v0.0.4) - 2026-06-15
+
+### Other
+
+- r308 — structured TxMode resolution via PictTextState::tx_source_mode
+- arbitrary power-of-2 PixPat tiles (round 302)
+- round 295: track QuickDraw text-drawing pen through LongText / DH/DV/DHDVText
+- round 290: hilite = 50 highlighting transfer mode honoured
+- round 282: CopyBits transfer modes honoured on the raster blit
+- honour Color QuickDraw arithmetic transfer modes on patterned fills
+- round 266: typed PictTextFace newtype for the TxFace Style byte
+- round 252: Invert* verbs honoured on round-rect / oval / arc / poly
+- drop release-plz.toml — use release-plz defaults across the workspace
+- round 247: PnMode Boolean transfer modes honoured on the rasteriser
+- scrub pre-existing decorative attribution (parent r236)
+- round 236: structured fontName / lineJustify / glyphState capture
+- round 230: structured text / pen-mode / highlight state opcodes
+- round 224: structured Picture Comments ($00A0 ShortComment / $00A1 LongComment)
+- round 217: structured v2 HeaderOp (0x0C00) 24-byte payload parser + spec-correct encoder header
+- round 211: indexed-PixMap encoder — BitsRect / PackBitsRect / *Rgn variants
+- round 205: v1 dispatcher state-machine + text + Same-shape opcode coverage
+- round 199: §A-3 reserved-for-Apple-use v2 opcode skip table
+
 ### Added
 
 - Round 302: **Arbitrary power-of-2 PixPat tiles.** Inside Macintosh §3
