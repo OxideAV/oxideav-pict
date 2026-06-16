@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Other
+
+- round 322: honour `srcRect` on every raster blit (`BitsRect` /
+  `BitsRgn` / `PackBitsRect` / `PackBitsRgn` / `DirectBitsRect` /
+  `DirectBitsRgn`) — the §A-3 Listing A-2 / A-3 `srcRect` sub-rectangle
+  of the source PixMap `bounds` is cropped before the scaling
+  `CopyBits` blit onto `dstRect`. `srcRect == bounds` stays an identity
+  no-op.
+
 ## [0.0.4](https://github.com/OxideAV/oxideav-pict/compare/v0.0.3...v0.0.4) - 2026-06-15
 
 ### Other

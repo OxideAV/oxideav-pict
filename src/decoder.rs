@@ -1501,6 +1501,69 @@ fn blit_subimage_with_rgn(
     canvas.clip = prev_clip;
 }
 
+/// Crop a decoded `bounds`-sized RGBA source buffer down to the
+/// `srcRect` sub-rectangle before it is blitted to `dstRect`.
+///
+/// Inside Macintosh: Imaging With QuickDraw §A-3 Listings A-2 / A-3
+/// lay every raster opcode out as `PixMap`/`bounds`, then `srcRect`,
+/// then `dstRect`. `CopyBits` semantics (the routine these opcodes
+/// replay) copy the *`srcRect` sub-rectangle of the source pixel map*
+/// and scale it onto `dstRect`; the decoded pixel buffer covers the
+/// full `bounds`, of which `srcRect` selects the part actually drawn.
+///
+/// `bounds` and `src` are `(top, left, bottom, right)` in the shared
+/// source coordinate space. The decoded `data` buffer is `bounds`-sized
+/// (`width × height` where `width = bounds.right − bounds.left`). This
+/// returns the `srcRect ∩ bounds` sub-image so the downstream scaling
+/// blit maps `srcRect`, not `bounds`, onto `dstRect`.
+///
+/// When `srcRect ⊇ bounds` (the overwhelmingly common case where a
+/// QuickDraw emitter sets `srcRect == bounds`) the intersection equals
+/// `bounds` and the buffer is returned unchanged. A degenerate or
+/// non-overlapping `srcRect` (which a well-formed PICT never emits)
+/// falls back to the full buffer so a malformed record never silently
+/// drops an otherwise-valid blit.
+fn crop_to_src_rect(
+    data: Vec<u8>,
+    bounds: (i16, i16, i16, i16),
+    src: (i16, i16, i16, i16),
+) -> (Vec<u8>, u32, u32) {
+    let b_top = bounds.0 as i32;
+    let b_left = bounds.1 as i32;
+    let b_bottom = bounds.2 as i32;
+    let b_right = bounds.3 as i32;
+    let bw = (b_right - b_left).max(0) as u32;
+    let bh = (b_bottom - b_top).max(0) as u32;
+
+    // Intersect srcRect with bounds, both in source coordinates.
+    let s_top = (src.0 as i32).max(b_top);
+    let s_left = (src.1 as i32).max(b_left);
+    let s_bottom = (src.2 as i32).min(b_bottom);
+    let s_right = (src.3 as i32).min(b_right);
+    let cw = (s_right - s_left).max(0) as u32;
+    let ch = (s_bottom - s_top).max(0) as u32;
+
+    // No-op when srcRect already covers the whole bounds, or when the
+    // intersection is empty / degenerate (malformed record) — return
+    // the full buffer unchanged.
+    if (cw == bw && ch == bh) || cw == 0 || ch == 0 {
+        return (data, bw, bh);
+    }
+
+    // Offset of the cropped window inside the bounds-origin buffer.
+    let ox = (s_left - b_left) as usize;
+    let oy = (s_top - b_top) as usize;
+    let bw_us = bw as usize;
+    let cw_us = cw as usize;
+    let mut out = vec![0u8; cw_us * (ch as usize) * 4];
+    for y in 0..ch as usize {
+        let src_row = ((oy + y) * bw_us + ox) * 4;
+        let dst_row = y * cw_us * 4;
+        out[dst_row..dst_row + cw_us * 4].copy_from_slice(&data[src_row..src_row + cw_us * 4]);
+    }
+    (out, cw, ch)
+}
+
 /// Final canvas → PictImage. Returns NoRaster if nothing was drawn.
 fn finalise_canvas(canvas: Canvas, state: &PictState) -> Result<PictImage> {
     if !canvas.dirty {
@@ -1550,7 +1613,7 @@ fn decode_pack_bits_rect(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32)> {
     }
     let row_bytes = row_bytes_raw as usize;
     let bounds = r.read_rect()?;
-    let _src_rect = r.read_rect()?;
+    let src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
     let mode = r.read_u16()?;
 
@@ -1576,6 +1639,7 @@ fn decode_pack_bits_rect(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32)> {
     }
 
     let rgba = expand_1bpp_to_rgba(&bitmap, width, height, row_bytes);
+    let (rgba, width, height) = crop_to_src_rect(rgba, bounds, src_rect);
     Ok((
         RasterSub {
             mode,
@@ -1631,7 +1695,7 @@ fn decode_bits_rect_v2(
     }
     let row_bytes = row_bytes_raw as usize;
     let bounds = r.read_rect()?;
-    let _src_rect = r.read_rect()?;
+    let src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
     let mode = r.read_u16()?;
     let rgn = if with_region {
@@ -1649,6 +1713,7 @@ fn decode_bits_rect_v2(
         bitmap[y * row_bytes..(y + 1) * row_bytes].copy_from_slice(row);
     }
     let rgba = expand_1bpp_to_rgba(&bitmap, width, height, row_bytes);
+    let (rgba, width, height) = crop_to_src_rect(rgba, bounds, src_rect);
     Ok((
         RasterSub {
             mode,
@@ -1681,7 +1746,7 @@ fn decode_pack_bits_rgn(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32, Regio
     }
     let row_bytes = row_bytes_raw as usize;
     let bounds = r.read_rect()?;
-    let _src_rect = r.read_rect()?;
+    let src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
     let mode = r.read_u16()?;
     let rgn = parse_region(r)?;
@@ -1707,6 +1772,7 @@ fn decode_pack_bits_rgn(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32, Regio
     }
 
     let rgba = expand_1bpp_to_rgba(&bitmap, width, height, row_bytes);
+    let (rgba, width, height) = crop_to_src_rect(rgba, bounds, src_rect);
     Ok((
         RasterSub {
             mode,
@@ -1818,7 +1884,7 @@ fn decode_indexed_pixmap_payload(
         palette.push(Rgba::from_rgb16(r16, g16, b16));
     }
 
-    let _src_rect = r.read_rect()?;
+    let src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
     let mode = r.read_u16()?;
     let rgn = if with_region {
@@ -1852,6 +1918,7 @@ fn decode_indexed_pixmap_payload(
     }
 
     let rgba = resolve_indexed_pixmap(&pix_data, width, height, row_bytes, pixel_size, &palette)?;
+    let (rgba, width, height) = crop_to_src_rect(rgba, bounds, src_rect);
     Ok((
         RasterSub {
             mode,
@@ -1902,16 +1969,17 @@ fn resolve_indexed_pixmap(
 /// clipping path inserted just before the per-row pixel data.
 fn decode_direct_bits_rgn(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32, Region)> {
     let header = read_pixmap_header(r)?;
-    let _src_rect = r.read_rect()?;
+    let src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
     let mode = r.read_u16()?;
     let rgn = parse_region(r)?;
     let (rgba, dst) = decode_direct_bits_pixels(r, &header, dst_rect)?;
+    let (rgba, width, height) = crop_to_src_rect(rgba, header.bounds, src_rect);
     Ok((
         RasterSub {
             mode,
-            width: header.width,
-            height: header.height,
+            width,
+            height,
             data: rgba,
         },
         dst,
@@ -1929,6 +1997,10 @@ struct PixMapHeader {
     pixel_size: u16,
     cmp_count: u16,
     cmp_size: u16,
+    /// The PixMap `bounds` rectangle `(top, left, bottom, right)` in the
+    /// source coordinate space, retained so the DirectBits decoders can
+    /// crop the decoded buffer to `srcRect` (Listing A-2 / A-3).
+    bounds: (i16, i16, i16, i16),
 }
 
 /// Read the DirectBits[Rect|Rgn] PixMap header: baseAddr, rowBytes,
@@ -1965,21 +2037,23 @@ fn read_pixmap_header(r: &mut Reader<'_>) -> Result<PixMapHeader> {
         pixel_size,
         cmp_count,
         cmp_size,
+        bounds,
     })
 }
 
 /// `DirectBitsRect` (`0x009A`).
 fn decode_direct_bits_rect(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32)> {
     let header = read_pixmap_header(r)?;
-    let _src_rect = r.read_rect()?;
+    let src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
     let mode = r.read_u16()?;
     let (rgba, dst) = decode_direct_bits_pixels(r, &header, dst_rect)?;
+    let (rgba, width, height) = crop_to_src_rect(rgba, header.bounds, src_rect);
     Ok((
         RasterSub {
             mode,
-            width: header.width,
-            height: header.height,
+            width,
+            height,
             data: rgba,
         },
         dst,

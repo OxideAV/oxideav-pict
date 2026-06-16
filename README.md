@@ -32,6 +32,14 @@ RGBA canvas sized to `picFrame`. The result is returned as a
 | Reserved-for-Apple opcodes | walked past per published payload size |
 | OpEndPic | terminate |
 
+Every raster blit (`BitsRect` / `BitsRgn` / `PackBitsRect` /
+`PackBitsRgn` / `DirectBitsRect` / `DirectBitsRgn`) honours the
+record's `srcRect`: per §A-3 Listings A-2 / A-3 the decoded pixel
+buffer covers the full PixMap `bounds`, of which `srcRect` selects the
+sub-rectangle actually copied and scaled onto `dstRect`. When
+`srcRect == bounds` (the common emitter case) this is the identity
+no-op; a `srcRect ⊊ bounds` crops the source before the scaling blit.
+
 The version stanza (`0x0011 0x02FF` for v2, `0x1101` for v1) is
 recognised, and the 24-byte `headerOp` is parsed into a structured
 [`PictHeader`] (`ExtendedV2` `OpenCPicture` and `V2` `OpenPicture`
