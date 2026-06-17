@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- round 328: `DirectBits` `packType = 0` resolves to the §A-3 page A-16
+  documented default packing — type 3 (16-bit PackBits) for a 16-bit
+  PixMap, type 4 (component PackBits) for a 32-bit PixMap — when
+  `rowBytes ≥ 8`; `rowBytes < 8` keeps data unpacked. Previously
+  `packType 0` was mis-decoded as raw pixel rows.
 - round 322: honour `srcRect` on every raster blit (`BitsRect` /
   `BitsRgn` / `PackBitsRect` / `PackBitsRgn` / `DirectBitsRect` /
   `DirectBitsRgn`) — the §A-3 Listing A-2 / A-3 `srcRect` sub-rectangle

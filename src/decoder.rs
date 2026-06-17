@@ -2064,6 +2064,16 @@ fn decode_direct_bits_rect(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32)> {
 /// into a `width × height` RGBA buffer. Honours packType 1 (raw),
 /// 2 (24-byte interleaved BGR for 32-bit), 3 (16-bit PackBits) and
 /// 4 (component-separated PackBits).
+///
+/// `packType = 0` selects **default packing** per §A-3 page A-16. The
+/// PixData pseudocode forces *unpacked* data whenever `rowBytes < 8`
+/// regardless of `packType`; above that threshold the documented
+/// default for a `pixelSize` of 16 is **type 3** (per-scanline 16-bit
+/// PackBits) and for a `pixelSize` of 32 is **type 4** (per-scanline
+/// component-separated PackBits). We resolve `packType = 0` to the
+/// matching concrete decoder before dispatch so a default-packed
+/// `DirectBits` emitter (`packType = 0`, `rowBytes ≥ 8`) decodes
+/// correctly instead of being mis-read as raw pixel rows.
 fn decode_direct_bits_pixels(
     r: &mut Reader<'_>,
     h: &PixMapHeader,
@@ -2071,9 +2081,17 @@ fn decode_direct_bits_pixels(
 ) -> Result<(Vec<u8>, RectI32)> {
     let dst = RectI32::from_be(dst_rect.0, dst_rect.1, dst_rect.2, dst_rect.3);
     let mut rgba = vec![0u8; (h.width * h.height * 4) as usize];
-    match (h.pack_type, h.pixel_size) {
-        (0, 16) | (1, 16) => decode_dbr_16bpp_raw(r, h, &mut rgba)?,
-        (0, 32) | (1, 32) => decode_dbr_32bpp_raw(r, h, &mut rgba)?,
+    // §A-3 page A-16: resolve the default-packing alias before match.
+    // `rowBytes < 8` keeps data unpacked (raw) for either pixel size.
+    let pack_type = match (h.pack_type, h.pixel_size, h.row_bytes < 8) {
+        (0, 16, false) => 3,
+        (0, 32, false) => 4,
+        (0, _, true) => 1,
+        (pt, _, _) => pt,
+    };
+    match (pack_type, h.pixel_size) {
+        (1, 16) => decode_dbr_16bpp_raw(r, h, &mut rgba)?,
+        (1, 32) => decode_dbr_32bpp_raw(r, h, &mut rgba)?,
         (2, 32) => decode_dbr_32bpp_packtype2(r, h, &mut rgba)?,
         (3, 16) => decode_dbr_16bpp_packbits(r, h, &mut rgba)?,
         (4, 32) => decode_dbr_32bpp_planar_packbits(r, h, &mut rgba)?,

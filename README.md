@@ -25,7 +25,7 @@ RGBA canvas sized to `picFrame`. The result is returned as a
 | `BkPat` / `PnPat` / `FillPat` | 8-byte monochrome patterns |
 | `BkPixPat` / `PnPixPat` / `FillPixPat` | colour pixel patterns (`patType=1` colour-pixmap, `patType=2` ditherPat) |
 | `BitsRect` / `BitsRgn` / `PackBitsRect` / `PackBitsRgn` | 1-bpp BitMap or indexed 1/2/4/8-bit PixMap → RGBA |
-| `DirectBitsRect` / `DirectBitsRgn` | 16-bit A1R5G5B5 / 32-bit XRGB\|ARGB → RGBA (packType 0–4) |
+| `DirectBitsRect` / `DirectBitsRgn` | 16-bit A1R5G5B5 / 32-bit XRGB\|ARGB → RGBA; `packType` 1 (raw), 2 (drop-pad), 3 (16-bit RLE), 4 (component RLE), and 0 → §A-3 page A-16 default packing (3 for 16-bit / 4 for 32-bit when `rowBytes ≥ 8`, else raw) |
 | `ShortComment` / `LongComment` | captured as structured [`PictComment`] |
 | Text-glyph opcodes (`LongText` etc.) | text-drawing pen tracked; glyph bytes walked past (no font rasteriser) |
 | CompressedQuickTime / UncompressedQuickTime | length-prefixed skip (embedded image not decoded) |
