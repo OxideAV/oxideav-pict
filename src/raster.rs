@@ -663,6 +663,121 @@ pub fn frame_polygon(canvas: &mut Canvas, vertices: &[(i32, i32)], c: Rgba) {
     }
 }
 
+/// Walk a Bresenham line from `(x0, y0)` to `(x1, y1)`, calling `plot`
+/// once per rasterised boundary pixel. Shared by the pen-aware polygon
+/// framers so the pen brush / pattern logic lives in the closure.
+fn walk_line(mut x0: i32, mut y0: i32, x1: i32, y1: i32, mut plot: impl FnMut(i32, i32)) {
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    loop {
+        plot(x0, y0);
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x0 += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+/// Frame a polygon with a `pen_h × pen_v` pen brush. Per Inside
+/// Macintosh: Imaging With QuickDraw, "QuickDraw Drawing Reference"
+/// (book page 3-81): *"Using the current graphics port's pen pattern,
+/// pattern mode, and size, the FramePoly procedure plays back the
+/// line-drawing commands… The graphics pen hangs below and to the
+/// right of each point on the boundary…"* — so the outline extends
+/// rightward / downward by the pen size, matching [`stamp_pen`].
+pub fn frame_polygon_thick(
+    canvas: &mut Canvas,
+    vertices: &[(i32, i32)],
+    pen_h: i32,
+    pen_v: i32,
+    c: Rgba,
+) {
+    if vertices.len() < 2 {
+        return;
+    }
+    if pen_h <= 1 && pen_v <= 1 {
+        frame_polygon(canvas, vertices, c);
+        return;
+    }
+    for i in 0..vertices.len() {
+        let (x0, y0) = vertices[i];
+        let (x1, y1) = vertices[(i + 1) % vertices.len()];
+        walk_line(x0, y0, x1, y1, |x, y| {
+            stamp_pen(canvas, x, y, pen_h, pen_v, c)
+        });
+    }
+}
+
+/// Pen-pattern + pattern-mode aware polygon frame (book page 3-81 pen
+/// pattern / pattern mode). Each pen-brush pixel is plotted through the
+/// §3-44 pattern-mode cell logic, so a non-solid `PnPat` outline tiles
+/// the same way the patterned fills / rect frames do.
+pub fn frame_polygon_pattern_thick_mode(
+    canvas: &mut Canvas,
+    vertices: &[(i32, i32)],
+    pen_h: i32,
+    pen_v: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    if vertices.len() < 2 {
+        return;
+    }
+    let ph = pen_h.max(1);
+    let pv = pen_v.max(1);
+    for i in 0..vertices.len() {
+        let (x0, y0) = vertices[i];
+        let (x1, y1) = vertices[(i + 1) % vertices.len()];
+        walk_line(x0, y0, x1, y1, |x, y| {
+            for dy in 0..pv {
+                for dx in 0..ph {
+                    plot_pattern_pixel_mode(canvas, x + dx, y + dy, pat, fg, bg, mode);
+                }
+            }
+        });
+    }
+}
+
+/// Colour-pixmap pen-pattern polygon frame (book page 3-81 pen
+/// pattern). Each pen-brush pixel samples the [`PixPattern`] tile.
+pub fn frame_polygon_pix_pattern_thick(
+    canvas: &mut Canvas,
+    vertices: &[(i32, i32)],
+    pen_h: i32,
+    pen_v: i32,
+    pp: &PixPattern,
+) {
+    if vertices.len() < 2 {
+        return;
+    }
+    let ph = pen_h.max(1);
+    let pv = pen_v.max(1);
+    for i in 0..vertices.len() {
+        let (x0, y0) = vertices[i];
+        let (x1, y1) = vertices[(i + 1) % vertices.len()];
+        walk_line(x0, y0, x1, y1, |x, y| {
+            for dy in 0..pv {
+                for dx in 0..ph {
+                    plot_pix_pattern(canvas, x + dx, y + dy, pp);
+                }
+            }
+        });
+    }
+}
+
 /// Frame an arc of the bounding ellipse from `start_deg` (clockwise,
 /// 0° = 12 o'clock per QuickDraw convention) sweeping `arc_deg`
 /// degrees.

@@ -20,7 +20,7 @@ RGBA canvas sized to `picFrame`. The result is returned as a
 | NOP, ClipRgn, pen / colour / text-state opcodes | parsed; rasteriser tracks state; full text state captured into [`PictTextState`] |
 | Line / LineFrom / ShortLine | drawn via Bresenham |
 | Frame / Paint / Erase / Invert / Fill of Rect / RoundRect / Oval / Arc | rasterised via in-crate kernels |
-| Frame / Paint / Erase / Invert / Fill Poly | rasterised via even-odd scanline |
+| Frame / Paint / Erase / Invert / Fill Poly | rasterised via even-odd scanline; `Frame` honours the pen size + pen pattern / mode (pen hangs below+right, §3 page 3-81) |
 | Frame / Paint / Erase / Invert / Fill Rgn | rasterised (bbox + per-row inversion mask) |
 | `BkPat` / `PnPat` / `FillPat` | 8-byte monochrome patterns |
 | `BkPixPat` / `PnPixPat` / `FillPixPat` | colour pixel patterns (`patType=1` colour-pixmap, `patType=2` ditherPat) |

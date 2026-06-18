@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- round 333: `FramePoly` (`$0070` / v1 `$70`) honours the current pen
+  size (`PnSize`) and pen pattern / pattern mode (`PnPat` / `PnMode`).
+  Inside Macintosh: Imaging With QuickDraw, "QuickDraw Drawing
+  Reference" (book page 3-81): the outline is drawn *"using the current
+  graphics port's pen pattern, pattern mode, and size"* and *"the
+  graphics pen hangs below and to the right of each point on the
+  boundary"*. Previously the polygon frame verb drew a fixed 1-pixel
+  Bresenham outline at the foreground colour, ignoring `PnSize` /
+  `PnPat` — every other frame verb already honoured the pen. New public
+  raster primitives `frame_polygon_thick` /
+  `frame_polygon_pattern_thick_mode` / `frame_polygon_pix_pattern_thick`.
 - round 328: `DirectBits` `packType = 0` resolves to the §A-3 page A-16
   documented default packing — type 3 (16-bit PackBits) for a 16-bit
   PixMap, type 4 (component PackBits) for a 32-bit PixMap — when

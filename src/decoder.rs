@@ -46,9 +46,10 @@ use crate::raster::{
     fill_arc, fill_oval_pattern_mode, fill_oval_pix_pattern, fill_polygon_pattern_mode,
     fill_polygon_pix_pattern, fill_rect, fill_rect_pattern_mode, fill_rect_pix_pattern,
     fill_round_rect_pattern_mode, fill_round_rect_pix_pattern, frame_arc, frame_oval_thick,
-    frame_polygon, frame_rect, frame_rect_pattern_thick_mode, frame_rect_pix_pattern_thick,
-    frame_round_rect, invert_arc, invert_oval, invert_polygon, invert_round_rect,
-    line_thick as draw_line_thick, Canvas, PatternMode, SourceMode,
+    frame_polygon, frame_polygon_pattern_thick_mode, frame_polygon_pix_pattern_thick, frame_rect,
+    frame_rect_pattern_thick_mode, frame_rect_pix_pattern_thick, frame_round_rect, invert_arc,
+    invert_oval, invert_polygon, invert_round_rect, line_thick as draw_line_thick, Canvas,
+    PatternMode, SourceMode,
 };
 use crate::reader::Reader;
 use crate::region::{parse_region, Region};
@@ -1177,8 +1178,33 @@ fn apply_arc_verb(
 
 fn apply_poly_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, verts: &[(i32, i32)]) {
     let mode = pattern_mode(state);
+    let (ph, pv) = state.pen_size;
     match opcode & 0x000F {
-        0 => frame_polygon(canvas, verts, state.fg),
+        // framePoly: honour the current pen size + pen pattern + pattern
+        // mode. Inside Macintosh: Imaging With QuickDraw, "QuickDraw
+        // Drawing Reference" (book page 3-81): the outline is drawn
+        // "using the current graphics port's pen pattern, pattern mode,
+        // and size", and the pen hangs below and to the right of each
+        // boundary point. A solid pen with the default 1×1 size keeps the
+        // historical thin-outline path.
+        0 => {
+            if let Some(pp) = &state.pen_pix_pat {
+                frame_polygon_pix_pattern_thick(canvas, verts, ph, pv, pp);
+            } else if ph <= 1 && pv <= 1 && mode.is_pat_copy() && state.pen_pat.is_solid_fg() {
+                frame_polygon(canvas, verts, state.fg);
+            } else {
+                frame_polygon_pattern_thick_mode(
+                    canvas,
+                    verts,
+                    ph,
+                    pv,
+                    state.pen_pat,
+                    state.fg,
+                    state.bg,
+                    mode,
+                );
+            }
+        }
         1 => {
             if let Some(pp) = &state.pen_pix_pat {
                 fill_polygon_pix_pattern(canvas, verts, pp);
