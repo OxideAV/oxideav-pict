@@ -130,6 +130,45 @@ fn advance_text_pen(state: &mut PictState, dh: i32, dv: i32) {
     state.text_state.text_op_count += 1;
 }
 
+/// Rasterise a text-glyph opcode's string onto the canvas at the current
+/// text pen, then advance the pen rightward by the drawn width so the next
+/// `DH/DV/DHDVText` opcode on the same line continues where this left off.
+///
+/// QuickDraw text-drawing geometry (Imaging With QuickDraw, book pages
+/// 2-13/2-34): the baseline sits at the pen location; `txSize` is the cell
+/// height in pixels; `fgColor` is the ink; the text source mode
+/// (`srcOr` / `srcXor` / `srcBic`) controls how glyph pixels combine with
+/// the canvas. `chExtra` (`$0016`) widens every character and `spExtra`
+/// (`$0006`) every space. The glyph artwork comes from the crate's
+/// built-in clean-room ASCII face ([`crate::font`]) — PICT carries no font
+/// data, so this is the in-tree spec-grounded stand-in for the system
+/// font, not a reproduction of any particular Mac font.
+fn render_text(canvas: &mut Canvas, state: &mut PictState, text: &[u8]) {
+    let (pen_h, pen_v) = state.text_state.text_pen.unwrap_or((0, 0));
+    let (cx, cy) = to_canvas(state, pen_h, pen_v);
+    let tx_size = state.text_state.tx_size as i32;
+    let ch_extra = state.text_state.ch_extra as i32;
+    // spExtra is a Fixed (16.16) average extra space width; the integer
+    // part is what the pen actually advances by per space.
+    let sp_extra = state.text_state.sp_extra.0 >> 16;
+    // Text uses only the Boolean source modes (book page 2-34). The
+    // resolved SourceMode falls back to srcOr — the visible default — when
+    // the stream's txMode is srcCopy (0), because a srcCopy text draw would
+    // paint an opaque white box behind every glyph, which is never what a
+    // picture intends for inline text on an existing canvas.
+    let bg_key = state.bg;
+    let mode = match state.text_state.tx_source_mode(bg_key) {
+        crate::raster::SourceMode::SrcCopy => crate::raster::SourceMode::SrcOr,
+        other => other,
+    };
+    let advanced = crate::font::draw_text(
+        canvas, text, cx, cy, tx_size, ch_extra, sp_extra, state.fg, state.bg, mode,
+    );
+    // Move the running text pen by the drawn width (in picture-frame
+    // coords, which equals canvas advance since x-scale is 1:1).
+    state.text_state.text_pen = Some((pen_h + advanced, pen_v));
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PictVersion {
     V1,
@@ -531,9 +570,10 @@ fn dispatch_v2_opcode(
             let v = r.read_i16()? as i32;
             let h = r.read_i16()? as i32;
             let n = r.read_u8()? as usize;
-            r.skip(n)?;
+            let text = r.read_bytes(n)?.to_vec();
             state.text_state.text_pen = Some((h, v));
             state.text_state.text_op_count += 1;
+            render_text(canvas, state, &text);
             Ok(true)
         }
         OP_DH_TEXT => {
@@ -543,8 +583,9 @@ fn dispatch_v2_opcode(
             // LongText the pen advances from the graphics origin (0, 0).
             let dh = r.read_u8()? as i32;
             let n = r.read_u8()? as usize;
-            r.skip(n)?;
+            let text = r.read_bytes(n)?.to_vec();
             advance_text_pen(state, dh, 0);
+            render_text(canvas, state, &text);
             Ok(true)
         }
         OP_DV_TEXT => {
@@ -552,8 +593,9 @@ fn dispatch_v2_opcode(
             // the running text pen downward by `dv`.
             let dv = r.read_u8()? as i32;
             let n = r.read_u8()? as usize;
-            r.skip(n)?;
+            let text = r.read_bytes(n)?.to_vec();
             advance_text_pen(state, 0, dv);
+            render_text(canvas, state, &text);
             Ok(true)
         }
         OP_DHDV_TEXT => {
@@ -562,8 +604,9 @@ fn dispatch_v2_opcode(
             let dh = r.read_u8()? as i32;
             let dv = r.read_u8()? as i32;
             let n = r.read_u8()? as usize;
-            r.skip(n)?;
+            let text = r.read_bytes(n)?.to_vec();
             advance_text_pen(state, dh, dv);
+            render_text(canvas, state, &text);
             Ok(true)
         }
         OP_FONT_NAME => {
@@ -2782,34 +2825,38 @@ fn dispatch_v1_opcode(
             state.pen = (nx, ny);
             Ok(true)
         }
-        // §A-3 Table A-3 text opcodes — same pen-tracking as v2. No font
-        // rasteriser, so glyph bytes are walked past, but the explicit
-        // text-pen origin / inter-call movement is recorded.
+        // §A-3 Table A-3 text opcodes — same pen-tracking + rasteriser as
+        // v2. The glyph bytes are drawn through the crate's built-in
+        // clean-room ASCII face ([`crate::font`]); PICT carries no font
+        // data so this is the spec-grounded stand-in for the system font.
         0x28 => {
             // LongText: txLoc (Point=v,h) + count (byte) + text. Point
             // order on disk is (v, h); the crate's pen tuple is (h, v).
             let v = r.read_i16()? as i32;
             let h = r.read_i16()? as i32;
             let n = r.read_u8()? as usize;
-            r.skip(n)?;
+            let text = r.read_bytes(n)?.to_vec();
             state.text_state.text_pen = Some((h, v));
             state.text_state.text_op_count += 1;
+            render_text(canvas, state, &text);
             Ok(true)
         }
         0x29 => {
             // DHText: dh (byte, 0..255) + count (byte) + text.
             let dh = r.read_u8()? as i32;
             let n = r.read_u8()? as usize;
-            r.skip(n)?;
+            let text = r.read_bytes(n)?.to_vec();
             advance_text_pen(state, dh, 0);
+            render_text(canvas, state, &text);
             Ok(true)
         }
         0x2A => {
             // DVText: dv (byte, 0..255) + count (byte) + text.
             let dv = r.read_u8()? as i32;
             let n = r.read_u8()? as usize;
-            r.skip(n)?;
+            let text = r.read_bytes(n)?.to_vec();
             advance_text_pen(state, 0, dv);
+            render_text(canvas, state, &text);
             Ok(true)
         }
         0x2B => {
@@ -2817,8 +2864,9 @@ fn dispatch_v1_opcode(
             let dh = r.read_u8()? as i32;
             let dv = r.read_u8()? as i32;
             let n = r.read_u8()? as usize;
-            r.skip(n)?;
+            let text = r.read_bytes(n)?.to_vec();
             advance_text_pen(state, dh, dv);
+            render_text(canvas, state, &text);
             Ok(true)
         }
         0x30..=0x34 | 0x40..=0x44 | 0x50..=0x54 => {

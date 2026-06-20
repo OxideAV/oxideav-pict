@@ -19,15 +19,34 @@
 //! The compact `DH/DV/DHDV` variants carry positive deltas relative to
 //! the position the previous text opcode left, which is precisely why
 //! they exist: successive `DrawText` calls on one line record only the
-//! increment. The crate has no font rasteriser, so glyph bytes are
-//! still walked past — but the spec-determined text origin and the
-//! inter-call movement are now tracked into
-//! `PictTextState::text_pen` / `text_op_count` (round 295).
+//! increment.
+//!
+//! Round 352 turns the text opcodes from walk-past into a real raster:
+//! the glyph bytes are now drawn through the crate's built-in clean-room
+//! ASCII face, and — per the QuickDraw text-drawing model — the pen
+//! advances rightward by each drawn glyph's width as it goes. So after a
+//! text opcode the pen sits at the *end* of the drawn string, not at its
+//! start. These tests therefore assert
+//! `declared_position + measure_text(text)`, where `measure_text` is the
+//! same advance the rasteriser uses (default `txSize = 12`, no
+//! `chExtra` / `spExtra`). Empty strings advance by zero, so a `count = 0`
+//! opcode still leaves the pen exactly at the declared position.
 //!
 //! Point order on disk is `(v, h)`; the crate's pen tuple is `(h, v)`.
 
+use oxideav_pict::font::measure_text;
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::parse_pict;
+
+/// The default text size a freshly-initialised `PictTextState` carries
+/// (`TxSize` defaults to 12 points). The synth pictures below never emit
+/// a `TxSize` opcode, so every draw uses this size.
+const DEFAULT_TX_SIZE: i32 = 12;
+
+/// Horizontal advance the rasteriser adds for `text` at the default size.
+fn adv(text: &[u8]) -> i32 {
+    measure_text(text, DEFAULT_TX_SIZE, 0, 0)
+}
 
 /// A `LongText` opcode body: `$0028`, `txLoc (v, h)`, `count`, `text`.
 fn long_text(v: i16, h: i16, text: &[u8]) -> Vec<u8> {
@@ -76,10 +95,11 @@ fn paint_dot(b: &mut PictBuilder) {
 fn long_text_sets_absolute_pen() {
     let mut b = PictBuilder::new(0, 0, 64, 64);
     paint_dot(&mut b);
-    // txLoc = (v=20, h=10). Pen tuple is (h, v) = (10, 20).
+    // txLoc = (v=20, h=10). Pen tuple is (h, v) = (10, 20); after drawing
+    // "hello" the pen has advanced right by the glyph widths.
     b.push(&long_text(20, 10, b"hello"));
     let img = parse_pict(&b.finish()).unwrap();
-    assert_eq!(img.text_state.text_pen, Some((10, 20)));
+    assert_eq!(img.text_state.text_pen, Some((10 + adv(b"hello"), 20)));
     assert_eq!(img.text_state.text_op_count, 1);
 }
 
@@ -91,10 +111,11 @@ fn long_text_sets_absolute_pen() {
 fn dh_text_advances_right_from_long_text() {
     let mut b = PictBuilder::new(0, 0, 64, 64);
     paint_dot(&mut b);
-    b.push(&long_text(20, 10, b"a")); // pen = (10, 20)
-    b.push(&dh_text(7, b"b")); //         pen = (17, 20)
+    b.push(&long_text(20, 10, b"a")); // draw "a" → pen = (10 + adv(a), 20)
+    b.push(&dh_text(7, b"b")); //         +dh 7, draw "b"
     let img = parse_pict(&b.finish()).unwrap();
-    assert_eq!(img.text_state.text_pen, Some((17, 20)));
+    let h = 10 + adv(b"a") + 7 + adv(b"b");
+    assert_eq!(img.text_state.text_pen, Some((h, 20)));
     assert_eq!(img.text_state.text_op_count, 2);
 }
 
@@ -102,10 +123,11 @@ fn dh_text_advances_right_from_long_text() {
 fn dv_text_advances_down_from_long_text() {
     let mut b = PictBuilder::new(0, 0, 64, 64);
     paint_dot(&mut b);
-    b.push(&long_text(20, 10, b"a")); // pen = (10, 20)
-    b.push(&dv_text(5, b"b")); //         pen = (10, 25)
+    b.push(&long_text(20, 10, b"a")); // draw "a" → pen h advanced, v = 20
+    b.push(&dv_text(5, b"b")); //         +dv 5, draw "b"
     let img = parse_pict(&b.finish()).unwrap();
-    assert_eq!(img.text_state.text_pen, Some((10, 25)));
+    let h = 10 + adv(b"a") + adv(b"b");
+    assert_eq!(img.text_state.text_pen, Some((h, 25)));
     assert_eq!(img.text_state.text_op_count, 2);
 }
 
@@ -113,10 +135,11 @@ fn dv_text_advances_down_from_long_text() {
 fn dhdv_text_advances_both_axes() {
     let mut b = PictBuilder::new(0, 0, 64, 64);
     paint_dot(&mut b);
-    b.push(&long_text(20, 10, b"a")); //  pen = (10, 20)
-    b.push(&dhdv_text(3, 4, b"b")); //    pen = (13, 24)
+    b.push(&long_text(20, 10, b"a")); //  draw "a"
+    b.push(&dhdv_text(3, 4, b"b")); //    +dh 3, +dv 4, draw "b"
     let img = parse_pict(&b.finish()).unwrap();
-    assert_eq!(img.text_state.text_pen, Some((13, 24)));
+    let h = 10 + adv(b"a") + 3 + adv(b"b");
+    assert_eq!(img.text_state.text_pen, Some((h, 24)));
     assert_eq!(img.text_state.text_op_count, 2);
 }
 
@@ -128,12 +151,13 @@ fn dhdv_text_advances_both_axes() {
 fn successive_deltas_accumulate() {
     let mut b = PictBuilder::new(0, 0, 80, 80);
     paint_dot(&mut b);
-    b.push(&long_text(30, 5, b"W")); //   pen = (5, 30)
-    b.push(&dh_text(8, b"o")); //         pen = (13, 30)
-    b.push(&dh_text(8, b"r")); //         pen = (21, 30)
-    b.push(&dhdv_text(8, 12, b"d")); //   pen = (29, 42)
+    b.push(&long_text(30, 5, b"W")); //   draw "W"
+    b.push(&dh_text(8, b"o")); //         +8, draw "o"
+    b.push(&dh_text(8, b"r")); //         +8, draw "r"
+    b.push(&dhdv_text(8, 12, b"d")); //   +8, +12, draw "d"
     let img = parse_pict(&b.finish()).unwrap();
-    assert_eq!(img.text_state.text_pen, Some((29, 42)));
+    let h = 5 + adv(b"W") + 8 + adv(b"o") + 8 + adv(b"r") + 8 + adv(b"d");
+    assert_eq!(img.text_state.text_pen, Some((h, 42)));
     assert_eq!(img.text_state.text_op_count, 4);
 }
 
@@ -145,9 +169,9 @@ fn successive_deltas_accumulate() {
 fn delta_without_long_text_advances_from_origin() {
     let mut b = PictBuilder::new(0, 0, 64, 64);
     paint_dot(&mut b);
-    b.push(&dhdv_text(11, 13, b"x")); //  pen = (0, 0) + (11, 13)
+    b.push(&dhdv_text(11, 13, b"x")); //  (0,0) + (11,13), draw "x"
     let img = parse_pict(&b.finish()).unwrap();
-    assert_eq!(img.text_state.text_pen, Some((11, 13)));
+    assert_eq!(img.text_state.text_pen, Some((11 + adv(b"x"), 13)));
     assert_eq!(img.text_state.text_op_count, 1);
 }
 
@@ -210,10 +234,11 @@ fn v1_long_text_then_dh_text() {
     ops.extend_from_slice(&12i16.to_be_bytes());
     ops.push(2);
     ops.extend_from_slice(b"hi");
-    // v1 DHText 0x29: dh=9 → pen (21, 25).
+    // v1 DHText 0x29: dh=9, draw "!".
     ops.extend_from_slice(&[0x29, 9, 1, b'!']);
     let img = parse_pict(&v1_pict(&ops)).unwrap();
-    assert_eq!(img.text_state.text_pen, Some((21, 25)));
+    let h = 12 + adv(b"hi") + 9 + adv(b"!");
+    assert_eq!(img.text_state.text_pen, Some((h, 25)));
     assert_eq!(img.text_state.text_op_count, 2);
 }
 
