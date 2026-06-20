@@ -25,12 +25,16 @@
 //! cleanly) so they don't wedge a surrounding-PICT decode, but the
 //! embedded image (typically JPEG) is not yet decoded.
 //!
-//! Text glyph opcodes (`LongText` / `DH/DV/DHDVText`) are walked but
-//! not rasterised — that needs a TrueType engine. The spec-determined
-//! **text-drawing pen location** they carry (the baseline origin from
-//! `LongText`'s `txLoc`, advanced by the compact `DH/DV/DHDV` deltas)
-//! is tracked into `PictTextState::text_pen` / `text_op_count` (round
-//! 295) so callers see where text would land even without glyphs.
+//! Text glyph opcodes (`LongText` / `DH/DV/DHDVText`) are **rasterised**
+//! (round 352): the glyph bytes are drawn through the crate's built-in
+//! clean-room ASCII bitmap face ([`font`]) at the text-drawing baseline
+//! pen, scaled by `txSize`, inked in `fgColor`, honouring the
+//! `srcOr` / `srcXor` / `srcBic` text source modes and advancing the pen
+//! by each glyph plus `chExtra` / `spExtra`. PICT carries no font data
+//! and Imaging With QuickDraw defers the actual system-font bitmaps +
+//! `txFace` style synthesis to Inside Macintosh: Text (absent from the
+//! crate's reference set), so text is legible and spec-positioned but not
+//! pixel-identical to a particular Mac font.
 //!
 //! ## Standalone vs registry-integrated
 //!

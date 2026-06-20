@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- round 352: **text rasterisation.** The QuickDraw text-drawing opcodes
+  `LongText` (`$0028` / v1 `$28`), `DHText` (`$0029` / `$29`), `DVText`
+  (`$002A` / `$2A`) and `DHDVText` (`$002B` / `$2B`) now draw glyphs onto
+  the canvas instead of being walked past. A new public `font` module
+  carries an original crate-authored 5×7 ASCII bitmap face plus
+  `draw_text` / `measure_text`; the decoder places the string's baseline
+  at the text pen (Imaging With QuickDraw book page 2-13), scales by
+  `txSize` (book page 2-34: `point × resolution / 72`), inks in `fgColor`,
+  honours the `srcOr` / `srcXor` / `srcBic` text source modes (book page
+  2-34) and advances the running pen by each glyph plus `chExtra` /
+  `spExtra`. PICT embeds no font data and Imaging With QuickDraw defers
+  the system-font bitmaps + `txFace` style synthesis to Inside Macintosh:
+  Text (not in the crate's reference set), so text is legible and
+  spec-positioned but not pixel-identical to a particular Mac font.
+  round 295's pen-tracking tests were rewritten to expect the
+  glyph-advanced pen position (`declared + measure_text(text)`); new
+  `synth_text_raster_round352` asserts ink placement, `txSize` scaling,
+  `fgColor` inking, multi-opcode lines and empty-string no-op.
+
 ### Other
 
 - round 333: `FramePoly` (`$0070` / v1 `$70`) honours the current pen
