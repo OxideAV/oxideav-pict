@@ -34,7 +34,7 @@
 //!
 //! Point order on disk is `(v, h)`; the crate's pen tuple is `(h, v)`.
 
-use oxideav_pict::font::measure_text;
+use oxideav_pict::font::{measure_text, TextScale};
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::parse_pict;
 
@@ -45,7 +45,7 @@ const DEFAULT_TX_SIZE: i32 = 12;
 
 /// Horizontal advance the rasteriser adds for `text` at the default size.
 fn adv(text: &[u8]) -> i32 {
-    measure_text(text, DEFAULT_TX_SIZE, 0, 0)
+    measure_text(text, TextScale::isotropic(DEFAULT_TX_SIZE), 0, 0, 0)
 }
 
 /// A `LongText` opcode body: `$0028`, `txLoc (v, h)`, `count`, `text`.

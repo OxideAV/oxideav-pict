@@ -58,6 +58,80 @@ pub const DESIGN_EM: i32 = 8;
 /// (index 6) is the baseline row; index 7 (one below) is descender room.
 pub const BASELINE_ROW: i32 = 6;
 
+/// Anisotropic glyph scale: `txSize` plus the `TxRatio` (`$0010`)
+/// horizontal / vertical numerator-over-denominator pair.
+///
+/// Imaging With QuickDraw (book page 12-13, `DrawJustified` / `StdText`
+/// scaling): *"numer.v over denom.v gives the vertical scaling, and
+/// numer.h over denom.h gives the horizontal scaling factor."* So a
+/// design-space length `len` maps to
+///
+/// * horizontal canvas pixels: `len · txSize/DESIGN_EM · numer_h/denom_h`
+/// * vertical canvas pixels:   `len · txSize/DESIGN_EM · numer_v/denom_v`
+///
+/// A `TxRatio` of `1/1` on both axes (the §A-3 fresh-GrafPort default)
+/// reduces to the isotropic `txSize / DESIGN_EM` scale. Denominators of
+/// zero (a malformed record) are clamped to `1` so the ratio can never
+/// divide by zero or collapse a glyph to nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextScale {
+    /// Cell height in pixels; the artwork em is [`DESIGN_EM`].
+    pub tx_size: i32,
+    /// `TxRatio` horizontal numerator (`numer.h`).
+    pub numer_h: i32,
+    /// `TxRatio` horizontal denominator (`denom.h`).
+    pub denom_h: i32,
+    /// `TxRatio` vertical numerator (`numer.v`).
+    pub numer_v: i32,
+    /// `TxRatio` vertical denominator (`denom.v`).
+    pub denom_v: i32,
+}
+
+impl TextScale {
+    /// The `txSize`-only scale used when no `TxRatio` is in force (both
+    /// axes `1/1`).
+    #[inline]
+    pub const fn isotropic(tx_size: i32) -> Self {
+        Self {
+            tx_size,
+            numer_h: 1,
+            denom_h: 1,
+            numer_v: 1,
+            denom_v: 1,
+        }
+    }
+
+    /// Scale a design-space length along the horizontal axis, in canvas
+    /// pixels (`len · txSize/DESIGN_EM · numer_h/denom_h`).
+    #[inline]
+    pub fn h(&self, len: i32) -> i32 {
+        ratio_scale(len, self.tx_size, self.numer_h, self.denom_h)
+    }
+
+    /// Scale a design-space length along the vertical axis, in canvas
+    /// pixels (`len · txSize/DESIGN_EM · numer_v/denom_v`).
+    #[inline]
+    pub fn v(&self, len: i32) -> i32 {
+        ratio_scale(len, self.tx_size, self.numer_v, self.denom_v)
+    }
+}
+
+/// Scale `len` design pixels by `txSize/DESIGN_EM · numer/denom`, rounded
+/// to nearest with a 1-px floor so a glyph never collapses to nothing.
+/// `txSize <= 0` falls back to the raw `len · numer/denom` (no size
+/// scaling); a non-positive denominator is treated as `1`.
+#[inline]
+fn ratio_scale(len: i32, tx_size: i32, numer: i32, denom: i32) -> i32 {
+    let denom = if denom <= 0 { 1 } else { denom };
+    let numer = numer.max(0);
+    let size = if tx_size <= 0 { DESIGN_EM } else { tx_size };
+    // Compute in i64 so a large txSize × ratio can't overflow i32.
+    let num = len as i64 * size as i64 * numer as i64;
+    let den = DESIGN_EM as i64 * denom as i64;
+    let scaled = (num + den / 2) / den;
+    (scaled as i32).max(1)
+}
+
 /// 5×7 glyph bitmaps for ASCII `0x20..=0x7E`. Index `c - 0x20`; each
 /// entry is 7 row masks, MSB-of-low-5-bits = leftmost column.
 ///
@@ -186,31 +260,29 @@ pub fn char_advance_design(_b: u8) -> i32 {
     ADVANCE
 }
 
-/// Scale a design-space length by the active `txSize`. `txSize` is the
-/// cell height in pixels (book page 2-34: `point × resolution / 72`); the
-/// artwork's em is [`DESIGN_EM`] pixels, so the scale is
-/// `txSize / DESIGN_EM`, rounded to nearest with a 1-px floor so a glyph
-/// never collapses to nothing.
-#[inline]
-fn scale_design(len: i32, tx_size: i32) -> i32 {
-    if tx_size <= 0 {
-        return len;
-    }
-    let scaled = (len * tx_size + DESIGN_EM / 2) / DESIGN_EM;
-    scaled.max(1)
-}
-
 /// Total advance width, in **canvas pixels**, that drawing `text` at the
-/// given `tx_size` would consume — the sum of per-glyph advances plus the
-/// `ch_extra` per-character and `sp_extra` per-space adjustments (§A-3
-/// `$0016` / `$0006`; Imaging With QuickDraw book page 2-34). Used to move
-/// the running text pen after a draw so successive `DH/DV/DHDVText`
-/// opcodes on the same line land correctly.
-pub fn measure_text(text: &[u8], tx_size: i32, ch_extra: i32, sp_extra: i32) -> i32 {
+/// given [`TextScale`] would consume — the sum of per-glyph horizontal
+/// advances plus the `ch_extra` per-character, `sp_extra` per-space and
+/// `inter_char` per-character (`lineJustify $002D`) adjustments (§A-3
+/// `$0016` / `$0006` / `$002D`; Imaging With QuickDraw book page 2-34).
+/// Used to move the running text pen after a draw so successive
+/// `DH/DV/DHDVText` opcodes on the same line land correctly.
+///
+/// The `inter_char` width is the `lineJustify` intercharacter spacing
+/// (the Script Manager's "extra character width"); per §A-3 footnote `†`
+/// it is added to **every** character in the style run, distinct from the
+/// nonspace-only `ch_extra` and space-only `sp_extra`.
+pub fn measure_text(
+    text: &[u8],
+    scale: TextScale,
+    ch_extra: i32,
+    sp_extra: i32,
+    inter_char: i32,
+) -> i32 {
     let mut adv = 0i32;
     for &b in text {
-        adv += scale_design(char_advance_design(b), tx_size);
-        adv += ch_extra;
+        adv += scale.h(char_advance_design(b));
+        adv += ch_extra + inter_char;
         if b == b' ' {
             adv += sp_extra;
         }
@@ -226,26 +298,35 @@ pub fn measure_text(text: &[u8], tx_size: i32, ch_extra: i32, sp_extra: i32) -> 
 ///
 /// The baseline rule (book page 2-13) places row [`BASELINE_ROW`] of the
 /// design cell on the pen's `y`; rows above the baseline are drawn at
-/// `pen_y - (BASELINE_ROW - row)·scale`, the one descender row below at
-/// `pen_y + scale`. `txSize` scales the cell isotropically.
+/// `pen_y - (BASELINE_ROW - row)·scale_v`, the one descender row below at
+/// `pen_y + scale_v`. The cell scales by [`TextScale`] — `txSize` plus the
+/// `TxRatio` (`$0010`) horizontal / vertical factors, so a wide or
+/// condensed `TxRatio` stretches or squeezes the glyph cells along their
+/// respective axes while leaving the baseline anchored on `pen_y`.
+///
+/// `inter_char` is the `lineJustify` (`$002D`) intercharacter spacing
+/// added to every glyph's horizontal advance (§A-3 footnote `†`).
 #[allow(clippy::too_many_arguments)]
 pub fn draw_text(
     canvas: &mut Canvas,
     text: &[u8],
     pen_x: i32,
     pen_y: i32,
-    tx_size: i32,
+    scale: TextScale,
     ch_extra: i32,
     sp_extra: i32,
+    inter_char: i32,
     fg: Rgba,
     bg: Rgba,
     mode: SourceMode,
 ) -> i32 {
     let mut x = pen_x;
-    let s = |len: i32| scale_design(len, tx_size);
     for &b in text {
         let bmp = glyph(b);
-        let scale = s(1);
+        // A single design pixel maps to `cw × ch` canvas pixels — the
+        // anisotropic cell from the active `txSize` × `TxRatio`.
+        let cw = scale.h(1);
+        let ch = scale.v(1);
         for (row_idx, &rowmask) in bmp.iter().enumerate() {
             if rowmask == 0 {
                 continue;
@@ -257,7 +338,7 @@ pub fn draw_text(
             // is 7 rows so the deepest authored row is the baseline) keeps
             // its block bottom on the baseline too.
             let rows_above_baseline = BASELINE_ROW - row_idx as i32;
-            let y_top = pen_y - s(rows_above_baseline + 1) + 1;
+            let y_top = pen_y - scale.v(rows_above_baseline + 1) + 1;
             for col in 0..GLYPH_W {
                 let on = (rowmask >> (GLYPH_W - 1 - col)) & 1 != 0;
                 // For a glyph the "source image" is black on the on-bits
@@ -275,10 +356,10 @@ pub fn draw_text(
                 {
                     continue;
                 }
-                let bx = x + s(col);
-                for dy in 0..scale {
+                let bx = x + scale.h(col);
+                for dy in 0..ch {
                     let py = y_top + dy;
-                    for dx in 0..scale {
+                    for dx in 0..cw {
                         let px = bx + dx;
                         let dst = canvas.pixel_at(px, py).unwrap_or(bg);
                         let out = blend_source(mode, src, dst, fg, bg);
@@ -287,7 +368,7 @@ pub fn draw_text(
                 }
             }
         }
-        x += s(char_advance_design(b)) + ch_extra;
+        x += scale.h(char_advance_design(b)) + ch_extra + inter_char;
         if b == b' ' {
             x += sp_extra;
         }
@@ -320,19 +401,42 @@ mod tests {
 
     #[test]
     fn measure_scales_with_size() {
-        let m8 = measure_text(b"AB", 8, 0, 0);
-        let m16 = measure_text(b"AB", 16, 0, 0);
+        let m8 = measure_text(b"AB", TextScale::isotropic(8), 0, 0, 0);
+        let m16 = measure_text(b"AB", TextScale::isotropic(16), 0, 0, 0);
         assert_eq!(m8, 2 * ADVANCE);
         assert_eq!(m16, 2 * ADVANCE * 2);
     }
 
     #[test]
     fn measure_includes_extras() {
-        let base = measure_text(b"a a", 8, 0, 0);
-        let with_ch = measure_text(b"a a", 8, 2, 0);
-        let with_sp = measure_text(b"a a", 8, 0, 3);
+        let base = measure_text(b"a a", TextScale::isotropic(8), 0, 0, 0);
+        let with_ch = measure_text(b"a a", TextScale::isotropic(8), 2, 0, 0);
+        let with_sp = measure_text(b"a a", TextScale::isotropic(8), 0, 3, 0);
+        let with_ic = measure_text(b"a a", TextScale::isotropic(8), 0, 0, 4);
         assert_eq!(with_ch, base + 3 * 2); // 3 chars × chExtra 2
         assert_eq!(with_sp, base + 3); // one space × spExtra 3
+        assert_eq!(with_ic, base + 3 * 4); // 3 chars × interChar 4
+    }
+
+    #[test]
+    fn measure_tx_ratio_stretches_horizontally() {
+        // A 2/1 horizontal TxRatio doubles the advance; vertical ratio
+        // leaves the horizontal advance untouched.
+        let base = measure_text(b"AB", TextScale::isotropic(8), 0, 0, 0);
+        let wide = measure_text(
+            b"AB",
+            TextScale {
+                tx_size: 8,
+                numer_h: 2,
+                denom_h: 1,
+                numer_v: 1,
+                denom_v: 1,
+            },
+            0,
+            0,
+            0,
+        );
+        assert_eq!(wide, 2 * base);
     }
 
     #[test]
@@ -343,7 +447,8 @@ mod tests {
             b"A",
             2,
             10,
-            8,
+            TextScale::isotropic(8),
+            0,
             0,
             0,
             Rgba::BLACK,
@@ -372,7 +477,8 @@ mod tests {
             b" ",
             2,
             10,
-            8,
+            TextScale::isotropic(8),
+            0,
             0,
             0,
             Rgba::BLACK,

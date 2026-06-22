@@ -151,6 +151,27 @@ fn render_text(canvas: &mut Canvas, state: &mut PictState, text: &[u8]) {
     // spExtra is a Fixed (16.16) average extra space width; the integer
     // part is what the pen actually advances by per space.
     let sp_extra = state.text_state.sp_extra.0 >> 16;
+    // `TxRatio` (`$0010`): numer.h/denom.h is the horizontal glyph-cell
+    // scale, numer.v/denom.v the vertical (Imaging With QuickDraw book
+    // page 12-13). The §A-3 fresh-GrafPort default is 1/1 on both axes,
+    // which reduces to the plain `txSize / DESIGN_EM` scale.
+    let ratio = state.text_state.tx_ratio;
+    let scale = crate::font::TextScale {
+        tx_size,
+        numer_h: ratio.numer_h as i32,
+        denom_h: ratio.denom_h as i32,
+        numer_v: ratio.numer_v as i32,
+        denom_v: ratio.denom_v as i32,
+    };
+    // `lineJustify` (`$002D`) intercharacter spacing — the Script Manager
+    // "extra character width" added to every glyph's advance (§A-3
+    // footnote `†`). Stored as a Fixed; the pen advances by its integer
+    // part. Absent when no `lineJustify` record has been seen.
+    let inter_char = state
+        .text_state
+        .line_justify
+        .map(|lj| lj.inter_char_spacing.0 >> 16)
+        .unwrap_or(0);
     // Text uses only the Boolean source modes (book page 2-34). The
     // resolved SourceMode falls back to srcOr — the visible default — when
     // the stream's txMode is srcCopy (0), because a srcCopy text draw would
@@ -162,7 +183,7 @@ fn render_text(canvas: &mut Canvas, state: &mut PictState, text: &[u8]) {
         other => other,
     };
     let advanced = crate::font::draw_text(
-        canvas, text, cx, cy, tx_size, ch_extra, sp_extra, state.fg, state.bg, mode,
+        canvas, text, cx, cy, scale, ch_extra, sp_extra, inter_char, state.fg, state.bg, mode,
     );
     // Move the running text pen by the drawn width (in picture-frame
     // coords, which equals canvas advance since x-scale is 1:1).
