@@ -28,13 +28,15 @@
 //! Text glyph opcodes (`LongText` / `DH/DV/DHDVText`) are **rasterised**
 //! (round 352): the glyph bytes are drawn through the crate's built-in
 //! clean-room ASCII bitmap face ([`font`]) at the text-drawing baseline
-//! pen, scaled by `txSize`, inked in `fgColor`, honouring the
-//! `srcOr` / `srcXor` / `srcBic` text source modes and advancing the pen
-//! by each glyph plus `chExtra` / `spExtra`. PICT carries no font data
-//! and Imaging With QuickDraw defers the actual system-font bitmaps +
-//! `txFace` style synthesis to Inside Macintosh: Text (absent from the
-//! crate's reference set), so text is legible and spec-positioned but not
-//! pixel-identical to a particular Mac font.
+//! pen, scaled by `txSize` and the `TxRatio` (`$0010`) horizontal /
+//! vertical `numer/denom` factors (round 361), inked in `fgColor`,
+//! honouring the `srcOr` / `srcXor` / `srcBic` text source modes and
+//! advancing the pen by each glyph plus `chExtra` / `spExtra` plus the
+//! `lineJustify` (`$002D`) intercharacter spacing (round 361). PICT
+//! carries no font data and Imaging With QuickDraw defers the actual
+//! system-font bitmaps + `txFace` style synthesis to Inside Macintosh:
+//! Text (absent from the crate's reference set), so text is legible and
+//! spec-positioned but not pixel-identical to a particular Mac font.
 //!
 //! ## Standalone vs registry-integrated
 //!

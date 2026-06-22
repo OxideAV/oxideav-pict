@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- round 361: **`TxRatio` glyph scaling + `lineJustify` intercharacter
+  spacing reach the text rasteriser.** Both opcodes were already captured
+  into the drawing state but discarded at draw time. `font::draw_text` /
+  `measure_text` now take a `TextScale` (the new public struct bundling
+  `txSize` with the `TxRatio` `$0010` horizontal `numer.h/denom.h` and
+  vertical `numer.v/denom.v` factors — Imaging With QuickDraw book page
+  12-13) plus an `inter_char` advance, so a wide / condensed run stretches
+  or squeezes the glyph cells along each axis with the baseline anchored
+  on the pen, and the `lineJustify` (`$002D`) intercharacter spacing
+  (§A-3 footnote `†`) is added to every glyph's advance (distinct from the
+  nonspace-only `chExtra` and space-only `spExtra`). Ratio scaling rounds
+  in `i64` to nearest with a 1-px floor and clamps zero denominators.
+  Four new `parse_pict`-level tests in `synth_text_layout_round361`.
+
 - round 352: **text rasterisation.** The QuickDraw text-drawing opcodes
   `LongText` (`$0028` / v1 `$28`), `DHText` (`$0029` / `$29`), `DVText`
   (`$002A` / `$2A`) and `DHDVText` (`$002B` / `$2B`) now draw glyphs onto

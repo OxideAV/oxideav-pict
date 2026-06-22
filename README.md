@@ -27,7 +27,7 @@ returned as a `PictImage`.
 | `BitsRect` / `BitsRgn` / `PackBitsRect` / `PackBitsRgn` | 1-bpp BitMap or indexed 1/2/4/8-bit PixMap → RGBA |
 | `DirectBitsRect` / `DirectBitsRgn` | 16-bit A1R5G5B5 / 32-bit XRGB\|ARGB → RGBA; `packType` 1 (raw), 2 (drop-pad), 3 (16-bit RLE), 4 (component RLE), and 0 → §A-3 page A-16 default packing (3 for 16-bit / 4 for 32-bit when `rowBytes ≥ 8`, else raw) |
 | `ShortComment` / `LongComment` | captured as structured [`PictComment`] |
-| Text-glyph opcodes (`LongText` / `DH/DV/DHDVText`) | **rasterised** — glyph bytes drawn through a built-in clean-room ASCII bitmap face at the baseline pen, scaled by `txSize`, inked in `fgColor`, advancing the pen by each glyph + `chExtra` / `spExtra`; honours the `srcOr` / `srcXor` / `srcBic` text source modes |
+| Text-glyph opcodes (`LongText` / `DH/DV/DHDVText`) | **rasterised** — glyph bytes drawn through a built-in clean-room ASCII bitmap face at the baseline pen, scaled by `txSize` **and the `TxRatio` (`$0010`) horizontal / vertical `numer/denom` factors** (book page 12-13), inked in `fgColor`, advancing the pen by each glyph + `chExtra` / `spExtra` + the `lineJustify` (`$002D`) intercharacter spacing (§A-3 footnote `†`); honours the `srcOr` / `srcXor` / `srcBic` text source modes |
 | CompressedQuickTime / UncompressedQuickTime | length-prefixed skip (embedded image not decoded) |
 | Reserved-for-Apple opcodes | walked past per published payload size |
 | OpEndPic | terminate |
@@ -159,8 +159,13 @@ oxideav-pict = { version = "0.0", default-features = false } # standalone
   style synthesis to a separate book ("the chapter 'Font Manager' in
   Inside Macintosh: Text") that is not in this crate's reference set. So
   text is legible and positioned per spec, but not pixel-identical to a
-  particular Mac font, and the `txFace` style bits + `grayishTextOr = 49`
-  shading mode are tracked but not yet synthesised onto the glyphs.
+  particular Mac font. Text *geometry* that **is** fully spec-determined —
+  `txSize` cell scaling, the `TxRatio` (`$0010`) horizontal / vertical
+  scaling factors, and the `lineJustify` (`$002D`) intercharacter spacing
+  — is applied to the built-in face. The `txFace` style bits (bold /
+  italic / underline pixel synthesis) and the `grayishTextOr = 49`
+  shading mode remain tracked-but-not-synthesised: their per-pixel
+  geometry lives in the absent Font Manager / Color-QuickDraw chapters.
 * **CompressedQuickTime decode.** The opcode is parsed (payload skipped
   cleanly), but the embedded image (typically JPEG) is not decoded.
 * **Multi-image PICTs.** Each raster blits onto the same canvas — no
