@@ -46,10 +46,10 @@ use crate::raster::{
     fill_arc, fill_oval_pattern_mode, fill_oval_pix_pattern, fill_polygon_pattern_mode,
     fill_polygon_pix_pattern, fill_rect, fill_rect_pattern_mode, fill_rect_pix_pattern,
     fill_round_rect_pattern_mode, fill_round_rect_pix_pattern, frame_arc, frame_oval_thick,
-    frame_polygon, frame_polygon_pattern_thick_mode, frame_polygon_pix_pattern_thick, frame_rect,
+    frame_polygon, frame_polygon_pattern_thick_mode, frame_polygon_pix_pattern_thick,
     frame_rect_pattern_thick_mode, frame_rect_pix_pattern_thick, frame_round_rect, invert_arc,
-    invert_oval, invert_polygon, invert_round_rect, line_thick as draw_line_thick, Canvas,
-    PatternMode, SourceMode,
+    invert_oval, invert_polygon, invert_round_rect, line_thick as draw_line_thick,
+    stamp_region_pen_cell_mode, stamp_region_pen_cell_pix, Canvas, PatternMode, SourceMode,
 };
 use crate::reader::Reader;
 use crate::region::{parse_region, Region};
@@ -1402,18 +1402,49 @@ fn paint_region_pix_pattern(canvas: &mut Canvas, state: &PictState, rgn: &Region
 
 /// Paint a region's outline (edges between inside / outside) with
 /// the foreground colour.
+/// `FrameRgn` — draw just the region's outline, honouring the graphics
+/// pen. Inside Macintosh: Imaging With QuickDraw, "Framing Shapes" (book
+/// page 3-13): *"Using the … FrameRgn procedure to frame a shape draws
+/// just its outline, using the size, pattern, and pattern mode of the
+/// graphics pen."* Like the round-333 `FramePoly` treatment, the outline
+/// now consults `PnSize` (pen hangs below-and-right, book page 2-31),
+/// the pen pattern (`PnPat` / `PnPixPat`), and the pen pattern mode
+/// (`PnMode`), instead of the previous fixed 1-pixel `fgColor` trace.
 fn paint_region_outline(canvas: &mut Canvas, state: &PictState, rgn: &Region) {
     let bb_w = rgn.width().max(0);
     let bb_h = rgn.height().max(0);
     if bb_w == 0 || bb_h == 0 {
         return;
     }
+    let (ph, pv) = state.pen_size;
+    let mode = pattern_mode(state);
     if rgn.mask.is_none() {
+        // Rectangular region: the outline is exactly the bbox frame, so
+        // reuse the pen-aware rect-frame primitives.
         let (top, left, bottom, right) = rect_to_canvas(state, rgn.bbox);
-        frame_rect(canvas, top, left, bottom, right, state.fg);
+        if let Some(pp) = &state.pen_pix_pat {
+            frame_rect_pix_pattern_thick(canvas, top, left, bottom, right, ph, pv, pp);
+        } else {
+            frame_rect_pattern_thick_mode(
+                canvas,
+                top,
+                left,
+                bottom,
+                right,
+                ph,
+                pv,
+                state.pen_pat,
+                state.fg,
+                state.bg,
+                mode,
+            );
+        }
         return;
     }
-    // Edge: pixel inside region with at least one outside neighbour.
+    // Non-rectangular region: a boundary cell is a region-interior pixel
+    // with at least one 4-neighbour outside the region. Stamp the pen at
+    // each boundary cell (pen hangs below-and-right), honouring the pen
+    // pattern + mode.
     for y in rgn.bbox.top..rgn.bbox.bottom {
         for x in rgn.bbox.left..rgn.bbox.right {
             if !rgn.contains(x, y) {
@@ -1423,9 +1454,24 @@ fn paint_region_outline(canvas: &mut Canvas, state: &PictState, rgn: &Region) {
                 || !rgn.contains(x, y + 1)
                 || !rgn.contains(x - 1, y)
                 || !rgn.contains(x + 1, y);
-            if n_outside {
-                let (cx, cy) = to_canvas(state, x, y);
-                canvas.put(cx, cy, state.fg);
+            if !n_outside {
+                continue;
+            }
+            let (cx, cy) = to_canvas(state, x, y);
+            if let Some(pp) = &state.pen_pix_pat {
+                stamp_region_pen_cell_pix(canvas, cx, cy, ph, pv, pp);
+            } else {
+                stamp_region_pen_cell_mode(
+                    canvas,
+                    cx,
+                    cy,
+                    ph,
+                    pv,
+                    state.pen_pat,
+                    state.fg,
+                    state.bg,
+                    mode,
+                );
             }
         }
     }

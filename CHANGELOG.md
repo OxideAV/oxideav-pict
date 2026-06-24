@@ -38,6 +38,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three `parse_pict`-level tests in `synth_v2_round366` (paintRgn +
   hand-assembled ClipRgn + L-region through the full decoder).
 
+### Other
+
+- round 366: **`FrameRgn` (`$0080` / v1 `$80`) honours the current pen
+  size, pen pattern, and pen pattern mode.** Inside Macintosh: Imaging
+  With QuickDraw, "Framing Shapes" (book page 3-13): *"Using the …
+  FrameRgn procedure to frame a shape draws just its outline, using the
+  size, pattern, and pattern mode of the graphics pen."* The region
+  outline previously drew a fixed 1-pixel `fgColor` trace, ignoring
+  `PnSize` / `PnPat` / `PnMode` — the same gap round 333 closed for
+  `FramePoly`. `paint_region_outline` now resolves the pen exactly like
+  the rect / poly frame verbs: a rectangular (`rgnSize == 10`) region
+  routes its bbox frame through `frame_rect_pattern_thick_mode` /
+  `frame_rect_pix_pattern_thick`; a non-rectangular region stamps the pen
+  at each boundary cell (region-interior pixel with an outside
+  4-neighbour) through the new `stamp_region_pen_cell_mode` /
+  `stamp_region_pen_cell_pix` raster primitives, with the pen hanging
+  below and to the right of each point (book page 2-31). The default 1×1
+  solid-`fgColor` pen reproduces the prior 1-pixel outline bit-for-bit;
+  thicker pens, a `PnPat` / `PnPixPat`, or a non-`patCopy` `PnMode` now
+  apply to the region frame. Four new `parse_pict`-level tests in
+  `synth_v2_round366_framergn` (thin pen, thick pen below-and-right,
+  masked-region boundary-only outline, all-off pen pattern).
+
 ### Added
 
 - round 361: **`TxRatio` glyph scaling + `lineJustify` intercharacter

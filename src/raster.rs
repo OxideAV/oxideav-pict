@@ -1622,6 +1622,58 @@ pub fn plot_region_cell_mode(
     plot_pattern_pixel_mode(canvas, x, y, pat, fg, bg, mode);
 }
 
+/// Stamp the graphics pen at a single region-outline boundary point,
+/// honouring the pen size and pattern / pattern mode. Inside Macintosh:
+/// Imaging With QuickDraw, "Framing Shapes" (book page 3-13):
+/// *"Using the … FrameRgn procedure to frame a shape draws just its
+/// outline, using the size, pattern, and pattern mode of the graphics
+/// pen."* The pen hangs **below and to the right** of its point (book
+/// page 2-31 / 3-81): a `pen_h × pen_v` pen at `(x, y)` covers
+/// `[x, x + pen_h) × [y, y + pen_v)`. Each covered cell is plotted
+/// through the §3-44 pattern-mode logic, so a non-solid `PnPat` tiles
+/// the outline the same way the patterned rect / poly frames do.
+#[inline]
+pub fn stamp_region_pen_cell_mode(
+    canvas: &mut Canvas,
+    x: i32,
+    y: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    let ph = pen_h.max(1);
+    let pv = pen_v.max(1);
+    for dy in 0..pv {
+        for dx in 0..ph {
+            plot_pattern_pixel_mode(canvas, x + dx, y + dy, pat, fg, bg, mode);
+        }
+    }
+}
+
+/// Colour-pixmap (`PnPixPat`) variant of [`stamp_region_pen_cell_mode`]:
+/// each pen-brush pixel samples the [`PixPattern`] tile directly (book
+/// page 3-81 pen pattern). Same below-and-right pen-hang geometry.
+#[inline]
+pub fn stamp_region_pen_cell_pix(
+    canvas: &mut Canvas,
+    x: i32,
+    y: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pp: &PixPattern,
+) {
+    let ph = pen_h.max(1);
+    let pv = pen_v.max(1);
+    for dy in 0..pv {
+        for dx in 0..ph {
+            plot_pix_pattern(canvas, x + dx, y + dy, pp);
+        }
+    }
+}
+
 /// Same as [`plot_pattern_pixel`] but obeys a [`PatternMode`] —
 /// each cell may write `fg`, `bg`, the inverted destination, or
 /// leave the destination unchanged per Inside Macintosh §3-44.

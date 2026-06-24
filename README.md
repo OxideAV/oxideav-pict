@@ -21,7 +21,7 @@ returned as a `PictImage`.
 | Line / LineFrom / ShortLine | drawn via Bresenham |
 | Frame / Paint / Erase / Invert / Fill of Rect / RoundRect / Oval / Arc | rasterised via in-crate kernels |
 | Frame / Paint / Erase / Invert / Fill Poly | rasterised via even-odd scanline; `Frame` honours the pen size + pen pattern / mode (pen hangs below+right, §3 page 3-81) |
-| Frame / Paint / Erase / Invert / Fill Rgn | rasterised (bbox + per-row inversion mask) |
+| Frame / Paint / Erase / Invert / Fill Rgn | rasterised (bbox + per-row inversion mask); `Frame` honours the pen size + pen pattern / mode (book page 3-13, pen hangs below+right) |
 | `BkPat` / `PnPat` / `FillPat` | 8-byte monochrome patterns |
 | `BkPixPat` / `PnPixPat` / `FillPixPat` | colour pixel patterns (`patType=1` colour-pixmap, `patType=2` ditherPat) |
 | `BitsRect` / `BitsRgn` / `PackBitsRect` / `PackBitsRgn` | 1-bpp BitMap or indexed 1/2/4/8-bit PixMap → RGBA |
