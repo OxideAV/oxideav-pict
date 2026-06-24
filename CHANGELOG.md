@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- round 366: **`Region` scan-line inversion decoder no longer panics on a
+  run that reaches the bbox right border, and the decode is a single
+  correct forward pass.** A non-rectangular QuickDraw region (Inside
+  Macintosh: Imaging With QuickDraw §2, book page 2-15) closes a
+  horizontal run with an x-flip on the run's right edge; a run that
+  extends to the region's right border closes with a flip at
+  `bbox.right`, the most common region shape. `decode_inversion` sized
+  its column-flip accumulator at `width` and indexed it with the
+  bbox-local flip column, so a flip at `bbox.right` (local column
+  `width`) drove an out-of-bounds index and panicked the whole
+  `parse_pict` — and `PictBuilder::region` / `build_rgn_inverted_op`
+  emit exactly that (their validator accepts `x == bbox_right`), so the
+  encoder produced streams the decoder crashed on. The accumulator is
+  now `width + 1` wide. The decoder was also doing the work three times
+  over: an initial pass that stored raw flip sentinels (never the
+  running membership), a tail loop, then a second full pass that
+  overwrote everything with the correct running parity. It is now a
+  single forward pass — for each `[y][x…][0x7FFF]` record, emit rows
+  `[prev_y, y)` by integrating the edge parity left-to-right, then apply
+  the record's x-flips — with out-of-bbox coordinates, out-of-order `y`
+  records and a missing top-level terminator all tolerated. Region
+  membership feeds `ClipRgn`, the `frameRgn` / `paintRgn` / `eraseRgn` /
+  `invertRgn` / `fillRgn` verbs, and the `maskRgn` of `BitsRgn` /
+  `PackBitsRgn` / `DirectBitsRgn`, so every region-clipped blit and fill
+  shares the fix. Five new `region` unit tests (right-border run,
+  L-shape, truncated-x-list, sub-header rejection, empty-bbox) plus
+  three `parse_pict`-level tests in `synth_v2_round366` (paintRgn +
+  hand-assembled ClipRgn + L-region through the full decoder).
+
 ### Added
 
 - round 361: **`TxRatio` glyph scaling + `lineJustify` intercharacter

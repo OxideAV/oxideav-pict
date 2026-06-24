@@ -1,39 +1,53 @@
 //! QuickDraw `Region` decoder + clipping-mask materialiser.
 //!
-//! Inside Macintosh: Imaging With QuickDraw §2 ("QuickDraw Drawing")
-//! defines a `Region` as the set of pixels enclosed by a sequence of
-//! horizontal scan lines, encoded as inversion data:
+//! Inside Macintosh: Imaging With QuickDraw §2 ("About QuickDraw")
+//! documents the *fixed* part of a `Region` (book page 2-15):
 //!
 //! ```text
-//! struct Region {
-//!     u16  rgnSize;      // total bytes incl. this size word
-//!     i16  rgnBBox[4];   // top, left, bottom, right
-//!     // optional inversion data:
-//!     // sequence of:
-//!     //   i16 y;                  // scanline (bbox_top..bbox_bottom)
-//!     //   i16 x_pairs[..];        // ascending x flips
-//!     //   i16 0x7FFF              // line terminator
-//!     // sequence terminated by:  i16 0x7FFF
-//! }
+//! TYPE Region = RECORD
+//!     rgnSize: Integer;   {size in bytes, including this word}
+//!     rgnBBox: Rect;      {enclosing rectangle (top, left, bottom, right)}
+//!     {more data if region is not rectangular}
+//! END;
 //! ```
 //!
-//! When `rgnSize == 10` the region is just the bounding rectangle —
-//! no inversion data. When `rgnSize > 10`, the inversion data
-//! describes per-row pixel runs by emitting a list of x-flip points
-//! per scanline; each pair (x0, x1) toggles the region membership of
-//! columns `[x0, x1)` for that row and (carrying forward) every
-//! subsequent row, until another pair on a later row toggles them
-//! back.
+//! The book states (book page 2-15): *"For rectangular regions (or empty
+//! regions), the `rgnSize` field contains 10. The data for more complex
+//! regions is stored in a proprietary format."* So a `rgnSize == 10`
+//! region is exactly its bounding rectangle and carries no further data —
+//! that case is fully spec-determined.
 //!
-//! The round-2 implementation here handles the rectangular case
-//! (the common shape — a single-rectangle region collapses to
-//! `rgnSize = 10` with `bbox` and no inversion data) plus the basic
-//! per-row inversion-pairs case per the §A-3 `Rgn` data-type
-//! description (Table A-1).
+//! The variable-length tail for a non-rectangular region is the classic
+//! QuickDraw scan-line **inversion encoding**: a sequence of per-row
+//! records, each `[y][x0][x1]…[xN][0x7FFF]`, with the whole sequence
+//! terminated by a top-level `[0x7FFF]`. Each `x` in a record toggles a
+//! vertical region edge at column `x`, in effect for that scan line and
+//! every later scan line until another record at a lower `y` toggles it
+//! back. A scan line's membership is recovered by integrating the edge
+//! toggles left-to-right (running parity): an odd number of edges to the
+//! left of column `c` means `c` is inside the region.
+//!
+//! ## Decoder contract
+//!
+//! * `rgnSize == 10` → `mask == None`; the whole bbox is the region.
+//! * `rgnSize > 10` → the inversion tail is decoded into a row-major
+//!   boolean coverage mask in a single forward pass.
+//! * Edge `x` coordinates run over `[bbox.left ..= bbox.right]`
+//!   **inclusive** — the closing edge of a run that reaches the right
+//!   border lands exactly on `bbox.right`, so the edge accumulator spans
+//!   `width + 1` columns. (An earlier revision sized it at `width` and
+//!   panicked on that extremely common case.)
+//! * Coordinates outside the bbox, out-of-order `y` records, and a
+//!   missing top-level terminator are all tolerated: anything below the
+//!   last record carries the running edge parity down to `bbox.bottom`
+//!   (well-formed regions cancel all edges by then and leave it empty).
 
 use crate::error::{PictError, Result};
 use crate::reader::Reader;
 use crate::state::RectI32;
+
+/// QuickDraw's scan-line / x-list terminator sentinel.
+const RGN_END: i16 = 0x7FFF;
 
 /// A QuickDraw region: bbox plus an optional per-row coverage mask
 /// (`true` = inside region, `false` = outside).
@@ -99,140 +113,91 @@ pub fn parse_region(r: &mut Reader<'_>) -> Result<Region> {
     })
 }
 
-/// Decode the inversion-pairs payload into a row-major boolean mask
-/// of size `(bbox.h) × (bbox.w)`.
+/// Decode the scan-line inversion tail into a row-major boolean coverage
+/// mask of size `(bbox.h) × (bbox.w)`.
+///
+/// Single forward pass over the records. `edge[c]` is the running parity
+/// of vertical region edges at bbox-local column `c` (`0 ..= w`); a row's
+/// membership at column `x` is the parity of the edges in `0..=x`, i.e. a
+/// left-to-right XOR scan. `edge` is `w + 1` wide because a run that ends
+/// on the right border toggles an edge at `bbox.right` (local column `w`).
 fn decode_inversion(payload: &[u8], bbox: &RectI32) -> Result<Vec<bool>> {
     let w = (bbox.right - bbox.left).max(0) as usize;
     let h = (bbox.bottom - bbox.top).max(0) as usize;
     if w == 0 || h == 0 {
         return Ok(Vec::new());
     }
-    // Per-column "currently inverted" parity, carried forward across
-    // scanlines. Apple's region encoding works as follows:
-    //
-    //   Flip(y, x): toggle a sentinel column-flip at (y, x). After
-    //   processing all flips for a row, the membership of column x
-    //   on row y' >= y is `flipped_count(x) modulo 2`. The decoder
-    //   walks rows in ascending order, applying flips as it goes.
-    let mut col_flips = vec![false; w];
+
+    // edge[c] toggles when a vertical region boundary crosses local
+    // column c; sized w + 1 so a closing flip at bbox.right is in range.
+    let mut edge = vec![false; w + 1];
     let mut mask = vec![false; w * h];
-    let mut last_y: i32 = bbox.top;
+    // The first record's rows start at the bbox top; everything above the
+    // first y stays outside (no edges yet, which the integration below
+    // produces anyway).
+    let mut prev_y: i32 = bbox.top;
     let mut i = 0usize;
 
-    // Walk inversion records: y, then a sequence of i16 x values
-    // (ascending) terminated by 0x7FFF. The whole data block is also
-    // terminated by 0x7FFF for the y field.
-    while i + 2 <= payload.len() {
-        let y = i16::from_be_bytes([payload[i], payload[i + 1]]) as i32;
-        i += 2;
-        if y == 0x7FFF {
-            break;
-        }
-        // Every row in [last_y, y) has the same membership as the
-        // previous parity state. Materialise.
-        for fill_y in last_y..y {
-            let row = (fill_y - bbox.top) as usize;
-            if row < h {
-                for x in 0..w {
-                    mask[row * w + x] = col_flips[x];
+    // Materialise rows [from, to) into `mask` using the current `edge`
+    // parity. `to` is clamped to the bbox so an out-of-range y can't write
+    // past the buffer.
+    let emit_rows = |mask: &mut [bool], edge: &[bool], from: i32, to: i32| {
+        let from = from.max(bbox.top);
+        let to = to.min(bbox.bottom);
+        for fy in from..to {
+            let row = (fy - bbox.top) as usize;
+            let base = row * w;
+            let mut inside = false;
+            for x in 0..w {
+                // The edge at local column x flips membership *before*
+                // column x is plotted (an edge sits on the left border of
+                // the column it turns on).
+                if edge[x] {
+                    inside = !inside;
                 }
+                mask[base + x] = inside;
             }
         }
-        last_y = y;
-        // Read x pairs until we see 0x7FFF.
+    };
+
+    while i + 2 <= payload.len() {
+        let y = i16::from_be_bytes([payload[i], payload[i + 1]]);
+        i += 2;
+        if y == RGN_END {
+            break;
+        }
+        let y = y as i32;
+        // Rows from the previous record's y up to (but not including)
+        // this one share the previous edge parity.
+        emit_rows(&mut mask, &edge, prev_y, y);
+        prev_y = y;
+
+        // Apply this record's x flips to the edge accumulator.
         loop {
             if i + 2 > payload.len() {
                 return Err(PictError::invalid(
                     "region inversion data truncated mid-x-list",
                 ));
             }
-            let x = i16::from_be_bytes([payload[i], payload[i + 1]]) as i32;
+            let x = i16::from_be_bytes([payload[i], payload[i + 1]]);
             i += 2;
-            if x == 0x7FFF {
+            if x == RGN_END {
                 break;
             }
-            // Toggle column parity from (x - bbox.left) to "wherever
-            // the next x is" — but Apple's format pairs them up
-            // explicitly: toggles come in (x_in, x_out) pairs per
-            // row segment. Easier: just toggle this column.
-            let col = (x - bbox.left).clamp(0, w as i32) as usize;
-            col_flips[col] = !col_flips[col];
+            // Clamp to the bbox-local edge range [0, w]; coordinates
+            // outside the declared bbox are a malformed-but-survivable
+            // input rather than a panic.
+            let col = (x as i32 - bbox.left).clamp(0, w as i32) as usize;
+            edge[col] = !edge[col];
         }
     }
 
-    // Tail rows after the final y record carry forward the last
-    // parity state down to bbox.bottom.
-    for fill_y in last_y..bbox.bottom {
-        let row = (fill_y - bbox.top) as usize;
-        if row < h {
-            // Compute the membership for this row by integrating col
-            // flips from left to right.
-            let mut inside = false;
-            for (x, item) in col_flips.iter().enumerate().take(w) {
-                if *item {
-                    inside = !inside;
-                }
-                mask[row * w + x] = inside;
-            }
-        }
-    }
-
-    // Re-walk the materialised mask above to convert "flip at column
-    // c" into running parity. The previous loop captured parity, but
-    // for the [last_y, bbox.bottom) tail we actually want running
-    // membership instead. Rework the [bbox.top, last_y) rows the
-    // same way.
-    let mut col_flips_running = vec![false; w];
-    let mut last_y2: i32 = bbox.top;
-    let mut j = 0usize;
-    while j + 2 <= payload.len() {
-        let y = i16::from_be_bytes([payload[j], payload[j + 1]]) as i32;
-        j += 2;
-        if y == 0x7FFF {
-            break;
-        }
-        // Materialise rows [last_y2, y) using running parity.
-        for fill_y in last_y2..y {
-            let row = (fill_y - bbox.top) as usize;
-            if row < h {
-                let mut inside = false;
-                for (x, item) in col_flips_running.iter().enumerate().take(w) {
-                    if *item {
-                        inside = !inside;
-                    }
-                    mask[row * w + x] = inside;
-                }
-            }
-        }
-        last_y2 = y;
-        loop {
-            if j + 2 > payload.len() {
-                return Err(PictError::invalid(
-                    "region inversion data truncated mid-x-list (pass 2)",
-                ));
-            }
-            let x = i16::from_be_bytes([payload[j], payload[j + 1]]) as i32;
-            j += 2;
-            if x == 0x7FFF {
-                break;
-            }
-            let col = (x - bbox.left).clamp(0, w as i32) as usize;
-            col_flips_running[col] = !col_flips_running[col];
-        }
-    }
-    // Tail rows after the final record.
-    for fill_y in last_y2..bbox.bottom {
-        let row = (fill_y - bbox.top) as usize;
-        if row < h {
-            let mut inside = false;
-            for (x, item) in col_flips_running.iter().enumerate().take(w) {
-                if *item {
-                    inside = !inside;
-                }
-                mask[row * w + x] = inside;
-            }
-        }
-    }
+    // Rows below the final record carry the running parity to the bbox
+    // bottom. For a well-formed region every edge has cancelled by now, so
+    // these rows come out empty; materialising them anyway keeps a
+    // truncated / malformed tail from leaving stale `false`s that happen
+    // to be correct only by luck.
+    emit_rows(&mut mask, &edge, prev_y, bbox.bottom);
 
     Ok(mask)
 }
@@ -267,17 +232,16 @@ mod tests {
 
     #[test]
     fn non_rectangular_region_simple() {
-        // 4x4 region with a single inversion record:
-        //   y=1, x_pairs = [1, 3, 0x7FFF], then 0x7FFF terminator.
-        // Rows 0 stay outside (no flips yet). Rows 1..4 cover [1,3).
+        // 4x4 region. Record y=1 opens a run [1,3); a later record y=4
+        // closes it (edges at 1 and 3 toggled back). Rows 1..4 cover
+        // columns 1,2.
         let bytes = [
-            0x00, 0x14, // rgnSize = 20 (header + payload)
+            0x00, 0x1A, // rgnSize = 26 (header + payload)
             0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x04, // bbox
-            // Inversion data:
-            0x00, 0x01, // y = 1
-            0x00, 0x01, // x = 1
-            0x00, 0x03, // x = 3
-            0x7F, 0xFF, // end of x list for y=1
+            // Record: y = 1, x = 1, x = 3
+            0x00, 0x01, 0x00, 0x01, 0x00, 0x03, 0x7F, 0xFF,
+            // Record: y = 4, x = 1, x = 3 (close the run)
+            0x00, 0x04, 0x00, 0x01, 0x00, 0x03, 0x7F, 0xFF, //
             0x7F, 0xFF, // end of region
         ];
         let r = rgn_from_bytes(&bytes);
@@ -286,13 +250,98 @@ mod tests {
         for x in 0..4 {
             assert!(!r.contains(x, 0), "row 0 col {x} should be outside");
         }
-        // Row 1: cols 1, 2 inside.
-        assert!(!r.contains(0, 1));
-        assert!(r.contains(1, 1));
-        assert!(r.contains(2, 1));
-        assert!(!r.contains(3, 1));
-        // Row 3: same as row 1 (carry forward).
-        assert!(r.contains(1, 3));
-        assert!(r.contains(2, 3));
+        // Rows 1..4: cols 1, 2 inside.
+        for y in 1..4 {
+            assert!(!r.contains(0, y));
+            assert!(r.contains(1, y), "row {y} col 1");
+            assert!(r.contains(2, y), "row {y} col 2");
+            assert!(!r.contains(3, y));
+        }
+    }
+
+    #[test]
+    fn run_reaching_right_border_does_not_panic() {
+        // 4x4 region whose run extends to the right border: y=0 opens
+        // a run [2, 4) — the closing edge lands exactly on bbox.right
+        // (local column w == 4). Earlier revisions panicked here.
+        let bytes = [
+            0x00, 0x1A, // rgnSize = 26
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x04, // bbox 0,0,4,4
+            // y = 0: edges at x=2 and x=4 (== right border)
+            0x00, 0x00, 0x00, 0x02, 0x00, 0x04, 0x7F, 0xFF, // y = 4: close
+            0x00, 0x04, 0x00, 0x02, 0x00, 0x04, 0x7F, 0xFF, //
+            0x7F, 0xFF,
+        ];
+        let r = rgn_from_bytes(&bytes);
+        for y in 0..4 {
+            assert!(!r.contains(0, y));
+            assert!(!r.contains(1, y));
+            assert!(r.contains(2, y), "row {y} col 2 inside");
+            assert!(r.contains(3, y), "row {y} col 3 inside");
+        }
+    }
+
+    #[test]
+    fn l_shaped_region_two_segments() {
+        // 4-tall, 4-wide L: rows 0..2 cover cols [0,4); rows 2..4 cover
+        // cols [0,2). Encoded as:
+        //   y=0: x=0, x=4        (open full width)
+        //   y=2: x=2, x=4        (close cols [2,4) — leaves [0,2))
+        //   y=4: x=0, x=2        (close the stem)
+        let bytes = [
+            0x00, 0x22, // rgnSize = 34
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x04, // bbox 0,0,4,4
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x7F, 0xFF, // y=0 [0,4)
+            0x00, 0x02, 0x00, 0x02, 0x00, 0x04, 0x7F, 0xFF, // y=2 close [2,4)
+            0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x7F, 0xFF, // y=4 close [0,2)
+            0x7F, 0xFF,
+        ];
+        let r = rgn_from_bytes(&bytes);
+        // Rows 0,1: full width.
+        for y in 0..2 {
+            for x in 0..4 {
+                assert!(r.contains(x, y), "row {y} col {x} should be inside");
+            }
+        }
+        // Rows 2,3: only cols 0,1.
+        for y in 2..4 {
+            assert!(r.contains(0, y), "row {y} col 0");
+            assert!(r.contains(1, y), "row {y} col 1");
+            assert!(!r.contains(2, y), "row {y} col 2 should be outside");
+            assert!(!r.contains(3, y), "row {y} col 3 should be outside");
+        }
+    }
+
+    #[test]
+    fn truncated_x_list_is_error() {
+        // A record opens but the x-list runs off the end with no 0x7FFF.
+        let bytes = [
+            0x00, 0x10, // rgnSize = 16
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x04, // bbox
+            0x00, 0x01, 0x00, 0x01, // y=1, x=1, then EOF (no terminator)
+        ];
+        let mut r = Reader::new(&bytes);
+        assert!(parse_region(&mut r).is_err());
+    }
+
+    #[test]
+    fn region_smaller_than_header_rejected() {
+        let bytes = [0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04];
+        let mut r = Reader::new(&bytes);
+        assert!(parse_region(&mut r).is_err());
+    }
+
+    #[test]
+    fn empty_bbox_region_has_empty_mask() {
+        // Degenerate bbox (zero width) with a payload: mask is empty,
+        // contains() is always false.
+        let bytes = [
+            0x00, 0x0E, // rgnSize = 14
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, // bbox 0,0,4,0 (w=0)
+            0x7F, 0xFF, 0x7F, 0xFF, // payload: just terminators
+        ];
+        let r = rgn_from_bytes(&bytes);
+        assert!(r.mask.is_some());
+        assert!(!r.contains(0, 0));
     }
 }
