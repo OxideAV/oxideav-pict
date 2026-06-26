@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- round 372: **Indexed PixMap `ColorTable` is now resolved by each
+  `ColorSpec`'s `value` field (the pixel index it maps to), not by the
+  entry's position in the `ctTable` array.** Inside Macintosh: Imaging
+  With QuickDraw §4 ("Color QuickDraw Reference", book page 4-55): each
+  `ColorSpec` carries *"the pixel value assigned … for the color
+  specified in the rgb field"*, and for indexed devices *"the pixel
+  value is an index number."* A pixel index in the PixData selects the
+  `ColorSpec` whose `value` equals that index. The decoder previously
+  mapped purely by array position, so an indexed image whose colour
+  table lists its entries in non-sequential `value` order (legal per §4)
+  was mis-coloured. The shared `read_color_table_value_keyed` helper
+  (used by `BitsRect` / `BitsRgn` / `PackBitsRect` / `PackBitsRgn`
+  indexed PixMaps) now builds a 256-entry value-keyed palette; an index
+  with no matching `ColorSpec` resolves to black (the §4 empty-`ctTable`
+  fallback). Real PICTs store sequential `value` tables, for which
+  value-keying is identical to position-keying — every existing indexed
+  round-trip test is unaffected. Two new `parse_pict`-level tests in
+  `synth_v2_round372_colortable` (reverse-ordered table resolves by
+  value; sparse table → unmatched index is black).
+
 ### Other
 
 - round 372: **The `Line` family (`$0020` `Line` / `$0021` `LineFrom` /

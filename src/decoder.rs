@@ -2110,32 +2110,11 @@ fn decode_indexed_pixmap_payload(
     let _pm_table = r.read_u32()?;
     let _pm_reserved = r.read_u32()?;
 
-    // ColorTable. ctSize is the count minus 1 per §4 ("The ColorTable
-    // Record" — *"the number of entries in the ctTable array minus
-    // one"*).
-    let _ct_seed = r.read_u32()?;
-    let _ct_flags = r.read_i16()?;
-    let ct_size = r.read_i16()?;
-    if !(0..=255).contains(&ct_size) {
-        return Err(PictError::invalid(format!(
-            "indexed PixMap ColorTable ctSize out of range: {ct_size}"
-        )));
-    }
-    let n_entries = (ct_size as usize) + 1;
-    let mut palette: Vec<Rgba> = Vec::with_capacity(n_entries);
-    for _ in 0..n_entries {
-        // ColorSpec = value(2) + RGB(6). The `value` field is the
-        // colour-table entry's index when `ctFlags` bit 15 (the
-        // device-independent flag) is clear; QuickDraw real-world PICTs
-        // tend to leave it at the sequential entry number. We map by
-        // position (entry 0 → palette[0], entry 1 → palette[1], …) so
-        // the embedded `value` is read-only here.
-        let _value = r.read_u16()?;
-        let r16 = r.read_u16()?;
-        let g16 = r.read_u16()?;
-        let b16 = r.read_u16()?;
-        palette.push(Rgba::from_rgb16(r16, g16, b16));
-    }
+    // ColorTable (ctSeed + ctFlags + ctSize + ColorSpec[]). Each
+    // ColorSpec carries the pixel value (index) it maps to, so the
+    // palette is keyed by that value, not by array position — see
+    // `read_color_table_value_keyed`.
+    let palette = read_color_table_value_keyed(r, "indexed PixMap")?;
 
     let src_rect = r.read_rect()?;
     let dst_rect = r.read_rect()?;
@@ -2182,6 +2161,54 @@ fn decode_indexed_pixmap_payload(
         RectI32::from_be(dst_rect.0, dst_rect.1, dst_rect.2, dst_rect.3),
         rgn,
     ))
+}
+
+/// Read a `ColorTable` record (already past the PixMap header) and
+/// return a **value-keyed** palette: a 256-entry `Vec<Rgba>` where slot
+/// `i` holds the RGB of the `ColorSpec` whose `value` field equals `i`.
+///
+/// Inside Macintosh: Imaging With QuickDraw §4 ("Color QuickDraw
+/// Reference", book page 4-55): each `ColorSpec` carries *"the pixel
+/// value assigned … for the color specified in the rgb field"*, and for
+/// indexed devices *"the pixel value is an index number."* The pixel
+/// index in the PixData therefore selects the ColorSpec **whose `value`
+/// equals that index**, not the N-th array slot. Real PICT colour tables
+/// usually store entries in sequential `value` order (0, 1, 2, …), in
+/// which case value-keying is identical to position-keying — but a table
+/// with a non-sequential `value` field (legal per §4) is now mapped
+/// correctly instead of being mis-coloured by position.
+///
+/// The table is sized to 256 (the maximum index an 8-bpp indexed PixMap
+/// can reference) and BLACK-filled, so an index with no matching
+/// `value` resolves to black — the documented QuickDraw fallback for an
+/// empty `ctTable` slot. A `value` outside `0..=255` is ignored (it can
+/// never be referenced by a ≤8-bpp PixData index).
+///
+/// `ct_seed` / `ct_flags` are consumed but not otherwise used: the
+/// `ctFlags` high bit distinguishes a pixel-map table (0) from a
+/// device table (1) but does not change how a PICT-embedded indexed
+/// PixMap resolves its colours.
+fn read_color_table_value_keyed(r: &mut Reader<'_>, context: &str) -> Result<Vec<Rgba>> {
+    let _ct_seed = r.read_u32()?;
+    let _ct_flags = r.read_i16()?;
+    let ct_size = r.read_i16()?;
+    if !(0..=255).contains(&ct_size) {
+        return Err(PictError::invalid(format!(
+            "{context} ColorTable ctSize out of range: {ct_size}"
+        )));
+    }
+    let n_entries = (ct_size as usize) + 1;
+    let mut palette = vec![Rgba::BLACK; 256];
+    for _ in 0..n_entries {
+        let value = r.read_u16()?;
+        let r16 = r.read_u16()?;
+        let g16 = r.read_u16()?;
+        let b16 = r.read_u16()?;
+        if (value as usize) < palette.len() {
+            palette[value as usize] = Rgba::from_rgb16(r16, g16, b16);
+        }
+    }
+    Ok(palette)
 }
 
 /// Resolve an indexed PixData buffer into a `width × height` RGBA
