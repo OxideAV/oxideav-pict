@@ -984,19 +984,6 @@ fn pattern_mode(state: &PictState) -> PatternMode {
     )
 }
 
-/// Apply a `frame|paint|erase|invert|fill Rect` opcode (`opcode` ∈
-/// `0x30..=0x34`) to the canvas. Inside Macintosh §2 / §A-3 ties each
-/// verb to a distinct pattern slot:
-///
-/// * `frame` / `paint` use the **pen pattern** (`PnPat` / `PnPixPat`).
-/// * `erase` uses the **background pattern** (`BkPat` / `BkPixPat`),
-///   inverted for the monochrome path — on-bits select the background
-///   colour, off-bits select the foreground.
-/// * `fill` uses the **fill pattern** (`FillPat` / `FillPixPat`).
-/// * `invert` ignores patterns entirely.
-///
-/// When a colour `*_pix_pat` is set, every cell renders the resolved
-/// per-cell RGBA directly from the 8×8 grid (fg/bg are ignored).
 /// Draw a line honouring the current pen size, pen pattern (mono or
 /// colour pixmap), and pen pattern mode. Inside Macintosh: Imaging With
 /// QuickDraw §3 "QuickDraw Drawing Reference" (book page 3-81): the
@@ -1027,6 +1014,19 @@ fn draw_line_pen(canvas: &mut Canvas, state: &PictState, x0: i32, y0: i32, x1: i
     }
 }
 
+/// Apply a `frame|paint|erase|invert|fill Rect` opcode (`opcode` ∈
+/// `0x30..=0x34`) to the canvas. Inside Macintosh §2 / §A-3 ties each
+/// verb to a distinct pattern slot:
+///
+/// * `frame` / `paint` use the **pen pattern** (`PnPat` / `PnPixPat`).
+/// * `erase` uses the **background pattern** (`BkPat` / `BkPixPat`),
+///   inverted for the monochrome path — on-bits select the background
+///   colour, off-bits select the foreground.
+/// * `fill` uses the **fill pattern** (`FillPat` / `FillPixPat`).
+/// * `invert` ignores patterns entirely.
+///
+/// When a colour `*_pix_pat` is set, every cell renders the resolved
+/// per-cell RGBA directly from the 8×8 grid (fg/bg are ignored).
 fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
     let (ph, pv) = state.pen_size;
