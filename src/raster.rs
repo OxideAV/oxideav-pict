@@ -480,40 +480,8 @@ pub fn frame_round_rect(
     oval_h: i32,
     c: Rgba,
 ) {
-    if right <= left || bottom <= top {
-        return;
-    }
-    let ow = oval_w.max(0).min(right - left);
-    let oh = oval_h.max(0).min(bottom - top);
-    let rx = ow / 2;
-    let ry = oh / 2;
-    // Edges between corners.
-    canvas.span(top, left + rx, right - rx, c);
-    canvas.span(bottom - 1, left + rx, right - rx, c);
-    for y in (top + ry)..(bottom - ry) {
-        canvas.put(left, y, c);
-        canvas.put(right - 1, y, c);
-    }
-    // Four corner ellipses, drawn in their bounding boxes.
-    walk_ellipse(top, left, top + oh, left + ow, |x, y| {
-        if x < left + rx && y < top + ry {
-            canvas.put(x, y, c);
-        }
-    });
-    walk_ellipse(top, right - ow, top + oh, right, |x, y| {
-        if x >= right - rx && y < top + ry {
-            canvas.put(x, y, c);
-        }
-    });
-    walk_ellipse(bottom - oh, left, bottom, left + ow, |x, y| {
-        if x < left + rx && y >= bottom - ry {
-            canvas.put(x, y, c);
-        }
-    });
-    walk_ellipse(bottom - oh, right - ow, bottom, right, |x, y| {
-        if x >= right - rx && y >= bottom - ry {
-            canvas.put(x, y, c);
-        }
+    walk_round_rect_outline(top, left, bottom, right, oval_w, oval_h, |x, y| {
+        canvas.put(x, y, c);
     });
 }
 
@@ -791,6 +759,24 @@ pub fn frame_arc(
     arc_deg: i32,
     c: Rgba,
 ) {
+    walk_arc_outline(top, left, bottom, right, start_deg, arc_deg, |x, y| {
+        canvas.put(x, y, c);
+    });
+}
+
+/// Walk every boundary pixel of an arc outline (the bounding ellipse's
+/// boundary swept from `start_deg` clockwise by `arc_deg`), invoking `f`
+/// once per pixel. Shared by the solid, pattern-mode, and colour-pixmap
+/// arc frame verbs so they trace one boundary definition.
+fn walk_arc_outline<F: FnMut(i32, i32)>(
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    start_deg: i32,
+    arc_deg: i32,
+    mut f: F,
+) {
     if right <= left || bottom <= top {
         return;
     }
@@ -814,8 +800,53 @@ pub fn frame_arc(
         let my = -qd_rad.cos();
         let x = (cx + a * mx).round() as i32;
         let y = (cy + b * my).round() as i32;
-        canvas.put(x, y, c);
+        f(x, y);
     }
+}
+
+/// Pen-pattern + pattern-mode aware arc frame (Inside Macintosh: Imaging
+/// With QuickDraw, "Framing Shapes", book page 3-13 — FrameArc draws its
+/// outline "using the size, pattern, and pattern mode of the graphics
+/// pen"). Stamps a `pen_h × pen_v` pattern brush at every arc boundary
+/// pixel.
+#[allow(clippy::too_many_arguments)]
+pub fn frame_arc_pattern_thick_mode(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    start_deg: i32,
+    arc_deg: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    walk_arc_outline(top, left, bottom, right, start_deg, arc_deg, |x, y| {
+        stamp_pen_pattern_mode(canvas, x, y, pen_h, pen_v, pat, fg, bg, mode);
+    });
+}
+
+/// Colour-pixmap pen-pattern arc frame (book page 3-13).
+#[allow(clippy::too_many_arguments)]
+pub fn frame_arc_pix_pattern_thick(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    start_deg: i32,
+    arc_deg: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pp: &PixPattern,
+) {
+    walk_arc_outline(top, left, bottom, right, start_deg, arc_deg, |x, y| {
+        stamp_pen_pix_pattern(canvas, x, y, pen_h, pen_v, pp);
+    });
 }
 
 /// Filled wedge of the bounding ellipse (paint slice).
@@ -999,6 +1030,189 @@ pub fn frame_oval_thick(
     }
     walk_ellipse(top, left, bottom, right, |x, y| {
         stamp_pen(canvas, x, y, pen_h, pen_v, c);
+    });
+}
+
+/// Stamp a `pen_h × pen_v` pattern-mode brush at `(x, y)` — the
+/// boundary primitive shared by the patterned oval / round-rect / arc
+/// frame verbs. Each brush pixel routes through the §3-44 pattern-mode
+/// cell logic so a non-`patCopy` `PnMode` or a non-solid `PnPat` tiles
+/// the same way the rectangle / polygon / region frames do.
+#[inline]
+fn stamp_pen_pattern_mode(
+    canvas: &mut Canvas,
+    x: i32,
+    y: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    let ph = pen_h.max(1);
+    let pv = pen_v.max(1);
+    for dy in 0..pv {
+        for dx in 0..ph {
+            plot_pattern_pixel_mode(canvas, x + dx, y + dy, pat, fg, bg, mode);
+        }
+    }
+}
+
+/// Colour-pixmap counterpart of [`stamp_pen_pattern_mode`]: each brush
+/// pixel samples the [`PixPattern`] tile directly.
+#[inline]
+fn stamp_pen_pix_pattern(
+    canvas: &mut Canvas,
+    x: i32,
+    y: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pp: &PixPattern,
+) {
+    let ph = pen_h.max(1);
+    let pv = pen_v.max(1);
+    for dy in 0..pv {
+        for dx in 0..ph {
+            plot_pix_pattern(canvas, x + dx, y + dy, pp);
+        }
+    }
+}
+
+/// Pen-pattern + pattern-mode aware oval frame (Inside Macintosh:
+/// Imaging With QuickDraw, "Framing Shapes", book page 3-13: *"Using the
+/// FrameRect, FrameOval, FrameRoundRect, FrameArc, FramePoly, or
+/// FrameRgn procedure to frame a shape draws just its outline, using the
+/// size, pattern, and pattern mode of the graphics pen."*). The ellipse
+/// boundary is walked once and a `pen_h × pen_v` pattern brush stamped
+/// at every boundary pixel.
+pub fn frame_oval_pattern_thick_mode(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    walk_ellipse(top, left, bottom, right, |x, y| {
+        stamp_pen_pattern_mode(canvas, x, y, pen_h, pen_v, pat, fg, bg, mode);
+    });
+}
+
+/// Colour-pixmap pen-pattern oval frame (book page 3-13 pen pattern).
+pub fn frame_oval_pix_pattern_thick(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pp: &PixPattern,
+) {
+    walk_ellipse(top, left, bottom, right, |x, y| {
+        stamp_pen_pix_pattern(canvas, x, y, pen_h, pen_v, pp);
+    });
+}
+
+/// Pen-pattern + pattern-mode aware round-rectangle frame (book page
+/// 3-13 "Framing Shapes"). The straight edges and the four corner
+/// quarter-ellipses are walked exactly as [`frame_round_rect`] walks
+/// them, but each boundary pixel is stamped with the `pen_h × pen_v`
+/// pattern brush instead of a single solid colour.
+#[allow(clippy::too_many_arguments)]
+pub fn frame_round_rect_pattern_thick_mode(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    oval_w: i32,
+    oval_h: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    walk_round_rect_outline(top, left, bottom, right, oval_w, oval_h, |x, y| {
+        stamp_pen_pattern_mode(canvas, x, y, pen_h, pen_v, pat, fg, bg, mode);
+    });
+}
+
+/// Colour-pixmap pen-pattern round-rectangle frame (book page 3-13).
+#[allow(clippy::too_many_arguments)]
+pub fn frame_round_rect_pix_pattern_thick(
+    canvas: &mut Canvas,
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    oval_w: i32,
+    oval_h: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pp: &PixPattern,
+) {
+    walk_round_rect_outline(top, left, bottom, right, oval_w, oval_h, |x, y| {
+        stamp_pen_pix_pattern(canvas, x, y, pen_h, pen_v, pp);
+    });
+}
+
+/// Walk every boundary pixel of a round-rectangle outline, invoking `f`
+/// once per pixel. Geometry mirrors [`frame_round_rect`] (top / bottom
+/// straight spans, left / right straight columns, four corner
+/// quarter-ellipses), factored out so the solid, pattern-mode, and
+/// colour-pixmap frame verbs share one boundary definition.
+fn walk_round_rect_outline<F: FnMut(i32, i32)>(
+    top: i32,
+    left: i32,
+    bottom: i32,
+    right: i32,
+    oval_w: i32,
+    oval_h: i32,
+    mut f: F,
+) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    let ow = oval_w.max(0).min(right - left);
+    let oh = oval_h.max(0).min(bottom - top);
+    let rx = ow / 2;
+    let ry = oh / 2;
+    for x in (left + rx)..(right - rx) {
+        f(x, top);
+        f(x, bottom - 1);
+    }
+    for y in (top + ry)..(bottom - ry) {
+        f(left, y);
+        f(right - 1, y);
+    }
+    walk_ellipse(top, left, top + oh, left + ow, |x, y| {
+        if x < left + rx && y < top + ry {
+            f(x, y);
+        }
+    });
+    walk_ellipse(top, right - ow, top + oh, right, |x, y| {
+        if x >= right - rx && y < top + ry {
+            f(x, y);
+        }
+    });
+    walk_ellipse(bottom - oh, left, bottom, left + ow, |x, y| {
+        if x < left + rx && y >= bottom - ry {
+            f(x, y);
+        }
+    });
+    walk_ellipse(bottom - oh, right - ow, bottom, right, |x, y| {
+        if x >= right - rx && y >= bottom - ry {
+            f(x, y);
+        }
     });
 }
 
@@ -2786,5 +3000,137 @@ mod tests {
         c.blit(&src, 4, 2, 0, 0, 2, 4);
         assert_eq!(at(&c, 0, 0), [10, 20, 30, 255]);
         assert_eq!(at(&c, 3, 1), [14, 15, 16, 255]);
+    }
+
+    // ---- round 372: pen-pattern / pattern-mode aware shape frames ----
+
+    // A vertical-stripe 8×8 pattern: even columns foreground, odd columns
+    // background. `sample(x, _)` is true iff `x` is even.
+    fn vstripe() -> Pattern {
+        Pattern([0xAA; 8])
+    }
+
+    #[test]
+    fn frame_round_rect_solid_matches_walker() {
+        // The refactored solid frame_round_rect must trace exactly the
+        // boundary the shared walker produces.
+        let mut a = Canvas::new(12, 12, white());
+        let mut b = Canvas::new(12, 12, white());
+        frame_round_rect(&mut a, 1, 1, 11, 11, 4, 4, black());
+        walk_round_rect_outline(1, 1, 11, 11, 4, 4, |x, y| b.put(x, y, black()));
+        assert_eq!(a.data, b.data, "solid round-rect frame == walker trace");
+    }
+
+    #[test]
+    fn frame_round_rect_pattern_tiles_pen_pattern() {
+        // A vertical-stripe pen pattern frames the round-rect with
+        // foreground only on even columns; odd columns stay paper.
+        let mut c = Canvas::new(12, 12, white());
+        frame_round_rect_pattern_thick_mode(
+            &mut c,
+            1,
+            1,
+            11,
+            11,
+            4,
+            4,
+            1,
+            1,
+            vstripe(),
+            black(),
+            white(),
+            PatternMode::PatCopy,
+        );
+        // Top straight edge runs across y == 1 between the corners; an
+        // even-x boundary cell is inked, the adjacent odd-x cell is paper.
+        assert_eq!(at(&c, 4, 1), [0, 0, 0, 255]);
+        assert_eq!(at(&c, 5, 1), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn frame_oval_pattern_thick_widens_outline() {
+        // A 3×3 solid pen widens the oval outline: stamping at a top
+        // boundary cell fills a 3×3 block.
+        let mut c = Canvas::new(16, 16, white());
+        frame_oval_pattern_thick_mode(
+            &mut c,
+            2,
+            2,
+            14,
+            14,
+            3,
+            3,
+            Pattern::BLACK,
+            black(),
+            white(),
+            PatternMode::PatCopy,
+        );
+        // The top of the ellipse is around (7, 2): with a 3×3 pen at least
+        // one ink pixel must appear in the band y∈{2,3,4} near the apex.
+        let mut inked = 0;
+        for y in 2..5 {
+            for x in 6..9 {
+                if at(&c, x, y) == [0, 0, 0, 255] {
+                    inked += 1;
+                }
+            }
+        }
+        assert!(inked >= 3, "3×3 pen widens the oval apex (inked={inked})");
+    }
+
+    #[test]
+    fn frame_oval_pix_pattern_samples_colour_tile() {
+        // A solid-red 1×1 colour pixmap pen inks the oval boundary red.
+        let pp = PixPattern::new(1, 1, vec![red()], Pattern::BLACK);
+        let mut c = Canvas::new(16, 16, white());
+        frame_oval_pix_pattern_thick(&mut c, 2, 2, 14, 14, 1, 1, &pp);
+        // Leftmost boundary pixel of the ellipse is around (2, 7..8).
+        let mut found = false;
+        for y in 6..10 {
+            if at(&c, 2, y) == [255, 0, 0, 255] {
+                found = true;
+            }
+        }
+        assert!(found, "pixmap pen inks the oval boundary red");
+    }
+
+    #[test]
+    fn frame_arc_pattern_xor_inverts_boundary() {
+        // patXor on a solid-fg pen inverts the destination along the arc
+        // boundary; applied twice it restores the canvas.
+        let mut c = Canvas::new(16, 16, white());
+        let before = c.data.clone();
+        for _ in 0..2 {
+            frame_arc_pattern_thick_mode(
+                &mut c,
+                2,
+                2,
+                14,
+                14,
+                0,
+                90,
+                1,
+                1,
+                Pattern::BLACK,
+                black(),
+                white(),
+                PatternMode::PatXor,
+            );
+        }
+        assert_eq!(c.data, before, "double patXor arc frame is a no-op");
+    }
+
+    #[test]
+    fn frame_arc_pix_pattern_inks_quarter() {
+        // A red 1×1 pixmap pen inks the 0°..90° quarter (north → east).
+        let pp = PixPattern::new(1, 1, vec![red()], Pattern::BLACK);
+        let mut c = Canvas::new(16, 16, white());
+        frame_arc_pix_pattern_thick(&mut c, 2, 2, 14, 14, 0, 90, 1, 1, &pp);
+        let red_pixels = c
+            .data
+            .chunks_exact(4)
+            .filter(|p| p == &[255, 0, 0, 255])
+            .count();
+        assert!(red_pixels > 0, "arc quarter inked red");
     }
 }

@@ -45,9 +45,12 @@ use crate::packbits;
 use crate::raster::{
     fill_arc, fill_oval_pattern_mode, fill_oval_pix_pattern, fill_polygon_pattern_mode,
     fill_polygon_pix_pattern, fill_rect, fill_rect_pattern_mode, fill_rect_pix_pattern,
-    fill_round_rect_pattern_mode, fill_round_rect_pix_pattern, frame_arc, frame_oval_thick,
-    frame_polygon, frame_polygon_pattern_thick_mode, frame_polygon_pix_pattern_thick,
-    frame_rect_pattern_thick_mode, frame_rect_pix_pattern_thick, frame_round_rect, invert_arc,
+    fill_round_rect_pattern_mode, fill_round_rect_pix_pattern, frame_arc,
+    frame_arc_pattern_thick_mode, frame_arc_pix_pattern_thick, frame_oval_pattern_thick_mode,
+    frame_oval_pix_pattern_thick, frame_oval_thick, frame_polygon,
+    frame_polygon_pattern_thick_mode, frame_polygon_pix_pattern_thick,
+    frame_rect_pattern_thick_mode, frame_rect_pix_pattern_thick, frame_round_rect,
+    frame_round_rect_pattern_thick_mode, frame_round_rect_pix_pattern_thick, invert_arc,
     invert_oval, invert_polygon, invert_round_rect, line_thick as draw_line_thick,
     stamp_region_pen_cell_mode, stamp_region_pen_cell_pix, Canvas, PatternMode, SourceMode,
 };
@@ -1080,9 +1083,40 @@ fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
 fn apply_rrect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
     let (ow, oh) = state.oval_size;
+    let (ph, pv) = state.pen_size;
     let mode = pattern_mode(state);
     match opcode & 0x000F {
-        0 => frame_round_rect(canvas, top, left, bottom, right, ow, oh, state.fg),
+        // frameRRect: honour the current pen size + pen pattern + pen
+        // pattern mode (Inside Macintosh: Imaging With QuickDraw,
+        // "Framing Shapes", book page 3-13 — FrameRoundRect draws its
+        // outline "using the size, pattern, and pattern mode of the
+        // graphics pen"). The default solid 1×1 `patCopy` `fgColor` pen
+        // keeps the historical thin-outline path bit-for-bit.
+        0 => {
+            if let Some(pp) = &state.pen_pix_pat {
+                frame_round_rect_pix_pattern_thick(
+                    canvas, top, left, bottom, right, ow, oh, ph, pv, pp,
+                );
+            } else if ph <= 1 && pv <= 1 && mode.is_pat_copy() && state.pen_pat.is_solid_fg() {
+                frame_round_rect(canvas, top, left, bottom, right, ow, oh, state.fg);
+            } else {
+                frame_round_rect_pattern_thick_mode(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    ow,
+                    oh,
+                    ph,
+                    pv,
+                    state.pen_pat,
+                    state.fg,
+                    state.bg,
+                    mode,
+                );
+            }
+        }
         1 => {
             if let Some(pp) = &state.pen_pix_pat {
                 fill_round_rect_pix_pattern(canvas, top, left, bottom, right, ow, oh, pp);
@@ -1156,7 +1190,32 @@ fn apply_oval_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: Re
     let (ph, pv) = state.pen_size;
     let mode = pattern_mode(state);
     match opcode & 0x000F {
-        0 => frame_oval_thick(canvas, top, left, bottom, right, ph, pv, state.fg),
+        // frameOval: honour the current pen size + pen pattern + pen
+        // pattern mode (book page 3-13 "Framing Shapes"). The thick-pen
+        // path was already honoured; round 372 adds the pen pattern /
+        // pattern mode. A solid 1×1 `patCopy` `fgColor` pen keeps the
+        // historical outline bit-for-bit.
+        0 => {
+            if let Some(pp) = &state.pen_pix_pat {
+                frame_oval_pix_pattern_thick(canvas, top, left, bottom, right, ph, pv, pp);
+            } else if mode.is_pat_copy() && state.pen_pat.is_solid_fg() {
+                frame_oval_thick(canvas, top, left, bottom, right, ph, pv, state.fg);
+            } else {
+                frame_oval_pattern_thick_mode(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    ph,
+                    pv,
+                    state.pen_pat,
+                    state.fg,
+                    state.bg,
+                    mode,
+                );
+            }
+        }
         1 => {
             if let Some(pp) = &state.pen_pix_pat {
                 fill_oval_pix_pattern(canvas, top, left, bottom, right, pp);
@@ -1227,8 +1286,39 @@ fn apply_arc_verb(
     arc: i32,
 ) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
+    let (ph, pv) = state.pen_size;
+    let mode = pattern_mode(state);
     match opcode & 0x000F {
-        0 => frame_arc(canvas, top, left, bottom, right, start, arc, state.fg),
+        // frameArc: honour the current pen size + pen pattern + pen
+        // pattern mode (book page 3-13 "Framing Shapes" — FrameArc draws
+        // its outline "using the size, pattern, and pattern mode of the
+        // graphics pen"). The solid 1×1 `patCopy` `fgColor` pen keeps the
+        // historical thin arc outline bit-for-bit.
+        0 => {
+            if let Some(pp) = &state.pen_pix_pat {
+                frame_arc_pix_pattern_thick(
+                    canvas, top, left, bottom, right, start, arc, ph, pv, pp,
+                );
+            } else if ph <= 1 && pv <= 1 && mode.is_pat_copy() && state.pen_pat.is_solid_fg() {
+                frame_arc(canvas, top, left, bottom, right, start, arc, state.fg);
+            } else {
+                frame_arc_pattern_thick_mode(
+                    canvas,
+                    top,
+                    left,
+                    bottom,
+                    right,
+                    start,
+                    arc,
+                    ph,
+                    pv,
+                    state.pen_pat,
+                    state.fg,
+                    state.bg,
+                    mode,
+                );
+            }
+        }
         1 => fill_arc(canvas, top, left, bottom, right, start, arc, state.fg),
         2 => fill_arc(canvas, top, left, bottom, right, start, arc, state.bg),
         // §3-44 InvertArc / §A-3 Table A-2 `$0063`: channel-wise NOT

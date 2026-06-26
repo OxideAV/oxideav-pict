@@ -19,7 +19,7 @@ returned as a `PictImage`.
 | ------------ | --------- |
 | NOP, ClipRgn, pen / colour / text-state opcodes | parsed; rasteriser tracks state; full text state captured into [`PictTextState`] |
 | Line / LineFrom / ShortLine | drawn via Bresenham |
-| Frame / Paint / Erase / Invert / Fill of Rect / RoundRect / Oval / Arc | rasterised via in-crate kernels |
+| Frame / Paint / Erase / Invert / Fill of Rect / RoundRect / Oval / Arc | rasterised via in-crate kernels; every `Frame*` verb honours the pen size + pen pattern / pixel-pattern + pattern mode (book page 3-13 "Framing Shapes") |
 | Frame / Paint / Erase / Invert / Fill Poly | rasterised via even-odd scanline; `Frame` honours the pen size + pen pattern / mode (pen hangs below+right, §3 page 3-81) |
 | Frame / Paint / Erase / Invert / Fill Rgn | rasterised (bbox + per-row inversion mask); `Frame` honours the pen size + pen pattern / mode (book page 3-13, pen hangs below+right) |
 | `BkPat` / `PnPat` / `FillPat` | 8-byte monochrome patterns |

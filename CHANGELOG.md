@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Other
+
+- round 372: **`FrameOval` (`$0050`), `FrameRoundRect` (`$0040`), and
+  `FrameArc` (`$0060`) now honour the current pen size, pen pattern, and
+  pen pattern mode.** Inside Macintosh: Imaging With QuickDraw, "Framing
+  Shapes" (book page 3-13): *"Using the FrameRect, FrameOval,
+  FrameRoundRect, FrameArc, FramePoly, or FrameRgn procedure to frame a
+  shape draws just its outline, using the size, pattern, and pattern mode
+  of the graphics pen."* Before this round the oval frame honoured only
+  the pen *size* (`frame_oval_thick`) while ignoring `PnPat` / `PnMode`,
+  and the round-rect / arc frames ignored the pen entirely — a fixed
+  1-pixel `fgColor` trace, the same gap round 333 closed for `FramePoly`
+  and round 366 closed for `FrameRgn`. Each frame verb now resolves the
+  pen exactly like the rect / poly / region frames: a colour `PnPixPat`
+  routes through new `frame_{oval,round_rect,arc}_pix_pattern_thick`
+  raster primitives; a non-solid `PnPat` or non-`patCopy` `PnMode` routes
+  through `frame_{oval,round_rect,arc}_pattern_thick_mode`, stamping a
+  `pen_h × pen_v` pattern brush at every boundary pixel produced by the
+  shared shape-outline walkers (`walk_round_rect_outline` /
+  `walk_arc_outline`, both factored out of the existing solid frames so
+  the three render paths trace one boundary definition). The default
+  solid 1×1 `patCopy` `fgColor` pen keeps the historical thin-outline
+  render bit-for-bit (a regression guard pins this on all three shapes).
+  Six new `raster` unit tests (solid round-rect == walker trace,
+  stripe-pattern round-rect tiling, 3×3-pen oval widening, colour-pixmap
+  oval / arc inking, `patXor` arc round-trip) plus five
+  `parse_pict`-level tests in `synth_v2_round372` (patterned frameRRect,
+  thick-pen frameOval, `patXor` frameOval round-trip, patterned frameArc,
+  default-pen regression on all three shapes).
+
 ### Fixed
 
 - round 366: **`Region` scan-line inversion decoder no longer panics on a
