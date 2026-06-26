@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- round 372: **The `Line` family (`$0020` `Line` / `$0021` `LineFrom` /
+  `$0022` `ShortLine` / `$0023` `ShortLineFrom`, plus the v1 `$20`..`$23`
+  mirror) now honours the current pen pattern (mono or colour pixmap) and
+  pen pattern mode.** Inside Macintosh: Imaging With QuickDraw §3
+  "QuickDraw Drawing Reference" (book page 3-81): the line procedures
+  draw "using the size, pattern, and pattern mode of the graphics pen."
+  The lines already honoured the pen *size* (`line_thick`) but always
+  stroked solid `fgColor`, ignoring `PnPat` / `PnPixPat` / `PnMode`. All
+  eight line arms now route through a shared `draw_line_pen` dispatcher:
+  a colour `PnPixPat` strokes via the new `line_pix_pattern_thick`; a
+  non-solid `PnPat` or non-`patCopy` `PnMode` strokes via
+  `line_pattern_thick_mode` (each Bresenham pixel routed through the
+  §3-44 pattern-mode cell logic). The default solid 1×1 `patCopy`
+  `fgColor` pen reproduces `line` / `line_thick` bit-for-bit (a unit test
+  pins the solid-pen line == `line` equality). Four new `raster` unit
+  tests (solid == `line`, stripe-pattern column skipping, `patXor`
+  round-trip, colour-pixmap stroke) plus two `parse_pict`-level tests in
+  `synth_v2_round372` (patterned `Line`, `patXor` `Line` round-trip).
 - round 372: **`FrameOval` (`$0050`), `FrameRoundRect` (`$0040`), and
   `FrameArc` (`$0060`) now honour the current pen size, pen pattern, and
   pen pattern mode.** Inside Macintosh: Imaging With QuickDraw, "Framing

@@ -51,8 +51,9 @@ use crate::raster::{
     frame_polygon_pattern_thick_mode, frame_polygon_pix_pattern_thick,
     frame_rect_pattern_thick_mode, frame_rect_pix_pattern_thick, frame_round_rect,
     frame_round_rect_pattern_thick_mode, frame_round_rect_pix_pattern_thick, invert_arc,
-    invert_oval, invert_polygon, invert_round_rect, line_thick as draw_line_thick,
-    stamp_region_pen_cell_mode, stamp_region_pen_cell_pix, Canvas, PatternMode, SourceMode,
+    invert_oval, invert_polygon, invert_round_rect, line_pattern_thick_mode,
+    line_pix_pattern_thick, line_thick as draw_line_thick, stamp_region_pen_cell_mode,
+    stamp_region_pen_cell_pix, Canvas, PatternMode, SourceMode,
 };
 use crate::reader::Reader;
 use crate::region::{parse_region, Region};
@@ -464,8 +465,7 @@ fn dispatch_v2_opcode(
             let pt1_h = r.read_i16()? as i32;
             let (x0, y0) = to_canvas(state, pt0_h, pt0_v);
             let (x1, y1) = to_canvas(state, pt1_h, pt1_v);
-            let (ph, pv) = state.pen_size;
-            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
+            draw_line_pen(canvas, state, x0, y0, x1, y1);
             state.pen = (pt1_h, pt1_v);
             Ok(true)
         }
@@ -474,8 +474,7 @@ fn dispatch_v2_opcode(
             let pt_h = r.read_i16()? as i32;
             let (x0, y0) = to_canvas(state, state.pen.0, state.pen.1);
             let (x1, y1) = to_canvas(state, pt_h, pt_v);
-            let (ph, pv) = state.pen_size;
-            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
+            draw_line_pen(canvas, state, x0, y0, x1, y1);
             state.pen = (pt_h, pt_v);
             Ok(true)
         }
@@ -488,8 +487,7 @@ fn dispatch_v2_opcode(
             let ny = pt_v + dv;
             let (x0, y0) = to_canvas(state, pt_h, pt_v);
             let (x1, y1) = to_canvas(state, nx, ny);
-            let (ph, pv) = state.pen_size;
-            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
+            draw_line_pen(canvas, state, x0, y0, x1, y1);
             state.pen = (nx, ny);
             Ok(true)
         }
@@ -500,8 +498,7 @@ fn dispatch_v2_opcode(
             let ny = state.pen.1 + dv;
             let (x0, y0) = to_canvas(state, state.pen.0, state.pen.1);
             let (x1, y1) = to_canvas(state, nx, ny);
-            let (ph, pv) = state.pen_size;
-            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
+            draw_line_pen(canvas, state, x0, y0, x1, y1);
             state.pen = (nx, ny);
             Ok(true)
         }
@@ -1000,6 +997,36 @@ fn pattern_mode(state: &PictState) -> PatternMode {
 ///
 /// When a colour `*_pix_pat` is set, every cell renders the resolved
 /// per-cell RGBA directly from the 8×8 grid (fg/bg are ignored).
+/// Draw a line honouring the current pen size, pen pattern (mono or
+/// colour pixmap), and pen pattern mode. Inside Macintosh: Imaging With
+/// QuickDraw §3 "QuickDraw Drawing Reference" (book page 3-81): the
+/// `Line` / `LineTo` procedures draw "using the size, pattern, and
+/// pattern mode of the graphics pen." The default solid 1×1 `patCopy`
+/// `fgColor` pen keeps the historical thin-`fgColor` stroke bit-for-bit.
+fn draw_line_pen(canvas: &mut Canvas, state: &PictState, x0: i32, y0: i32, x1: i32, y1: i32) {
+    let (ph, pv) = state.pen_size;
+    let mode = pattern_mode(state);
+    if let Some(pp) = &state.pen_pix_pat {
+        line_pix_pattern_thick(canvas, x0, y0, x1, y1, ph, pv, pp);
+    } else if mode.is_pat_copy() && state.pen_pat.is_solid_fg() {
+        draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
+    } else {
+        line_pattern_thick_mode(
+            canvas,
+            x0,
+            y0,
+            x1,
+            y1,
+            ph,
+            pv,
+            state.pen_pat,
+            state.fg,
+            state.bg,
+            mode,
+        );
+    }
+}
+
 fn apply_rect_verb(canvas: &mut Canvas, state: &PictState, opcode: u16, rect: RectI32) {
     let (top, left, bottom, right) = rect_to_canvas(state, rect);
     let (ph, pv) = state.pen_size;
@@ -2941,8 +2968,7 @@ fn dispatch_v1_opcode(
             let pt1_h = r.read_i16()? as i32;
             let (x0, y0) = to_canvas(state, pt0_h, pt0_v);
             let (x1, y1) = to_canvas(state, pt1_h, pt1_v);
-            let (ph, pv) = state.pen_size;
-            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
+            draw_line_pen(canvas, state, x0, y0, x1, y1);
             state.pen = (pt1_h, pt1_v);
             Ok(true)
         }
@@ -2951,8 +2977,7 @@ fn dispatch_v1_opcode(
             let pt_h = r.read_i16()? as i32;
             let (x0, y0) = to_canvas(state, state.pen.0, state.pen.1);
             let (x1, y1) = to_canvas(state, pt_h, pt_v);
-            let (ph, pv) = state.pen_size;
-            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
+            draw_line_pen(canvas, state, x0, y0, x1, y1);
             state.pen = (pt_h, pt_v);
             Ok(true)
         }
@@ -2965,8 +2990,7 @@ fn dispatch_v1_opcode(
             let ny = pt_v + dv;
             let (x0, y0) = to_canvas(state, pt_h, pt_v);
             let (x1, y1) = to_canvas(state, nx, ny);
-            let (ph, pv) = state.pen_size;
-            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
+            draw_line_pen(canvas, state, x0, y0, x1, y1);
             state.pen = (nx, ny);
             Ok(true)
         }
@@ -2977,8 +3001,7 @@ fn dispatch_v1_opcode(
             let ny = state.pen.1 + dv;
             let (x0, y0) = to_canvas(state, state.pen.0, state.pen.1);
             let (x1, y1) = to_canvas(state, nx, ny);
-            let (ph, pv) = state.pen_size;
-            draw_line_thick(canvas, x0, y0, x1, y1, ph, pv, state.fg);
+            draw_line_pen(canvas, state, x0, y0, x1, y1);
             state.pen = (nx, ny);
             Ok(true)
         }

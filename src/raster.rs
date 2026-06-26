@@ -969,6 +969,82 @@ pub fn line_thick(
     }
 }
 
+/// Bresenham line drawn with a `pen_h × pen_v` pen-pattern brush stamped
+/// at every rasterised pixel, each brush pixel routed through the §3-44
+/// pattern-mode cell logic. Inside Macintosh: Imaging With QuickDraw §3
+/// "QuickDraw Drawing Reference" (book page 3-81): line procedures draw
+/// "using the size, pattern, and pattern mode of the graphics pen." A
+/// solid-fg `patCopy` pen reproduces [`line_thick`] / [`line`] exactly.
+#[allow(clippy::too_many_arguments)]
+pub fn line_pattern_thick_mode(
+    canvas: &mut Canvas,
+    mut x0: i32,
+    mut y0: i32,
+    x1: i32,
+    y1: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pat: Pattern,
+    fg: Rgba,
+    bg: Rgba,
+    mode: PatternMode,
+) {
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    loop {
+        stamp_pen_pattern_mode(canvas, x0, y0, pen_h, pen_v, pat, fg, bg, mode);
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x0 += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+/// Colour-pixmap pen-pattern line (book page 3-81): each brush pixel
+/// samples the [`PixPattern`] tile directly.
+pub fn line_pix_pattern_thick(
+    canvas: &mut Canvas,
+    mut x0: i32,
+    mut y0: i32,
+    x1: i32,
+    y1: i32,
+    pen_h: i32,
+    pen_v: i32,
+    pp: &PixPattern,
+) {
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    loop {
+        stamp_pen_pix_pattern(canvas, x0, y0, pen_h, pen_v, pp);
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x0 += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
 /// Outline rectangle drawn with a `pen_h × pen_v` brush along each
 /// edge. The brush extends inward from each edge per QuickDraw's
 /// `framePen` rule (Inside Macintosh §2: "the pen size is added to
@@ -3132,5 +3208,83 @@ mod tests {
             .filter(|p| p == &[255, 0, 0, 255])
             .count();
         assert!(red_pixels > 0, "arc quarter inked red");
+    }
+
+    #[test]
+    fn line_pattern_solid_fg_matches_line_thick() {
+        // A solid-fg patCopy pen must reproduce line_thick / line exactly.
+        let mut a = Canvas::new(10, 10, white());
+        let mut b = Canvas::new(10, 10, white());
+        line(&mut a, 0, 0, 9, 6, black());
+        line_pattern_thick_mode(
+            &mut b,
+            0,
+            0,
+            9,
+            6,
+            1,
+            1,
+            Pattern::BLACK,
+            black(),
+            white(),
+            PatternMode::PatCopy,
+        );
+        assert_eq!(a.data, b.data, "solid-fg pattern line == line");
+    }
+
+    #[test]
+    fn line_pattern_stripe_skips_odd_columns() {
+        // A horizontal line under the vertical-stripe pattern inks only
+        // the even columns (sample(x,_) is true iff x even).
+        let mut c = Canvas::new(10, 4, white());
+        line_pattern_thick_mode(
+            &mut c,
+            0,
+            1,
+            8,
+            1,
+            1,
+            1,
+            vstripe(),
+            black(),
+            white(),
+            PatternMode::PatCopy,
+        );
+        assert_eq!(at(&c, 0, 1), [0, 0, 0, 255], "even col inked");
+        assert_eq!(at(&c, 1, 1), [255, 255, 255, 255], "odd col paper");
+        assert_eq!(at(&c, 2, 1), [0, 0, 0, 255], "even col inked");
+    }
+
+    #[test]
+    fn line_pattern_xor_round_trips() {
+        // patXor on a solid-fg pen drawn twice over the same line cancels.
+        let mut c = Canvas::new(10, 10, white());
+        let before = c.data.clone();
+        for _ in 0..2 {
+            line_pattern_thick_mode(
+                &mut c,
+                0,
+                0,
+                9,
+                9,
+                1,
+                1,
+                Pattern::BLACK,
+                black(),
+                white(),
+                PatternMode::PatXor,
+            );
+        }
+        assert_eq!(c.data, before, "double patXor line is a no-op");
+    }
+
+    #[test]
+    fn line_pix_pattern_inks_colour_tile() {
+        // A red 1×1 colour pixmap pen strokes the line red.
+        let pp = PixPattern::new(1, 1, vec![red()], Pattern::BLACK);
+        let mut c = Canvas::new(10, 10, white());
+        line_pix_pattern_thick(&mut c, 0, 0, 9, 9, 1, 1, &pp);
+        assert_eq!(at(&c, 0, 0), [255, 0, 0, 255]);
+        assert_eq!(at(&c, 9, 9), [255, 0, 0, 255]);
     }
 }

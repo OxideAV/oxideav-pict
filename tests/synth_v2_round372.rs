@@ -11,7 +11,10 @@
 //! pattern mode (only the pen size widened it), and the round-rect / arc
 //! frames ignored the pen entirely — a fixed 1-pixel `fgColor` trace.
 //! These tests pin the fixed behaviour: a non-solid `PnPat`, a thicker
-//! `PnSize`, and a `PnMode` all reach the three shape frames.
+//! `PnSize`, and a `PnMode` all reach the three shape frames. The same
+//! round also routes the `Line` family (`$0020`..`$0023` v2 + `$20`..
+//! `$23` v1) through the pen pattern / pattern mode (book page 3-81),
+//! covered by the `line_*` tests below.
 
 use oxideav_pict::{ops::PictBuilder, ops::Verb, parse_pict};
 
@@ -130,6 +133,51 @@ fn frame_arc_honours_pen_pattern() {
     assert!(
         solid_inked >= inked,
         "solid arc inks >= patterned arc ({solid_inked} vs {inked})"
+    );
+}
+
+/// `Line` (`$0020`) now honours the pen pattern: a vertical-stripe
+/// `PnPat` on a horizontal line inks only the even columns (book page
+/// 3-81 — line procedures draw "using the size, pattern, and pattern
+/// mode of the graphics pen").
+#[test]
+fn line_honours_pen_pattern() {
+    let mut b = PictBuilder::new(0, 0, 16, 16);
+    b.fg_color(0x11, 0x22, 0x33);
+    b.pen_pattern([0xAA; 8]); // foreground on even columns
+    b.line(1, 4, 13, 4); // horizontal at v == 4
+    let bytes = b.finish();
+
+    let img = parse_pict(&bytes).expect("decode patterned line");
+    let px = |x: usize, y: usize| {
+        let off = (y * 16 + x) * 4;
+        [img.data[off], img.data[off + 1], img.data[off + 2]]
+    };
+    // Along the line (y == 4), even x is inked, odd x is paper.
+    assert_eq!(px(2, 4), [0x11, 0x22, 0x33], "even-x line cell inked");
+    assert_eq!(px(3, 4), [0xFF, 0xFF, 0xFF], "odd-x line cell paper");
+    assert_eq!(px(4, 4), [0x11, 0x22, 0x33], "even-x line cell inked");
+}
+
+/// `Line` honours the pen pattern mode: a `patXor` pen drawn twice over
+/// the same line restores the canvas.
+#[test]
+fn line_pen_mode_xor_round_trips() {
+    let build = |n: usize| {
+        let mut b = PictBuilder::new(0, 0, 16, 16);
+        b.fg_color(0x40, 0x40, 0x40);
+        b.rect(Verb::Paint, 0, 0, 16, 16);
+        b.fg_color(0, 0, 0);
+        b.pn_mode(10); // patXor
+        for _ in 0..n {
+            b.line(1, 8, 14, 8);
+        }
+        parse_pict(&b.finish()).expect("decode xor line")
+    };
+    assert_eq!(
+        build(0).data,
+        build(2).data,
+        "two patXor lines cancel to the backdrop"
     );
 }
 
