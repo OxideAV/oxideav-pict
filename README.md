@@ -1,5 +1,7 @@
 # oxideav-pict
 
+[![CI](https://github.com/OxideAV/oxideav-pict/actions/workflows/ci.yml/badge.svg)](https://github.com/OxideAV/oxideav-pict/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/oxideav-pict.svg)](https://crates.io/crates/oxideav-pict) [![docs.rs](https://docs.rs/oxideav-pict/badge.svg)](https://docs.rs/oxideav-pict) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Pure-Rust PICT (Apple QuickDraw picture) reader + writer for the
 [`oxideav`](https://github.com/OxideAV/oxideav) framework. Clean-room
 implementation of the public **Inside Macintosh: Imaging With QuickDraw**
