@@ -19,10 +19,12 @@
 //! header demanding a multi-gigabyte canvas or pixel buffer is
 //! rejected with `PictError::InvalidData` before the allocation.
 
-use oxideav_pict::ops::PictBuilder;
+use oxideav_pict::ops::{PictBuilder, PictV1Builder};
 use oxideav_pict::{
-    build_tx_size, encode_pict, encode_pict_indexed_pack_bits_rect, encode_pict_pack_bits_rect,
-    encode_pict_v1, encode_pict_v2, parse_pict, probe_pict, IndexedPixelSize, PackType, Verb,
+    build_fg_color_code, build_rect_op, build_short_line, build_tx_size, encode_pict,
+    encode_pict_indexed_pack_bits_rect, encode_pict_pack_bits_rect, encode_pict_v1,
+    encode_pict_v1_pack_bits_rect, encode_pict_v2, parse_pict, probe_pict, IndexedPixelSize,
+    PackType, Verb,
 };
 
 /// Deterministic xorshift64* PRNG — keeps the suite reproducible with
@@ -92,8 +94,35 @@ fn corpus() -> Vec<Vec<u8>> {
     let rgba8: Vec<u8> = gray.iter().flat_map(|&g| [g, g, g, 0xFF]).collect();
     seeds.push(encode_pict_pack_bits_rect(8, 8, &rgba8).unwrap());
 
-    // v1 stream.
+    // v1 stream (DirectBits extension framing).
     seeds.push(encode_pict_v1(8, 8, &rgba8).unwrap());
+
+    // v1 Table-A-3 1-bpp raster (round 401).
+    seeds.push(
+        encode_pict_v1_pack_bits_rect(64, 4, &{
+            let mut v = Vec::new();
+            for i in 0..64 * 4 {
+                let c = if i % 2 == 0 { 0u8 } else { 0xFF };
+                v.extend_from_slice(&[c, c, c, 0xFF]);
+            }
+            v
+        })
+        .unwrap(),
+    );
+
+    // v1 drawing stream via PictV1Builder (round 401).
+    let mut v1 = PictV1Builder::new(0, 0, 48, 48);
+    v1.push(&build_fg_color_code(205)).unwrap();
+    v1.push(&build_rect_op(Verb::Paint, 4, 4, 20, 24)).unwrap();
+    v1.push(&build_short_line(2, 2, 30, 30)).unwrap();
+    seeds.push(v1.finish());
+
+    // QuickTime payload capture path (round 401).
+    let mut qt = PictBuilder::new(0, 0, 8, 8);
+    qt.compressed_quicktime(&[0xA5; 33]).unwrap();
+    qt.rect(Verb::Paint, 1, 1, 3, 3);
+    qt.uncompressed_quicktime(&[0x5A; 8]).unwrap();
+    seeds.push(qt.finish());
 
     seeds
 }
