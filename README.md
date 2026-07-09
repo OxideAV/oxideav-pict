@@ -95,7 +95,8 @@ their own inverse. Structured text / pen-mode / highlight state opcodes
 | Function | Format |
 | -------- | ------ |
 | `encode_pict` / `encode_pict_v2(…, PackType)` | v2, packType 1 (raw) / 2 (packed24) / 3 (Rle16) / 4 (ComponentPackBits) |
-| `encode_pict_v1` / `encode_pict_v1_with(…, PackType)` | v1, same PackType selector, no stub / headerOp |
+| `encode_pict_v1` / `encode_pict_v1_with(…, PackType)` | v1 framing around a v2-style `DirectBitsRect $9A` (an extension — §A-3 Table A-3 defines no `$9A`; readable by this crate, not by strict Table-A-3 readers), no stub / headerOp |
+| `encode_pict_v1_bits_rect` / `encode_pict_v1_pack_bits_rect` | strict Table-A-3 v1 raster: 1-bpp BitMap via `$90` (footnote `‡`: `rowBytes < 8` only) / `$98` PackBits rows |
 | `encode_pict_bits_rect` / `encode_pict_pack_bits_rect` | v2 1-bpp BitMap (raw / PackBits-RLE rows) |
 | `encode_pict_bits_rgn` / `encode_pict_pack_bits_rgn` | masked 1-bpp variants with rectangular clip region |
 | `encode_pict_indexed_*` (`bits_rect` / `pack_bits_rect` + `*_rgn`) | indexed 1/2/4/8-bpp PixMap with embedded ColorTable |

@@ -668,7 +668,15 @@ impl PictTextState {
                 denom_v: 1,
                 denom_h: 1,
             },
-            pn_loc_h_frac: 0x4000, // 0.5 in the low word of a Fixed
+            // 0.5 as the low (fraction) word of a Fixed is the bit
+            // pattern 0x8000 (= 0x8000 / 0x10000). The field mirrors
+            // the on-disk signed Integer, so the pattern reads back as
+            // i16::MIN — compare via `as u16` for the fraction value.
+            // Inside Macintosh: Imaging With QuickDraw §4 (CGrafPort
+            // initial-field table): "the low word of a Fixed number;
+            // in decimal, its initial value is 0.5". (Round 401 fixes
+            // the previous 0x4000 = 0.25 default.)
+            pn_loc_h_frac: 0x8000u16 as i16,
             ch_extra: 0,
             hilite_color: None,
             op_color: None,

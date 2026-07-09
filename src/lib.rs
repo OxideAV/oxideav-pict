@@ -74,8 +74,9 @@ pub use encoder::{
     encode_pict_bits_rect, encode_pict_bits_rgn, encode_pict_indexed_bits_rect,
     encode_pict_indexed_bits_rgn, encode_pict_indexed_pack_bits_rect,
     encode_pict_indexed_pack_bits_rgn, encode_pict_pack_bits_rect, encode_pict_pack_bits_rgn,
-    encode_pict_v1, encode_pict_v1_with, encode_pict_v2, encode_pict_v2_with_clip,
-    pixel_data_sizes, IndexedPixelSize, PackType, PixPatSlot,
+    encode_pict_v1, encode_pict_v1_bits_rect, encode_pict_v1_pack_bits_rect, encode_pict_v1_with,
+    encode_pict_v2, encode_pict_v2_with_clip, pixel_data_sizes, IndexedPixelSize, PackType,
+    PixPatSlot,
 };
 pub use error::{PictError, Result};
 pub use header::{Fixed, PictHeader};

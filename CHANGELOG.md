@@ -58,6 +58,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **pixel-identically** through both builders, plus classic-colour
   inking, `picSize` patching, and build-time rejection.
 
+- round 401: **Table-A-3-conformant v1 raster encoders —
+  `encode_pict_v1_bits_rect` / `encode_pict_v1_pack_bits_rect`.**
+  `encode_pict_v1` emits a v2-style `DirectBitsRect $9A` inside a v1
+  framing, an extension §A-3 Table A-3 does not define (its raster
+  opcodes stop at `$90`/`$91`/`$98`/`$99`, and a version-1 walker has
+  no skip rule for unknown opcodes) — its doc now carries that
+  conformance caveat. The new pair emits 1-bpp BitMap rasters in
+  strict Table-A-3 form: `$90` enforces footnote `‡` (`rowBytes < 8`
+  only — wider images error and route to the `$98` packed form), the
+  narrow-row raw carve-out is honoured inside v1 framing, and
+  `picSize` is recorded. `synth_v1_round401` round-trips checkers
+  through both, pins the footnote-`‡` rejection and the v1 framing
+  bytes.
+
 - round 401: **criterion bench suite** (`benches/pict_bench.rs` +
   `BENCHMARKS.md`): the DirectBitsRect raster path encode/decode at
   all four PackTypes (256 × 256 ≈ 74–145 µs, ~0.45–0.9 Gpixel/s), a
@@ -108,6 +122,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1-bpp BitMaps get the equivalent `width × bpp ≤ rowBytes × 8` check
   plus a 1/2/4/8 `pixelSize` whitelist via the shared
   `checked_bitmap_dims` helper.
+
+- round 401: **`pnLocHFrac` fresh-GrafPort default was 0.25, not
+  0.5.** The §4 CGrafPort initial-field table gives the field as "the
+  low word of a Fixed number; in decimal, its initial value is 0.5" —
+  bit pattern `0x8000`. `PictTextState::fresh_graf_port` (whose own
+  doc already said `0x8000`) initialised the field to `0x4000` =
+  0.25. Compare via `as u16` — the on-disk Integer is signed, so the
+  0.5 pattern reads back as `i16::MIN`.
 
 - round 401: **`CompressedQuickTime` / `UncompressedQuickTime` length
   word was read as self-inclusive, under-walking conforming streams by

@@ -48,7 +48,9 @@ fn fresh_graf_port_defaults_match_quickdraw() {
     assert_eq!(ts.pn_mode, 8); // patCopy
     assert_eq!(ts.tx_size, 12);
     assert_eq!(ts.tx_ratio, TextRatio::default());
-    assert_eq!(ts.pn_loc_h_frac, 0x4000);
+    // 0.5 = bit pattern 0x8000 as the low word of a Fixed (round 401;
+    // previously mis-defaulted to 0x4000 = 0.25).
+    assert_eq!(ts.pn_loc_h_frac as u16, 0x8000);
     assert_eq!(ts.ch_extra, 0);
     assert!(ts.hilite_color.is_none());
     assert!(ts.op_color.is_none());

@@ -312,6 +312,18 @@ pub fn encode_pict_v1(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
 /// pixel data is emitted as a v1 `DirectBitsRect` (opcode `0x9A`),
 /// identical PixMap-header layout to the v2 `0x009A` opcode.
 ///
+/// **Conformance caveat (round 401):** Inside Macintosh: Imaging With
+/// QuickDraw §A-3 Table A-3 defines no `$9A` opcode for version 1
+/// pictures — the v1 raster opcodes stop at the BitMap-based
+/// `$90`/`$91`/`$98`/`$99`, and a version-1 walker has no skip rule
+/// for unknown opcodes. Streams from this function therefore rely on
+/// the consumer accepting the v2-style `DirectBitsRect` body inside a
+/// v1 framing (this crate's decoder does; a strict Table-A-3-only
+/// reader will not). For a fully Table-A-3-conformant v1 raster use
+/// the 1-bpp [`encode_pict_v1_bits_rect`] /
+/// [`encode_pict_v1_pack_bits_rect`] pair, or draw through
+/// [`crate::ops::PictV1Builder`].
+///
 /// The v1 wire shape pre-dates System 7 but is still in wide use for
 /// legacy interchange.
 ///
@@ -807,7 +819,41 @@ fn rgba_to_1bpp(width: u32, height: u32, data: &[u8], row_bytes: usize) -> Vec<u
 /// PICT v2 rowBytes limit (`0x3FFE`, since the top bit is reserved
 /// for the PixMap flag).
 pub fn encode_pict_bits_rect(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
-    encode_pict_bitmap(width, height, data, /* pack_bits = */ false)
+    encode_pict_bitmap(
+        width, height, data, /* pack_bits = */ false, /* v1 = */ false,
+    )
+}
+
+/// Encode an RGBA8 raster as a **PICT v1** containing a single
+/// `BitsRect` (`$90`) opcode — the fully §A-3 Table-A-3-conformant v1
+/// raster form (round 401). Same 1-bpp 50 %-luminance reduction and
+/// BitMap body layout as [`encode_pict_bits_rect`], framed as a
+/// version 1 picture: 10-byte record header, `$11 $01` stanza, 1-byte
+/// opcodes, `$FF` terminator, no launch stub. Table A-3 footnote `‡`
+/// notes `$90` "can only be used when rowBytes is less than 8", i.e.
+/// images up to 63 columns; wider images must use
+/// [`encode_pict_v1_pack_bits_rect`] (this function errors on them).
+pub fn encode_pict_v1_bits_rect(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+    if width.div_ceil(8) >= 8 {
+        return Err(PictError::invalid(format!(
+            "encode_pict_v1_bits_rect: width {width} gives rowBytes >= 8; §A-3 Table A-3 \
+             footnote ‡ limits BitsRect to rowBytes < 8 — use encode_pict_v1_pack_bits_rect"
+        )));
+    }
+    encode_pict_bitmap(
+        width, height, data, /* pack_bits = */ false, /* v1 = */ true,
+    )
+}
+
+/// Encode an RGBA8 raster as a **PICT v1** containing a single
+/// `PackBitsRect` (`$98`) opcode — PackBits-RLE rows when
+/// `rowBytes >= 8`, raw narrow rows below that (§A-3 carve-out). The
+/// Table-A-3-conformant packed v1 raster form (round 401); see
+/// [`encode_pict_v1_bits_rect`] for the framing notes.
+pub fn encode_pict_v1_pack_bits_rect(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
+    encode_pict_bitmap(
+        width, height, data, /* pack_bits = */ true, /* v1 = */ true,
+    )
 }
 
 /// Encode an RGBA8 raster as a v2 PICT containing a single
@@ -819,10 +865,18 @@ pub fn encode_pict_bits_rect(width: u32, height: u32, data: &[u8]) -> Result<Vec
 /// per-row data is laid out raw with no byteCount prefix and no
 /// PackBits compression — same encoding as `BitsRect`.
 pub fn encode_pict_pack_bits_rect(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
-    encode_pict_bitmap(width, height, data, /* pack_bits = */ true)
+    encode_pict_bitmap(
+        width, height, data, /* pack_bits = */ true, /* v1 = */ false,
+    )
 }
 
-fn encode_pict_bitmap(width: u32, height: u32, data: &[u8], pack_bits: bool) -> Result<Vec<u8>> {
+fn encode_pict_bitmap(
+    width: u32,
+    height: u32,
+    data: &[u8],
+    pack_bits: bool,
+    v1: bool,
+) -> Result<Vec<u8>> {
     validate_dims(width, height, data)?;
     let row_bytes = width.div_ceil(8) as usize;
     if row_bytes > 0x3FFE {
@@ -833,25 +887,39 @@ fn encode_pict_bitmap(width: u32, height: u32, data: &[u8], pack_bits: bool) -> 
     let bitmap = rgba_to_1bpp(width, height, data, row_bytes);
 
     let mut out: Vec<u8> = Vec::with_capacity(560 + row_bytes * height as usize + 4);
-    // 512-byte launch stub.
-    out.extend_from_slice(&[0u8; 512]);
+    if !v1 {
+        // 512-byte launch stub (v2 file convention; v1 pre-dates it).
+        out.extend_from_slice(&[0u8; 512]);
+    }
     // Picture record: picSize + picFrame.
     write_u16(&mut out, 0);
     write_i16(&mut out, 0);
     write_i16(&mut out, 0);
     write_i16(&mut out, height as i16);
     write_i16(&mut out, width as i16);
-    // v2 sentinel + headerOp stanza.
-    write_u16(&mut out, 0x0011);
-    write_u16(&mut out, 0x02FF);
-    write_u16(&mut out, 0x0C00);
-    out.extend_from_slice(&extended_v2_header_payload(width, height));
+    if v1 {
+        // v1 version stanza: opcode $11, version $01 — then 1-byte
+        // opcodes with no word alignment (§A-3 Table A-3).
+        out.push(0x11);
+        out.push(0x01);
+    } else {
+        // v2 sentinel + headerOp stanza.
+        write_u16(&mut out, 0x0011);
+        write_u16(&mut out, 0x02FF);
+        write_u16(&mut out, 0x0C00);
+        out.extend_from_slice(&extended_v2_header_payload(width, height));
+    }
 
-    // Opcode: BitsRect (0x0090) or PackBitsRect (0x0098). For BitMap
+    // Opcode: BitsRect (0x0090) or PackBitsRect (0x0098) — the same
+    // numbering in Table A-3, one byte wide for v1. For BitMap
     // opcodes the rowBytes top bit must stay clear (the decoder
     // explicitly rejects rowBytes & 0x8000 != 0 here).
-    let opcode = if pack_bits { 0x0098 } else { 0x0090 };
-    write_u16(&mut out, opcode);
+    let opcode: u16 = if pack_bits { 0x0098 } else { 0x0090 };
+    if v1 {
+        out.push(opcode as u8);
+    } else {
+        write_u16(&mut out, opcode);
+    }
 
     // BitMap header: rowBytes, bounds, srcRect, dstRect, mode.
     write_u16(&mut out, row_bytes as u16);
@@ -891,6 +959,17 @@ fn encode_pict_bitmap(width: u32, height: u32, data: &[u8], pack_bits: bool) -> 
     }
 
     // Word-align before terminator.
+    if v1 {
+        // v1 terminator: 1-byte $FF, no alignment. Patch picSize (the
+        // record starts at offset 0 — no stub) when it fits, per the
+        // Table A-3 32 KB v1 sizing.
+        out.push(0xFF);
+        if let Ok(size) = u16::try_from(out.len()) {
+            let size = size.to_be_bytes();
+            out[0..2].copy_from_slice(&size);
+        }
+        return Ok(out);
+    }
     if out.len() % 2 != 0 {
         out.push(0);
     }
