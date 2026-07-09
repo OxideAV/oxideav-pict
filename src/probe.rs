@@ -876,27 +876,29 @@ fn probe_v1_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             Ok(OpStep::Continue)
         }
         // §A-3 Table A-3 text opcodes — walked past identically to the
-        // decoder. Counted as drawing for probe purposes since a "label"
-        // qualifies as visible content per QuickDraw.
+        // decoder, and counted into `text_count` exactly like the v2
+        // walker's `$0028..$002B` arms so the probe classification is
+        // version-independent (round 401; through round 397 the v1
+        // walker folded these into `drawing_count`).
         0x28 => {
             r.skip(4)?;
             let n = r.read_u8()? as usize;
             r.skip(n)?;
-            p.drawing_count += 1;
+            p.text_count += 1;
             Ok(OpStep::Continue)
         }
         0x29 | 0x2A => {
             r.skip(1)?;
             let n = r.read_u8()? as usize;
             r.skip(n)?;
-            p.drawing_count += 1;
+            p.text_count += 1;
             Ok(OpStep::Continue)
         }
         0x2B => {
             r.skip(2)?;
             let n = r.read_u8()? as usize;
             r.skip(n)?;
-            p.drawing_count += 1;
+            p.text_count += 1;
             Ok(OpStep::Continue)
         }
         0x30..=0x34 | 0x40..=0x44 | 0x50..=0x54 => {

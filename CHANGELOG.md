@@ -41,6 +41,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   continuation, same-shape replay incl. the no-prior-shape no-op, clip
   masking).
 
+- round 401: **`PictV1Builder` — version 1 stream assembly from the
+  same opcode chunks as the v2 `PictBuilder`.** §A-3 Table A-3 is
+  numbering-compatible with the v2 table (1-byte opcodes, no word
+  alignment, 10-byte record header, `$11 $01` stanza, `$FF`
+  terminator), so `PictV1Builder::push` accepts any v1-legal `build_*`
+  chunk and re-emits it with the high `0x00` opcode byte stripped;
+  Color-QuickDraw-only opcodes (`RGBFgCol`, pix patterns …) are
+  rejected at build time. `finish` records the real record length in
+  `picSize` when it fits the 16-bit field (Table A-3's 32 KB v1
+  limit). New `build_fg_color_code` / `build_bk_color_code`
+  (`$000E`/`$000F` classic planar colour Longs — previously decodable
+  but not emittable) plus `PictBuilder::fg_color_code` /
+  `bg_color_code`. `synth_round401_matrix` pins a 26-chunk drawing
+  sequence (every v1-legal opcode family the crate emits) to decode
+  **pixel-identically** through both builders, plus classic-colour
+  inking, `picSize` patching, and build-time rejection.
+
 - round 401: **Hostile-input hardening + in-CI fuzz suite.** New
   `MAX_RASTER_BYTES` decode budget (256 MiB): every buffer sized from
   attacker-controlled length fields — the `picFrame` canvas (a 12-byte
@@ -71,6 +88,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1-bpp BitMaps get the equivalent `width × bpp ≤ rowBytes × 8` check
   plus a 1/2/4/8 `pixelSize` whitelist via the shared
   `checked_bitmap_dims` helper.
+
+- round 401: **v1 probe walker classified text opcodes as
+  `drawing_count`.** The v2 walker counts `LongText` / `DH/DV/DHDVText`
+  into `text_count`; the v1 walker folded them into `drawing_count`,
+  so the same picture content probed differently by version. The v1
+  arms now match v2 (version-independent probe contract); the two
+  round-205 tests pinning the old classification are rewritten.
 
 - round 401: **`Origin` (`$000C` v2 / `$0C` v1) applied its delta with
   the wrong sign.** Per the `SetOrigin` semantics (Inside Macintosh:

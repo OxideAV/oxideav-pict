@@ -658,6 +658,29 @@ pub fn build_op_color(r: u8, g: u8, b: u8) -> Vec<u8> {
     buf
 }
 
+/// Build an `FgColor` (`$000E`) opcode carrying a classic-QuickDraw
+/// colour code (Long) per Inside Macintosh: Imaging With QuickDraw
+/// §A-3 Table A-2 / Table A-3. This is the pre-Color-QuickDraw
+/// eight-colour planar model (the v1 way to select ink); v2 streams
+/// normally use `RGBFgCol` (`$001A`, [`build_rgb_fg_col`]) instead,
+/// but the decoder honours `$000E` in both versions.
+pub fn build_fg_color_code(code: u32) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(6);
+    write_u16(&mut buf, OP_FG_COLOR);
+    buf.extend_from_slice(&code.to_be_bytes());
+    buf
+}
+
+/// Build a `BkColor` (`$000F`) opcode carrying a classic-QuickDraw
+/// colour code (Long) — the background counterpart of
+/// [`build_fg_color_code`].
+pub fn build_bk_color_code(code: u32) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(6);
+    write_u16(&mut buf, OP_BG_COLOR);
+    buf.extend_from_slice(&code.to_be_bytes());
+    buf
+}
+
 /// Build a `fontName` (`$002C`) opcode carrying the producer's
 /// `oldFontID` + font-name bytes per Inside Macintosh: Imaging With
 /// QuickDraw §A-3 Table A-2 footnote `*`.
@@ -1179,6 +1202,22 @@ impl PictBuilder {
     }
 
     /// Push an `RGBBkCol` opcode (background colour).
+    /// Push an `FgColor` opcode (`$000E`) carrying a classic-QuickDraw
+    /// colour code (the pre-Color-QuickDraw planar model).
+    pub fn fg_color_code(&mut self, code: u32) -> &mut Self {
+        let bytes = build_fg_color_code(code);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `BkColor` opcode (`$000F`) carrying a classic-QuickDraw
+    /// colour code.
+    pub fn bg_color_code(&mut self, code: u32) -> &mut Self {
+        let bytes = build_bk_color_code(code);
+        self.push(&bytes);
+        self
+    }
+
     pub fn bg_color(&mut self, r: u8, g: u8, b: u8) -> &mut Self {
         let bytes = build_rgb_bk_col(r, g, b);
         self.push(&bytes);
@@ -1602,6 +1641,114 @@ impl PictBuilder {
         write_u16(&mut self.bytes, OP_OP_END_PIC);
         self.bytes
     }
+}
+
+// ---------------------------------------------------------------------------
+// PictV1Builder: assemble a complete v1 stream.
+// ---------------------------------------------------------------------------
+
+/// Builder that assembles a complete **PICT v1** byte stream from the
+/// same opcode chunks as [`PictBuilder`] (round 401).
+///
+/// Version 1 pictures (Inside Macintosh: Imaging With QuickDraw §A-3
+/// Table A-3) use **1-byte opcodes** with **no word alignment**, a
+/// plain 10-byte picture-record header (no launch stub, no v2
+/// `headerOp` stanza), the `$11 $01` version stanza, and a 1-byte
+/// `$FF` `OpEndPic`. Table A-3 is numbering-compatible with the v2
+/// table for every opcode it defines — the payload layouts are
+/// byte-identical and the v2 opcode word is simply `0x00` followed by
+/// the v1 opcode byte. [`PictV1Builder::push`] exploits that: it
+/// accepts any chunk produced by the `build_*` helpers whose opcode
+/// exists in Table A-3 and re-emits it with the high `0x00` byte
+/// stripped.
+///
+/// Colour-QuickDraw-only opcodes (`RGBFgCol $001A`, pix patterns,
+/// `DirectBits*` …) are **not** legal in a v1 stream; `push` rejects
+/// any chunk whose opcode byte is not defined by Table A-3. For v1
+/// colour selection use the classic colour codes
+/// ([`build_fg_color_code`] / [`build_bk_color_code`]).
+///
+/// `finish` records the picture size in the `picSize` word when it
+/// fits (Table A-3: *"Version 1 pictures are limited to 32 KB"*;
+/// oversize streams keep the conventional `0` placeholder).
+pub struct PictV1Builder {
+    bytes: Vec<u8>,
+}
+
+impl PictV1Builder {
+    /// Start a new v1 stream with the given `picFrame`.
+    pub fn new(top: i16, left: i16, bottom: i16, right: i16) -> Self {
+        let mut bytes = Vec::with_capacity(64);
+        // picSize (patched by `finish`) + picFrame.
+        write_u16(&mut bytes, 0);
+        write_i16(&mut bytes, top);
+        write_i16(&mut bytes, left);
+        write_i16(&mut bytes, bottom);
+        write_i16(&mut bytes, right);
+        // v1 version stanza: opcode $11, version $01.
+        bytes.push(0x11);
+        bytes.push(0x01);
+        Self { bytes }
+    }
+
+    /// Append a `build_*` opcode chunk, converting it from the v2
+    /// two-byte-opcode form to the v1 one-byte form.
+    ///
+    /// Returns [`PictError::InvalidData`] when the chunk is shorter
+    /// than an opcode word, when its high opcode byte is non-zero, or
+    /// when the opcode is not defined for version 1 pictures by §A-3
+    /// Table A-3 (the version-1 walker would misparse everything after
+    /// an undefined opcode, so refusing at build time is the safe
+    /// contract).
+    pub fn push(&mut self, v2_opcode_bytes: &[u8]) -> Result<&mut Self> {
+        if v2_opcode_bytes.len() < 2 {
+            return Err(PictError::invalid(
+                "v1 push needs at least the 2-byte opcode word",
+            ));
+        }
+        let opcode = u16::from_be_bytes([v2_opcode_bytes[0], v2_opcode_bytes[1]]);
+        if !v1_defines_opcode(opcode) {
+            return Err(PictError::invalid(format!(
+                "opcode 0x{opcode:04X} is not defined for version 1 pictures (§A-3 Table A-3)"
+            )));
+        }
+        self.bytes.push(v2_opcode_bytes[1]);
+        self.bytes.extend_from_slice(&v2_opcode_bytes[2..]);
+        Ok(self)
+    }
+
+    /// Terminate with the 1-byte `$FF` `OpEndPic` and return the
+    /// stream, patching `picSize` when the record fits its 16-bit
+    /// field.
+    pub fn finish(mut self) -> Vec<u8> {
+        self.bytes.push(0xFF);
+        if let Ok(size) = u16::try_from(self.bytes.len()) {
+            self.bytes[0..2].copy_from_slice(&size.to_be_bytes());
+        }
+        self.bytes
+    }
+}
+
+/// Whether §A-3 Table A-3 defines `opcode` for version 1 pictures.
+///
+/// Everything in Table A-3 except the raster opcodes (`$90`/`$91`/
+/// `$98`/`$99` — those carry BitMap payloads the `build_*` helpers in
+/// this module don't produce; use `encode_pict_v1*` for v1 rasters)
+/// and the `$11` version stanza (emitted by [`PictV1Builder::new`]).
+fn v1_defines_opcode(opcode: u16) -> bool {
+    matches!(
+        opcode,
+        0x0000..=0x0010            // NOP..TxRatio (state + patterns)
+        | 0x0020..=0x0023          // Line family
+        | 0x0028..=0x002B          // Text family
+        | 0x0030..=0x0034 | 0x0038..=0x003C // Rect verbs + same-rect
+        | 0x0040..=0x0044 | 0x0048..=0x004C // RRect verbs + same-rrect
+        | 0x0050..=0x0054 | 0x0058..=0x005C // Oval verbs + same-oval
+        | 0x0060..=0x0064 | 0x0068..=0x006C // Arc verbs + same-arc
+        | 0x0070..=0x0074          // Poly verbs
+        | 0x0080..=0x0084          // Rgn verbs
+        | 0x00A0..=0x00A1 // Comments
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -407,7 +407,9 @@ fn probe_v1_text_state_opcodes_walked_past_cleanly() {
 }
 
 #[test]
-fn probe_v1_long_text_increments_drawing_count() {
+fn probe_v1_long_text_increments_text_count() {
+    // Round 401: v1 text opcodes count into `text_count`, matching the
+    // v2 walker's classification (version-independent probe contract).
     let mut out = v1_header();
     put_u8(&mut out, 0x28);
     put_i16(&mut out, 10);
@@ -417,11 +419,13 @@ fn probe_v1_long_text_increments_drawing_count() {
     close_pict(&mut out);
     let p = probe_pict(&out).expect("probe should walk v1 LongText");
     assert_eq!(p.termination, ProbeTermination::EndPic);
-    assert_eq!(p.drawing_count, 1);
+    assert_eq!(p.text_count, 1);
+    assert_eq!(p.drawing_count, 0);
 }
 
 #[test]
-fn probe_v1_dhdv_text_increments_drawing_count() {
+fn probe_v1_dhdv_text_increments_text_count() {
+    // Round 401: see probe_v1_long_text_increments_text_count.
     let mut out = v1_header();
     put_u8(&mut out, 0x2B);
     put_u8(&mut out, 3);
@@ -430,7 +434,8 @@ fn probe_v1_dhdv_text_increments_drawing_count() {
     out.extend_from_slice(b"abcd");
     close_pict(&mut out);
     let p = probe_pict(&out).expect("probe should walk v1 DHDVText");
-    assert_eq!(p.drawing_count, 1);
+    assert_eq!(p.text_count, 1);
+    assert_eq!(p.drawing_count, 0);
 }
 
 #[test]

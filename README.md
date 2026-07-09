@@ -101,6 +101,7 @@ their own inverse. Structured text / pen-mode / highlight state opcodes
 | `encode_pict_indexed_*` (`bits_rect` / `pack_bits_rect` + `*_rgn`) | indexed 1/2/4/8-bpp PixMap with embedded ColorTable |
 | `encode_pict_v2_with_clip` | v2 with a `ClipRgn` opcode before pixel data |
 | `ops::PictBuilder` | drawing-command synth (lines incl. `ShortLine*` compact forms / shapes incl. the same-shape replay verbs / regions / clip / `Origin` / patterns / comments / raster / text — `LongText` + `DH/DV/DHDVText`), chainable |
+| `ops::PictV1Builder` | the same opcode chunks assembled as a **v1** stream (1-byte opcodes, `$11 $01` stanza, `picSize` recorded); rejects Color-QuickDraw-only opcodes at build time |
 
 Every v2 emit path writes a canonical extended-v2 header
 (`version=-2`, `hRes=vRes=72.0` dpi, `optimal_source_rect = picFrame`);
