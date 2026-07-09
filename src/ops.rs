@@ -371,9 +371,53 @@ pub fn build_rgn_inverted_op(
     bbox_right: i16,
     scanlines: &[(i16, &[i16])],
 ) -> Result<Vec<u8>> {
+    build_region_bearing_op(
+        0x0080 | verb.nibble(),
+        bbox_top,
+        bbox_left,
+        bbox_bottom,
+        bbox_right,
+        scanlines,
+    )
+}
+
+/// Build a `ClipRgn` (`$0001`) opcode carrying an arbitrary
+/// inversion-encoded region (round 401) — the non-rectangular
+/// counterpart of [`crate::encoder::build_clip_rgn_rect`]. Subsequent
+/// drawing is masked to the region until the next `ClipRgn` opcode.
+/// Same `(y, [x…])` inversion-point encoding, ordering rules and
+/// `0x7FFF` terminators as [`build_rgn_inverted_op`].
+pub fn build_clip_rgn(
+    bbox_top: i16,
+    bbox_left: i16,
+    bbox_bottom: i16,
+    bbox_right: i16,
+    scanlines: &[(i16, &[i16])],
+) -> Result<Vec<u8>> {
+    build_region_bearing_op(
+        OP_CLIP_RGN,
+        bbox_top,
+        bbox_left,
+        bbox_bottom,
+        bbox_right,
+        scanlines,
+    )
+}
+
+/// Shared emit for every opcode whose payload is a QuickDraw `Rgn`
+/// record (`rgnSize`, bbox, inversion-point scanlines): the region
+/// verb family (`0x0080..=0x0084`) and `ClipRgn` (`$0001`).
+fn build_region_bearing_op(
+    opcode: u16,
+    bbox_top: i16,
+    bbox_left: i16,
+    bbox_bottom: i16,
+    bbox_right: i16,
+    scanlines: &[(i16, &[i16])],
+) -> Result<Vec<u8>> {
     if bbox_bottom <= bbox_top || bbox_right <= bbox_left {
         return Err(PictError::invalid(format!(
-            "build_rgn_inverted_op: degenerate bbox ({bbox_top},{bbox_left})→({bbox_bottom},{bbox_right})"
+            "region-bearing opcode: degenerate bbox ({bbox_top},{bbox_left})→({bbox_bottom},{bbox_right})"
         )));
     }
 
@@ -382,13 +426,13 @@ pub fn build_rgn_inverted_op(
     for (y, xs) in scanlines {
         if *y < bbox_top || *y >= bbox_bottom {
             return Err(PictError::invalid(format!(
-                "build_rgn_inverted_op: y={y} out of bbox [{bbox_top}, {bbox_bottom})"
+                "region-bearing opcode: y={y} out of bbox [{bbox_top}, {bbox_bottom})"
             )));
         }
         if let Some(p) = prev_y {
             if *y <= p {
                 return Err(PictError::invalid(format!(
-                    "build_rgn_inverted_op: scanlines not strictly ascending: {p} ≥ {y}"
+                    "region-bearing opcode: scanlines not strictly ascending: {p} ≥ {y}"
                 )));
             }
         }
@@ -397,13 +441,13 @@ pub fn build_rgn_inverted_op(
         for x in *xs {
             if *x < bbox_left || *x > bbox_right {
                 return Err(PictError::invalid(format!(
-                    "build_rgn_inverted_op: x={x} out of bbox [{bbox_left}, {bbox_right}]"
+                    "region-bearing opcode: x={x} out of bbox [{bbox_left}, {bbox_right}]"
                 )));
             }
             if let Some(p) = prev_x {
                 if *x <= p {
                     return Err(PictError::invalid(format!(
-                        "build_rgn_inverted_op: x's not strictly ascending: {p} ≥ {x}"
+                        "region-bearing opcode: x's not strictly ascending: {p} ≥ {x}"
                     )));
                 }
             }
@@ -429,7 +473,7 @@ pub fn build_rgn_inverted_op(
     }
 
     let mut buf = Vec::with_capacity(2 + rgn_size);
-    write_u16(&mut buf, 0x0080 | verb.nibble());
+    write_u16(&mut buf, opcode);
     write_u16(&mut buf, rgn_size as u16);
     write_i16(&mut buf, bbox_top);
     write_i16(&mut buf, bbox_left);
@@ -1106,6 +1150,23 @@ impl PictBuilder {
         let bytes = build_clip_rgn_rect(top, left, bottom, right);
         self.push(&bytes);
         self
+    }
+
+    /// Push a `ClipRgn` opcode (`$0001`) carrying an arbitrary
+    /// inversion-encoded clipping region — the non-rectangular
+    /// counterpart of [`clip_rect`](Self::clip_rect). See
+    /// [`build_clip_rgn`] for the `(y, [x…])` encoding rules.
+    pub fn clip_region(
+        &mut self,
+        bbox_top: i16,
+        bbox_left: i16,
+        bbox_bottom: i16,
+        bbox_right: i16,
+        scanlines: &[(i16, &[i16])],
+    ) -> Result<&mut Self> {
+        let bytes = build_clip_rgn(bbox_top, bbox_left, bbox_bottom, bbox_right, scanlines)?;
+        self.push(&bytes);
+        Ok(self)
     }
 
     /// Push a rectangle opcode with `verb`.

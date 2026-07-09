@@ -13,17 +13,23 @@
 //! ([`raster::Canvas`]). DirectBitsRect packTypes 0/1 (uncompressed),
 //! 2 (3-byte packed RGB), 3 (16-bit u16-PackBits) and 4 (component-
 //! separated PackBits) all decode. PackBitsRgn / DirectBitsRgn region
-//! variants are honoured for the embedded raster (clip-mask use is a
-//! future round).
+//! variants apply their `maskRgn` as a per-blit clip.
 //!
 //! v1 PICTs (8-bit opcodes) parse the same drawing-state machine and
 //! a smaller raster opcode set (`BitsRect 0x90`, `BitsRgn 0x91`,
-//! `PackBitsRect 0x98`, `PackBitsRgn 0x99`).
+//! `PackBitsRect 0x98`, `PackBitsRgn 0x99`). The emit side mirrors
+//! both framings: [`ops::PictBuilder`] (v2) and [`ops::PictV1Builder`]
+//! (v1) assemble streams from the same `build_*` opcode chunks.
 //!
 //! `CompressedQuickTime` (`0x8200`) and `UncompressedQuickTime`
-//! (`0x8201`) opcodes are *parsed* (length-prefixed payload skipped
-//! cleanly) so they don't wedge a surrounding-PICT decode, but the
-//! embedded image (typically JPEG) is not yet decoded.
+//! (`0x8201`) payloads are captured verbatim into
+//! [`PictImage::quicktime`] (round 401) — the bytes are private to
+//! QuickTime per §A-3, so the embedded image (typically JPEG) is left
+//! to the consumer's decoder.
+//!
+//! Decode-side allocations sized from attacker-controlled fields are
+//! bounded by [`MAX_RASTER_BYTES`] (round 401 hostile-input
+//! hardening); the `hostile_round401` suite fuzzes the walker in CI.
 //!
 //! Text glyph opcodes (`LongText` / `DH/DV/DHDVText`) are **rasterised**
 //! (round 352): the glyph bytes are drawn through the crate's built-in
@@ -82,17 +88,18 @@ pub use error::{PictError, Result};
 pub use header::{Fixed, PictHeader};
 pub use image::{PictComment, PictImage, PictPixelFormat, PictQuickTime};
 pub use ops::{
-    build_arc_op, build_bk_color_code, build_bk_pat, build_ch_extra, build_compressed_quicktime,
-    build_def_hilite, build_dh_text, build_dhdv_text, build_dv_text, build_fg_color_code,
-    build_fill_pat, build_font_name, build_glyph_state, build_hilite_color, build_hilite_mode,
-    build_line, build_line_from, build_line_justify, build_long_comment, build_long_comment_v1,
-    build_long_text, build_op_color, build_origin, build_oval_op, build_oval_size,
-    build_pn_loc_h_frac, build_pn_mode, build_pn_pat, build_pn_size, build_poly_op, build_rect_op,
-    build_rgb_bk_col, build_rgb_fg_col, build_rgn_inverted_op, build_rgn_rect_op,
-    build_round_rect_op, build_same_arc_op, build_same_oval_op, build_same_rect_op,
-    build_same_round_rect_op, build_short_comment, build_short_comment_v1, build_short_line,
-    build_short_line_from, build_sp_extra, build_tx_face, build_tx_font, build_tx_mode,
-    build_tx_ratio, build_tx_size, build_uncompressed_quicktime, PictBuilder, PictV1Builder, Verb,
+    build_arc_op, build_bk_color_code, build_bk_pat, build_ch_extra, build_clip_rgn,
+    build_compressed_quicktime, build_def_hilite, build_dh_text, build_dhdv_text, build_dv_text,
+    build_fg_color_code, build_fill_pat, build_font_name, build_glyph_state, build_hilite_color,
+    build_hilite_mode, build_line, build_line_from, build_line_justify, build_long_comment,
+    build_long_comment_v1, build_long_text, build_op_color, build_origin, build_oval_op,
+    build_oval_size, build_pn_loc_h_frac, build_pn_mode, build_pn_pat, build_pn_size,
+    build_poly_op, build_rect_op, build_rgb_bk_col, build_rgb_fg_col, build_rgn_inverted_op,
+    build_rgn_rect_op, build_round_rect_op, build_same_arc_op, build_same_oval_op,
+    build_same_rect_op, build_same_round_rect_op, build_short_comment, build_short_comment_v1,
+    build_short_line, build_short_line_from, build_sp_extra, build_tx_face, build_tx_font,
+    build_tx_mode, build_tx_ratio, build_tx_size, build_uncompressed_quicktime, PictBuilder,
+    PictV1Builder, Verb,
 };
 pub use probe::{probe_pict, PictProbe, ProbeRect, ProbeTermination, ProbeVersion};
 pub use raster::{blend_arith, blend_source, ArithMode, PatternMode, SourceMode, HILITE_MODE};

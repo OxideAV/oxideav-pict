@@ -213,3 +213,40 @@ fn clip_rect_masks_subsequent_paint() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Non-rectangular ClipRgn via the builder: clipping a full-canvas paint
+// to a region equals painting that region directly.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clip_region_masks_like_the_region_verb() {
+    use oxideav_pict::build_rgn_inverted_op;
+    // A two-step "staircase" region: inversion scanlines at y = 0 and
+    // y = 4. Whatever span set the crate's inversion decoder derives,
+    // the pin is the equality below — the SAME region bytes must mask
+    // a full-canvas paint exactly like the Paint region verb.
+    let bbox = (0i16, 0i16, 8i16, 16i16);
+    let scanlines: &[(i16, &[i16])] = &[(0, &[0, 8]), (4, &[8, 16])];
+
+    let mut clipped = PictBuilder::new(0, 0, 16, 8);
+    clipped
+        .clip_region(bbox.0, bbox.1, bbox.2, bbox.3, scanlines)
+        .unwrap();
+    clipped.rect(Verb::Paint, 0, 0, 8, 16);
+
+    let mut direct = PictBuilder::new(0, 0, 16, 8);
+    direct.push(
+        &build_rgn_inverted_op(Verb::Paint, bbox.0, bbox.1, bbox.2, bbox.3, scanlines).unwrap(),
+    );
+
+    let i1 = parse_pict(&clipped.finish()).unwrap();
+    let i2 = parse_pict(&direct.finish()).unwrap();
+    assert_eq!(
+        i1.data, i2.data,
+        "clip_region + full paint must equal the Paint region verb"
+    );
+    // Non-degenerate: some but not all of the 16 × 8 canvas is inked.
+    let ink = ink_count(&i1);
+    assert!(ink > 0 && ink < 16 * 8, "ink = {ink}");
+}

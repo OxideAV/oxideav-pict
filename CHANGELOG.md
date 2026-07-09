@@ -58,6 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **pixel-identically** through both builders, plus classic-colour
   inking, `picSize` patching, and build-time rejection.
 
+- round 401: **Arbitrary-region `ClipRgn` emission — `build_clip_rgn`
+  + `PictBuilder::clip_region`.** The decoder has honoured
+  non-rectangular clip regions since round 42, but the emit surface
+  only offered the rectangular `build_clip_rgn_rect`. The region-verb
+  inversion-scanline assembler is factored into a shared
+  `build_region_bearing_op` so `ClipRgn $0001` and the `0x0080..0x0084`
+  verbs emit identical `Rgn` records; the parity test pins that
+  clipping a full-canvas paint to a staircase region renders exactly
+  like painting the region directly. Crate-level docs refreshed (the
+  "clip-mask use is a future round" / "QuickTime not yet decoded"
+  status notes were stale).
+
 - round 401: **Table-A-3-conformant v1 raster encoders —
   `encode_pict_v1_bits_rect` / `encode_pict_v1_pack_bits_rect`.**
   `encode_pict_v1` emits a v2-style `DirectBitsRect $9A` inside a v1
