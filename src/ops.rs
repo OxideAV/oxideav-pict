@@ -942,6 +942,41 @@ pub fn build_long_comment_v1(kind: u16, data: &[u8]) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// Build a `CompressedQuickTime` (`$8200`) opcode wrapping an opaque
+/// embedded-image payload per Inside Macintosh: Imaging With QuickDraw
+/// §A-3 Table A-2: `Data length (Long)` followed by `data length`
+/// bytes *private to QuickTime* (total additional data =
+/// `4 + data length`; the length word excludes itself).
+///
+/// The bytes are emitted verbatim — their internal structure belongs
+/// to Inside Macintosh: QuickTime, so composing a valid embedded image
+/// stream is the caller's job. Returns [`PictError::InvalidData`] when
+/// `data.len()` overflows the 32-bit length field.
+pub fn build_compressed_quicktime(data: &[u8]) -> Result<Vec<u8>> {
+    build_quicktime_op(OP_COMPRESSED_QUICKTIME, data)
+}
+
+/// Build an `UncompressedQuickTime` (`$8201`) opcode — the
+/// uncompressed counterpart of [`build_compressed_quicktime`], same
+/// `Data length (Long)` + opaque-bytes layout.
+pub fn build_uncompressed_quicktime(data: &[u8]) -> Result<Vec<u8>> {
+    build_quicktime_op(OP_UNCOMPRESSED_QUICKTIME, data)
+}
+
+fn build_quicktime_op(opcode: u16, data: &[u8]) -> Result<Vec<u8>> {
+    let data_length: u32 = data.len().try_into().map_err(|_| {
+        PictError::invalid(format!(
+            "QuickTime payload of {} bytes exceeds the u32 data-length field",
+            data.len()
+        ))
+    })?;
+    let mut buf = Vec::with_capacity(2 + 4 + data.len());
+    write_u16(&mut buf, opcode);
+    buf.extend_from_slice(&data_length.to_be_bytes());
+    buf.extend_from_slice(data);
+    Ok(buf)
+}
+
 // ---------------------------------------------------------------------------
 // PictBuilder: assemble a complete v2 stream.
 // ---------------------------------------------------------------------------
@@ -1445,6 +1480,24 @@ impl PictBuilder {
     /// the 1-byte `count` field (255 bytes).
     pub fn dhdv_text(&mut self, dh: u8, dv: u8, text: &[u8]) -> Result<&mut Self> {
         let bytes = build_dhdv_text(dh, dv, text)?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
+    /// Push a `CompressedQuickTime` opcode (`$8200`) wrapping an
+    /// opaque embedded-image payload (bytes private to QuickTime per
+    /// §A-3). Errors when `data` exceeds the 32-bit length field.
+    pub fn compressed_quicktime(&mut self, data: &[u8]) -> Result<&mut Self> {
+        let bytes = build_compressed_quicktime(data)?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
+    /// Push an `UncompressedQuickTime` opcode (`$8201`) wrapping an
+    /// opaque embedded-image payload. Errors when `data` exceeds the
+    /// 32-bit length field.
+    pub fn uncompressed_quicktime(&mut self, data: &[u8]) -> Result<&mut Self> {
+        let bytes = build_uncompressed_quicktime(data)?;
         self.push(&bytes);
         Ok(self)
     }

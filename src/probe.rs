@@ -706,14 +706,17 @@ fn probe_v2_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
             Ok(OpStep::Continue)
         }
         OP_COMPRESSED_QUICKTIME => {
-            let payload_size = r.read_u32()? as usize;
-            r.skip(payload_size.saturating_sub(4))?;
+            // §A-3 Table A-2: `Data length (Long)` then `data length`
+            // bytes — the length word excludes itself (round 401 fix,
+            // mirroring the decoder arm).
+            let data_length = r.read_u32()? as usize;
+            r.skip(data_length)?;
             p.compressed_quicktime_count += 1;
             Ok(OpStep::Continue)
         }
         OP_UNCOMPRESSED_QUICKTIME => {
-            let payload_size = r.read_u32()? as usize;
-            r.skip(payload_size.saturating_sub(4))?;
+            let data_length = r.read_u32()? as usize;
+            r.skip(data_length)?;
             p.uncompressed_quicktime_count += 1;
             Ok(OpStep::Continue)
         }

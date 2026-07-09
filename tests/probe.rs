@@ -226,10 +226,10 @@ fn probe_counts_compressed_quicktime() {
     // CompressedQuickTime (0x8200) + 4-byte payload size + dummy payload.
     let mut body = Vec::new();
     body.extend_from_slice(&0x8200u16.to_be_bytes());
-    let payload_size: u32 = 16;
-    body.extend_from_slice(&payload_size.to_be_bytes());
-    // The 4-byte size word itself is NOT included in payload_size, so
-    // we need exactly payload_size - 4 more dummy bytes.
+    // §A-3 Table A-2: the Long is the DATA length, excluding itself
+    // (round 401 conformance fix), so 12 announces 12 payload bytes.
+    let data_length: u32 = 12;
+    body.extend_from_slice(&data_length.to_be_bytes());
     body.extend_from_slice(&[0xAAu8; 12]);
     let pict = v2_with_body(4, 4, &body);
     let p = probe_pict(&pict).unwrap();

@@ -58,6 +58,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **pixel-identically** through both builders, plus classic-colour
   inking, `picSize` patching, and build-time rejection.
 
+- round 401: **QuickTime opcode payloads are captured, not
+  discarded.** `CompressedQuickTime $8200` / `UncompressedQuickTime
+  $8201` payloads (bytes *private to QuickTime* per §A-3 Table A-2)
+  now land verbatim in the new `PictImage::quicktime` field as
+  [`PictQuickTime`] records `{ compressed, data }`, in stream order —
+  a consumer wanting the embedded image (typically JPEG) hands `data`
+  to the matching decoder. New `build_compressed_quicktime` /
+  `build_uncompressed_quicktime` + `PictBuilder` methods close the
+  emission gap. `synth_v2_round401_quicktime` pins the wire layout,
+  a verbatim two-payload round-trip (odd-length payload exercising the
+  word-alignment pad), and truncated-payload handling (decode errors;
+  probe reports `ProbeTermination::Invalid`).
+
 - round 401: **Hostile-input hardening + in-CI fuzz suite.** New
   `MAX_RASTER_BYTES` decode budget (256 MiB): every buffer sized from
   attacker-controlled length fields — the `picFrame` canvas (a 12-byte
@@ -88,6 +101,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1-bpp BitMaps get the equivalent `width × bpp ≤ rowBytes × 8` check
   plus a 1/2/4/8 `pixelSize` whitelist via the shared
   `checked_bitmap_dims` helper.
+
+- round 401: **`CompressedQuickTime` / `UncompressedQuickTime` length
+  word was read as self-inclusive, under-walking conforming streams by
+  4 bytes.** §A-3 Table A-2 gives the total additional data as
+  `4 + data length` — the `Data length (Long)` excludes itself. Both
+  the decoder and probe skipped `data length − 4` bytes, so a
+  spec-conforming stream desynced the walker right after a QuickTime
+  opcode. The two tests pinning the self-inclusive convention are
+  rewritten to the §A-3 layout.
 
 - round 401: **v1 probe walker classified text opcodes as
   `drawing_count`.** The v2 walker counts `LongText` / `DH/DV/DHDVText`

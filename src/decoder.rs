@@ -899,24 +899,24 @@ fn dispatch_v2_opcode(
             blit_subimage_with_rgn(canvas, state, &img, &dst, rgn.as_ref());
             Ok(true)
         }
-        OP_COMPRESSED_QUICKTIME => {
-            // Embedded QuickTime image (typically JPEG). The opcode
-            // payload starts with a 4-byte total-payload size, then
-            // the QTM matte / mask records, then the actual ImageDesc
-            // + image data. Decoding the embedded JPEG would need
-            // mjpeg's `decode_jpeg` exposed publicly; for round 2 we
-            // parse the size + skip the payload so the surrounding
-            // PICT decode keeps going.
-            let payload_size = r.read_u32()? as usize;
-            // The 4 bytes we just read are NOT included in
-            // payload_size (they're the size word itself), so skip
-            // payload_size more bytes.
-            r.skip(payload_size.saturating_sub(4))?;
-            Ok(true)
-        }
-        OP_UNCOMPRESSED_QUICKTIME => {
-            let payload_size = r.read_u32()? as usize;
-            r.skip(payload_size.saturating_sub(4))?;
+        OP_COMPRESSED_QUICKTIME | OP_UNCOMPRESSED_QUICKTIME => {
+            // Embedded QuickTime image (typically JPEG). Per §A-3
+            // Table A-2 the payload is `Data length (Long)` followed
+            // by `data length` bytes that are *private to QuickTime*
+            // (total additional data = `4 + data length` — the length
+            // word excludes itself; round 401 fixes the previous
+            // self-inclusive reading, which under-walked conforming
+            // streams by 4 bytes). The bytes are captured verbatim
+            // into `state.quicktime` so a consumer can hand them to
+            // the matching image decoder; their internal structure is
+            // documented in Inside Macintosh: QuickTime, not here, so
+            // the walker treats them as opaque.
+            let data_length = r.read_u32()? as usize;
+            let data = r.read_bytes(data_length)?.to_vec();
+            state.quicktime.push(crate::image::PictQuickTime {
+                compressed: opcode == OP_COMPRESSED_QUICKTIME,
+                data,
+            });
             Ok(true)
         }
         _ => {
@@ -1870,6 +1870,7 @@ fn finalise_canvas(canvas: Canvas, state: &PictState) -> Result<PictImage> {
         pts: None,
         header: None,
         comments: state.comments.clone(),
+        quicktime: state.quicktime.clone(),
         text_state: state.text_state.clone(),
     })
 }

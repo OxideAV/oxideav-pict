@@ -317,10 +317,12 @@ fn directbits_packtype4_planar_packbits() {
 fn compressed_quicktime_skipped_then_paintrect() {
     // CompressedQuickTime opcode followed by PaintRect — verify the
     // walker doesn't wedge on the QT opcode and correctly resumes.
-    let qt_payload_size = 16u32; // 4-byte size + 12-byte dummy payload.
+    // §A-3 Table A-2: the Long is the DATA length, excluding itself
+    // (round 401 conformance fix) — 12 here for 12 payload bytes.
+    let qt_data_length = 12u32;
     let mut ops = Vec::new();
     ops.extend_from_slice(&0x8200u16.to_be_bytes());
-    ops.extend_from_slice(&qt_payload_size.to_be_bytes());
+    ops.extend_from_slice(&qt_data_length.to_be_bytes());
     ops.extend_from_slice(&[0u8; 12]);
     // Now PaintRect to prove the walker resumed.
     ops.extend_from_slice(&0x0031u16.to_be_bytes());

@@ -877,6 +877,11 @@ pub struct PictState {
     /// callers can recover annotation metadata that doesn't influence
     /// rasterisation.
     pub comments: Vec<crate::image::PictComment>,
+    /// Embedded QuickTime image payloads captured from the
+    /// `CompressedQuickTime $8200` / `UncompressedQuickTime $8201`
+    /// opcodes, in stream order (round 401). Surfaced on the final
+    /// [`crate::PictImage`].
+    pub quicktime: Vec<crate::image::PictQuickTime>,
     /// Tracked text / pen-mode / highlight state. Updated by the §A-3
     /// state opcodes (`TxFont`, `TxFace`, `TxMode`, `SpExtra`,
     /// `PnMode`, `TxSize`, `TxRatio`, `PnLocHFrac`, `ChExtra`,
@@ -908,6 +913,7 @@ impl Default for PictState {
             back_pix_pat: None,
             fill_pix_pat: None,
             comments: Vec::new(),
+            quicktime: Vec::new(),
             text_state: PictTextState::fresh_graf_port(),
         }
     }

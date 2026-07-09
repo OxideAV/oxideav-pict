@@ -75,6 +75,32 @@ impl PictComment {
     }
 }
 
+/// One embedded QuickTime image payload captured from the opcode
+/// stream (round 401).
+///
+/// Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 defines two
+/// QuickTime opcodes, each carrying `Data length (Long)` followed by
+/// `data length` bytes that are **private to QuickTime**:
+///
+/// * `CompressedQuickTime` (`$8200`) — a compressed embedded image
+///   (typically JPEG in late-1990s PICT files).
+/// * `UncompressedQuickTime` (`$8201`) — the uncompressed variant.
+///
+/// The payload's internal structure is documented in Inside Macintosh:
+/// QuickTime, not in the Imaging book, so the decoder captures the raw
+/// bytes verbatim and leaves interpretation to the consumer (e.g. a
+/// JPEG decoder fed from `data`). The drawing-state machine itself
+/// treats the opcode as opaque.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PictQuickTime {
+    /// `true` for `CompressedQuickTime` (`$8200`); `false` for
+    /// `UncompressedQuickTime` (`$8201`).
+    pub compressed: bool,
+    /// The raw payload bytes following the `Data length` Long, exactly
+    /// as stored.
+    pub data: Vec<u8>,
+}
+
 /// Pixel layout used by [`PictImage`].
 ///
 /// The decoder always normalises to [`PictPixelFormat::Rgba`]: 1-bit
@@ -128,6 +154,13 @@ pub struct PictImage {
     /// `$A1` for v1 share the same record layout via [`PictComment`].
     /// Empty for PICTs that emit no comment opcodes.
     pub comments: Vec<PictComment>,
+    /// Embedded QuickTime image payloads (`CompressedQuickTime $8200`
+    /// / `UncompressedQuickTime $8201`) captured during the opcode
+    /// walk, in stream order (round 401). The bytes are private to
+    /// QuickTime per §A-3 — a consumer wanting the embedded image
+    /// (typically JPEG) hands [`PictQuickTime::data`] to the matching
+    /// decoder. Empty for PICTs without QuickTime opcodes.
+    pub quicktime: Vec<PictQuickTime>,
     /// Final tracked text / pen-mode / highlight state as observed by
     /// the opcode walker.
     ///
