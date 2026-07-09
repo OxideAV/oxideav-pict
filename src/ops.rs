@@ -670,6 +670,91 @@ pub fn build_glyph_state(
     buf
 }
 
+/// Build a `LongText` (`$0028`) opcode per Inside Macintosh: Imaging
+/// With QuickDraw §A-3 Table A-2: `txLoc` (Point), `count` (0..255),
+/// then `count` glyph bytes.
+///
+/// `txLoc` establishes the absolute text-drawing baseline pen. The
+/// on-disk Point order is `(v, h)` — vertical first — while this
+/// function takes the crate-conventional `(h, v)` argument order,
+/// matching the decoder's `text_pen` tuple. Returns
+/// [`PictError::InvalidData`] when `text.len()` overflows the 1-byte
+/// `count` field (§A-3 caps a single text opcode at 255 glyph bytes;
+/// longer runs must split across multiple opcodes, e.g. continuing
+/// with [`build_dh_text`]).
+pub fn build_long_text(h: i16, v: i16, text: &[u8]) -> Result<Vec<u8>> {
+    let count = text_count(text, "LongText")?;
+    let mut buf = Vec::with_capacity(2 + 5 + text.len());
+    write_u16(&mut buf, OP_LONG_TEXT);
+    write_i16(&mut buf, v);
+    write_i16(&mut buf, h);
+    buf.push(count);
+    buf.extend_from_slice(text);
+    Ok(buf)
+}
+
+/// Build a `DHText` (`$0029`) opcode per §A-3 Table A-2: `dh`
+/// (0..255), `count` (0..255), then `count` glyph bytes.
+///
+/// Advances the running text pen rightward by `dh` relative to the
+/// position the previous text opcode left (with no prior `LongText`
+/// the pen advances from the graphics origin). Returns
+/// [`PictError::InvalidData`] on a text run longer than 255 bytes.
+pub fn build_dh_text(dh: u8, text: &[u8]) -> Result<Vec<u8>> {
+    let count = text_count(text, "DHText")?;
+    let mut buf = Vec::with_capacity(2 + 2 + text.len());
+    write_u16(&mut buf, OP_DH_TEXT);
+    buf.push(dh);
+    buf.push(count);
+    buf.extend_from_slice(text);
+    Ok(buf)
+}
+
+/// Build a `DVText` (`$002A`) opcode per §A-3 Table A-2: `dv`
+/// (0..255), `count` (0..255), then `count` glyph bytes.
+///
+/// Advances the running text pen downward by `dv` relative to the
+/// position the previous text opcode left. Returns
+/// [`PictError::InvalidData`] on a text run longer than 255 bytes.
+pub fn build_dv_text(dv: u8, text: &[u8]) -> Result<Vec<u8>> {
+    let count = text_count(text, "DVText")?;
+    let mut buf = Vec::with_capacity(2 + 2 + text.len());
+    write_u16(&mut buf, OP_DV_TEXT);
+    buf.push(dv);
+    buf.push(count);
+    buf.extend_from_slice(text);
+    Ok(buf)
+}
+
+/// Build a `DHDVText` (`$002B`) opcode per §A-3 Table A-2: `dh`
+/// (0..255), `dv` (0..255), `count` (0..255), then `count` glyph
+/// bytes.
+///
+/// Advances the running text pen by both deltas relative to the
+/// position the previous text opcode left. Returns
+/// [`PictError::InvalidData`] on a text run longer than 255 bytes.
+pub fn build_dhdv_text(dh: u8, dv: u8, text: &[u8]) -> Result<Vec<u8>> {
+    let count = text_count(text, "DHDVText")?;
+    let mut buf = Vec::with_capacity(2 + 3 + text.len());
+    write_u16(&mut buf, OP_DHDV_TEXT);
+    buf.push(dh);
+    buf.push(dv);
+    buf.push(count);
+    buf.extend_from_slice(text);
+    Ok(buf)
+}
+
+/// Shared 1-byte `count` field validation for the four §A-3 text
+/// opcodes.
+fn text_count(text: &[u8], op_name: &str) -> Result<u8> {
+    text.len().try_into().map_err(|_| {
+        PictError::invalid(format!(
+            "{op_name} text run of {} bytes exceeds the u8 (255-byte) count field",
+            text.len()
+        ))
+    })
+}
+
 /// Build a v2 `ShortComment` (`$00A0`) opcode carrying a 2-byte `Kind`
 /// integer per Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2.
 ///
@@ -1117,6 +1202,43 @@ impl PictBuilder {
         );
         self.push(&bytes);
         self
+    }
+
+    /// Push a `LongText` opcode (`$0028`): draw `text` with the
+    /// baseline pen established at the absolute point `(h, v)` in
+    /// picture-frame coordinates. Errors when `text` exceeds the
+    /// 1-byte `count` field (255 bytes).
+    pub fn long_text(&mut self, h: i16, v: i16, text: &[u8]) -> Result<&mut Self> {
+        let bytes = build_long_text(h, v, text)?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
+    /// Push a `DHText` opcode (`$0029`): advance the running text pen
+    /// rightward by `dh`, then draw `text`. Errors when `text` exceeds
+    /// the 1-byte `count` field (255 bytes).
+    pub fn dh_text(&mut self, dh: u8, text: &[u8]) -> Result<&mut Self> {
+        let bytes = build_dh_text(dh, text)?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
+    /// Push a `DVText` opcode (`$002A`): advance the running text pen
+    /// downward by `dv`, then draw `text`. Errors when `text` exceeds
+    /// the 1-byte `count` field (255 bytes).
+    pub fn dv_text(&mut self, dv: u8, text: &[u8]) -> Result<&mut Self> {
+        let bytes = build_dv_text(dv, text)?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
+    /// Push a `DHDVText` opcode (`$002B`): advance the running text
+    /// pen by `(dh, dv)`, then draw `text`. Errors when `text` exceeds
+    /// the 1-byte `count` field (255 bytes).
+    pub fn dhdv_text(&mut self, dh: u8, dv: u8, text: &[u8]) -> Result<&mut Self> {
+        let bytes = build_dhdv_text(dh, dv, text)?;
+        self.push(&bytes);
+        Ok(self)
     }
 
     /// Push a `ShortComment` opcode (`$00A0`) carrying the

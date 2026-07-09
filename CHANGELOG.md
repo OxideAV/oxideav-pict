@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- round 401: **Text-opcode emission — `build_long_text` /
+  `build_dh_text` / `build_dv_text` / `build_dhdv_text` plus the
+  chainable `PictBuilder::long_text` / `dh_text` / `dv_text` /
+  `dhdv_text` methods.** The four §A-3 Table A-2 text opcodes
+  (`LongText $0028`, `DHText $0029`, `DVText $002A`, `DHDVText $002B`)
+  have been decodable and rasterised since round 352, but the `ops`
+  emit surface had no builders for them — synthetic text streams had to
+  be hand-rolled byte-by-byte. The builders pin the on-disk layout
+  (`txLoc` Point is `(v, h)` — vertical first — while the Rust argument
+  order stays the crate-conventional `(h, v)`) and enforce the 1-byte
+  `count` field (`PictError::InvalidData` past 255 text bytes). Eight
+  `parse_pict` / `probe_pict`-level round-trip tests in
+  `synth_v2_round401` pin the wire bytes, the h/v shift directions, the
+  `DHText(dh) == DHDVText(dh, 0)` / `DVText(dv) == DHDVText(0, dv)`
+  pixel equivalences, the chained pen walk against the font-metric
+  prediction, and word-alignment after odd-length text payloads.
+
 ### Fixed
 
 - round 372: **Indexed PixMap `ColorTable` is now resolved by each

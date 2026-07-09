@@ -100,7 +100,7 @@ their own inverse. Structured text / pen-mode / highlight state opcodes
 | `encode_pict_bits_rgn` / `encode_pict_pack_bits_rgn` | masked 1-bpp variants with rectangular clip region |
 | `encode_pict_indexed_*` (`bits_rect` / `pack_bits_rect` + `*_rgn`) | indexed 1/2/4/8-bpp PixMap with embedded ColorTable |
 | `encode_pict_v2_with_clip` | v2 with a `ClipRgn` opcode before pixel data |
-| `ops::PictBuilder` | drawing-command synth (lines / shapes / regions / patterns / comments / raster), chainable |
+| `ops::PictBuilder` | drawing-command synth (lines / shapes / regions / patterns / comments / raster / text — `LongText` + `DH/DV/DHDVText`), chainable |
 
 Every v2 emit path writes a canonical extended-v2 header
 (`version=-2`, `hRes=vRes=72.0` dpi, `optimal_source_rect = picFrame`);
