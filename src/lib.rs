@@ -84,11 +84,13 @@ pub use ops::{
     build_arc_op, build_bk_pat, build_ch_extra, build_def_hilite, build_dh_text, build_dhdv_text,
     build_dv_text, build_fill_pat, build_font_name, build_glyph_state, build_hilite_color,
     build_hilite_mode, build_line, build_line_from, build_line_justify, build_long_comment,
-    build_long_comment_v1, build_long_text, build_op_color, build_oval_op, build_oval_size,
-    build_pn_loc_h_frac, build_pn_mode, build_pn_pat, build_pn_size, build_poly_op, build_rect_op,
-    build_rgb_bk_col, build_rgb_fg_col, build_rgn_inverted_op, build_rgn_rect_op,
-    build_round_rect_op, build_short_comment, build_short_comment_v1, build_sp_extra,
-    build_tx_face, build_tx_font, build_tx_mode, build_tx_ratio, build_tx_size, PictBuilder, Verb,
+    build_long_comment_v1, build_long_text, build_op_color, build_origin, build_oval_op,
+    build_oval_size, build_pn_loc_h_frac, build_pn_mode, build_pn_pat, build_pn_size,
+    build_poly_op, build_rect_op, build_rgb_bk_col, build_rgb_fg_col, build_rgn_inverted_op,
+    build_rgn_rect_op, build_round_rect_op, build_same_arc_op, build_same_oval_op,
+    build_same_rect_op, build_same_round_rect_op, build_short_comment, build_short_comment_v1,
+    build_short_line, build_short_line_from, build_sp_extra, build_tx_face, build_tx_font,
+    build_tx_mode, build_tx_ratio, build_tx_size, PictBuilder, Verb,
 };
 pub use probe::{probe_pict, PictProbe, ProbeRect, ProbeTermination, ProbeVersion};
 pub use raster::{blend_arith, blend_source, ArithMode, PatternMode, SourceMode, HILITE_MODE};

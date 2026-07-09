@@ -26,7 +26,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pixel equivalences, the chained pen walk against the font-metric
   prediction, and word-alignment after odd-length text payloads.
 
+- round 401: **Encoder-parity sweep — every §A-3 opcode the walker
+  decodes into pixels can now be emitted.** New `build_short_line`
+  (`$0022`) / `build_short_line_from` (`$0023`) SignedByte line forms,
+  `build_origin` (`$000C`), and the four same-shape verb families
+  `build_same_rect_op` (`0x0038..0x003C`) / `build_same_round_rect_op`
+  (`0x0048..`) / `build_same_oval_op` (`0x0058..`) / `build_same_arc_op`
+  (`0x0068..`, fresh `startAngle`/`arcAngle` words over the shared
+  rect). `PictBuilder` gains the matching chainable methods plus the
+  previously-missing `line_from` and `clip_rect` (rectangular `ClipRgn
+  $0001`) wrappers. Ten tests in `synth_v2_round401_parity` pin the
+  wire bytes and the pixel-exact equivalence of each compact form
+  against its explicit-coordinate stream (ShortLine == Line, polyline
+  continuation, same-shape replay incl. the no-prior-shape no-op, clip
+  masking).
+
 ### Fixed
+
+- round 401: **`Origin` (`$000C` v2 / `$0C` v1) applied its delta with
+  the wrong sign.** Per the `SetOrigin` semantics (Inside Macintosh:
+  Imaging With QuickDraw §2 "Basic QuickDraw", book pages 2-23 f.), the
+  origin coordinates are the local coordinates assigned to the port
+  rectangle's upper-left corner — *increasing* them makes a shape drawn
+  at unchanged coordinates land closer to that corner (up / left). The
+  decoder subtracted the delta from the running origin, so shapes after
+  an `Origin` opcode moved down / right instead. Both the v1 and v2
+  arms now add the delta; `synth_v2_round401_parity` pins the
+  direction and the accumulation of successive `Origin` opcodes
+  against explicitly-shifted rects.
 
 - round 372: **Indexed PixMap `ColorTable` is now resolved by each
   `ColorSpec`'s `value` field (the pixel index it maps to), not by the

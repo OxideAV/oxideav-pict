@@ -32,9 +32,11 @@
 //! | 0x80   | region      |
 //!
 //! Same-as-last (`+0x08`) variants reuse the previously emitted shape
-//! geometry. We don't emit those — every drawing op carries explicit
-//! coordinates.
+//! geometry — see [`build_same_rect_op`] / [`build_same_round_rect_op`]
+//! / [`build_same_oval_op`] / [`build_same_arc_op`] (round 401). They
+//! save 8 bytes per repeat by carrying no rectangle.
 
+use crate::encoder::build_clip_rgn_rect;
 use crate::error::{PictError, Result};
 use crate::header::PictHeader;
 use crate::opcodes::*;
@@ -104,6 +106,51 @@ pub fn build_line_from(h1: i16, v1: i16) -> Vec<u8> {
     buf
 }
 
+/// Build a v2 `ShortLine` opcode (`$0022`) per Inside Macintosh:
+/// Imaging With QuickDraw §A-3 Table A-2: `pnLoc` (Point, stored
+/// `(v, h)`), then `dh` and `dv` as SignedBytes (−128..127). Moves the
+/// pen to `(h, v)` and draws to `(h + dh, v + dv)`, leaving the pen at
+/// the line's end — 4 bytes shorter than the equivalent `Line`.
+pub fn build_short_line(h: i16, v: i16, dh: i8, dv: i8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(8);
+    write_u16(&mut buf, OP_SHORT_LINE);
+    write_i16(&mut buf, v);
+    write_i16(&mut buf, h);
+    buf.push(dh as u8);
+    buf.push(dv as u8);
+    buf
+}
+
+/// Build a v2 `ShortLineFrom` opcode (`$0023`) per §A-3 Table A-2:
+/// `dh` and `dv` as SignedBytes (−128..127). Draws from the current
+/// pen to `pen + (dh, dv)`, leaving the pen at the line's end — the
+/// most compact polyline continuation (2 payload bytes).
+pub fn build_short_line_from(dh: i8, dv: i8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4);
+    write_u16(&mut buf, OP_SHORT_LINE_FROM);
+    buf.push(dh as u8);
+    buf.push(dv as u8);
+    buf
+}
+
+/// Build an `Origin` opcode (`$000C`) per §A-3 Table A-2: `dh`, `dv`
+/// (Integer each) — the delta applied to the picture's coordinate
+/// origin.
+///
+/// Per the `SetOrigin` discussion in Inside Macintosh: Imaging With
+/// QuickDraw §2 "Basic QuickDraw" (book pages 2-23 f.), *increasing*
+/// the origin coordinates makes subsequently drawn shapes land
+/// *up / left* on the canvas: the port's upper-left corner takes the
+/// new origin coordinates, so a shape at unchanged coordinates sits
+/// closer to (or past) that corner.
+pub fn build_origin(dh: i16, dv: i16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(6);
+    write_u16(&mut buf, OP_ORIGIN);
+    write_i16(&mut buf, dh);
+    write_i16(&mut buf, dv);
+    buf
+}
+
 /// Build a rect-family opcode for the chosen [`Verb`] over the rect
 /// `(top, left, bottom, right)` in picture-frame coords. Opcodes are
 /// `0x0030..=0x0034`.
@@ -161,6 +208,50 @@ pub fn build_arc_op(
     write_i16(&mut buf, left);
     write_i16(&mut buf, bottom);
     write_i16(&mut buf, right);
+    write_i16(&mut buf, start_angle);
+    write_i16(&mut buf, arc_angle);
+    buf
+}
+
+/// Build a same-rect opcode (`0x0038..=0x003C`) per Inside Macintosh:
+/// Imaging With QuickDraw §A-3 Table A-2: apply the chosen [`Verb`] to
+/// the rectangle carried by the **previous** rect-family opcode. No
+/// payload — the repeat saves the 8 rectangle bytes. A same-rect
+/// opcode with no prior rect-family opcode in the stream is a no-op on
+/// decode.
+pub fn build_same_rect_op(verb: Verb) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(2);
+    write_u16(&mut buf, 0x0038 | verb.nibble());
+    buf
+}
+
+/// Build a same-round-rect opcode (`0x0048..=0x004C`) per §A-3 Table
+/// A-2: apply the chosen [`Verb`] to the rectangle carried by the
+/// previous round-rect-family opcode. No payload; the corner radius is
+/// still the current `OvSize` state.
+pub fn build_same_round_rect_op(verb: Verb) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(2);
+    write_u16(&mut buf, 0x0048 | verb.nibble());
+    buf
+}
+
+/// Build a same-oval opcode (`0x0058..=0x005C`) per §A-3 Table A-2:
+/// apply the chosen [`Verb`] to the rectangle carried by the previous
+/// oval-family opcode. No payload.
+pub fn build_same_oval_op(verb: Verb) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(2);
+    write_u16(&mut buf, 0x0058 | verb.nibble());
+    buf
+}
+
+/// Build a same-arc opcode (`0x0068..=0x006C`) per §A-3 Table A-2:
+/// apply the chosen [`Verb`] over the enclosing rectangle carried by
+/// the previous arc-family opcode. Unlike the other same-shape ops it
+/// carries a 4-byte payload: fresh `startAngle` / `arcAngle` words, so
+/// a fan of wedges can share one rectangle.
+pub fn build_same_arc_op(verb: Verb, start_angle: i16, arc_angle: i16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(6);
+    write_u16(&mut buf, 0x0068 | verb.nibble());
     write_i16(&mut buf, start_angle);
     write_i16(&mut buf, arc_angle);
     buf
@@ -914,6 +1005,51 @@ impl PictBuilder {
         self
     }
 
+    /// Push a `LineFrom` opcode (`$0021`): draw from the current pen
+    /// to `(h1, v1)`, leaving the pen there.
+    pub fn line_from(&mut self, h1: i16, v1: i16) -> &mut Self {
+        let bytes = build_line_from(h1, v1);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `ShortLine` opcode (`$0022`): move the pen to `(h, v)`
+    /// and draw to `(h + dh, v + dv)` with SignedByte deltas.
+    pub fn short_line(&mut self, h: i16, v: i16, dh: i8, dv: i8) -> &mut Self {
+        let bytes = build_short_line(h, v, dh, dv);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `ShortLineFrom` opcode (`$0023`): draw from the current
+    /// pen to `pen + (dh, dv)` with SignedByte deltas — the most
+    /// compact polyline continuation.
+    pub fn short_line_from(&mut self, dh: i8, dv: i8) -> &mut Self {
+        let bytes = build_short_line_from(dh, dv);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push an `Origin` opcode (`$000C`): shift the picture's
+    /// coordinate origin by `(dh, dv)`. Per the `SetOrigin` semantics
+    /// (Inside Macintosh: Imaging With QuickDraw §2, book pages
+    /// 2-23 f.), positive deltas move subsequently drawn shapes
+    /// up / left on the canvas.
+    pub fn origin(&mut self, dh: i16, dv: i16) -> &mut Self {
+        let bytes = build_origin(dh, dv);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a `ClipRgn` opcode (`$0001`) carrying a rectangular
+    /// clipping region. Subsequent drawing is masked to the rectangle
+    /// until the next `ClipRgn` opcode.
+    pub fn clip_rect(&mut self, top: i16, left: i16, bottom: i16, right: i16) -> &mut Self {
+        let bytes = build_clip_rgn_rect(top, left, bottom, right);
+        self.push(&bytes);
+        self
+    }
+
     /// Push a rectangle opcode with `verb`.
     pub fn rect(&mut self, verb: Verb, top: i16, left: i16, bottom: i16, right: i16) -> &mut Self {
         let bytes = build_rect_op(verb, top, left, bottom, right);
@@ -955,6 +1091,39 @@ impl PictBuilder {
         arc_angle: i16,
     ) -> &mut Self {
         let bytes = build_arc_op(verb, top, left, bottom, right, start_angle, arc_angle);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a same-rect opcode (`0x0038..=0x003C`): apply `verb` to
+    /// the rectangle of the previous rect-family opcode (no payload).
+    pub fn same_rect(&mut self, verb: Verb) -> &mut Self {
+        let bytes = build_same_rect_op(verb);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a same-round-rect opcode (`0x0048..=0x004C`): apply `verb`
+    /// to the rectangle of the previous round-rect-family opcode.
+    pub fn same_round_rect(&mut self, verb: Verb) -> &mut Self {
+        let bytes = build_same_round_rect_op(verb);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a same-oval opcode (`0x0058..=0x005C`): apply `verb` to
+    /// the rectangle of the previous oval-family opcode.
+    pub fn same_oval(&mut self, verb: Verb) -> &mut Self {
+        let bytes = build_same_oval_op(verb);
+        self.push(&bytes);
+        self
+    }
+
+    /// Push a same-arc opcode (`0x0068..=0x006C`): apply `verb` over
+    /// the enclosing rectangle of the previous arc-family opcode, with
+    /// fresh `startAngle` / `arcAngle` words.
+    pub fn same_arc(&mut self, verb: Verb, start_angle: i16, arc_angle: i16) -> &mut Self {
+        let bytes = build_same_arc_op(verb, start_angle, arc_angle);
         self.push(&bytes);
         self
     }

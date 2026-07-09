@@ -415,14 +415,21 @@ fn dispatch_v2_opcode(
             Ok(true)
         }
         OP_ORIGIN => {
-            // Per Inside Macintosh, Origin shifts the coordinate
-            // system: subsequent draws at the same picture-frame
-            // coords land at a different spot. We track the running
-            // origin shift; the (dh, dv) in the opcode is added.
+            // Origin ($000C): dh, dv — the delta applied to the
+            // picture's coordinate origin. Per the SetOrigin semantics
+            // in Inside Macintosh: Imaging With QuickDraw §2 "Basic
+            // QuickDraw" (book pages 2-23 f.), the origin coordinates
+            // are the local coordinates assigned to the port
+            // rectangle's upper-left corner: *increasing* them means a
+            // shape drawn at unchanged coordinates lands closer to (or
+            // past) that corner, i.e. moves up / left on the canvas.
+            // `to_canvas` computes `x - state.origin.0`, so the delta
+            // is added to the running origin. (Round 401 fixes the
+            // inverted sign used through round 397.)
             let dh = r.read_i16()?;
             let dv = r.read_i16()?;
-            state.origin.0 -= dh as i32;
-            state.origin.1 -= dv as i32;
+            state.origin.0 += dh as i32;
+            state.origin.1 += dv as i32;
             Ok(true)
         }
         OP_PN_PAT => {
@@ -2953,10 +2960,14 @@ fn dispatch_v1_opcode(
             Ok(true)
         }
         0x0C => {
+            // Origin: same SetOrigin-delta semantics as the v2 arm —
+            // positive deltas move subsequent shapes up / left (Inside
+            // Macintosh: Imaging With QuickDraw §2, book pages 2-23 f.;
+            // round 401 sign fix).
             let dh = r.read_i16()?;
             let dv = r.read_i16()?;
-            state.origin.0 -= dh as i32;
-            state.origin.1 -= dv as i32;
+            state.origin.0 += dh as i32;
+            state.origin.1 += dv as i32;
             Ok(true)
         }
         0x0D => {
