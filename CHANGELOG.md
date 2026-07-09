@@ -58,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **pixel-identically** through both builders, plus classic-colour
   inking, `picSize` patching, and build-time rejection.
 
+- round 401: **criterion bench suite** (`benches/pict_bench.rs` +
+  `BENCHMARKS.md`): the DirectBitsRect raster path encode/decode at
+  all four PackTypes (256 × 256 ≈ 74–145 µs, ~0.45–0.9 Gpixel/s), a
+  400-opcode vector stream through the full rasteriser (~158 µs), and
+  the probe walker on both stream shapes (~1 µs — pinning probe's
+  ~150× "introspect before you pay decode cost" advantage).
+
 - round 401: **QuickTime opcode payloads are captured, not
   discarded.** `CompressedQuickTime $8200` / `UncompressedQuickTime
   $8201` payloads (bytes *private to QuickTime* per §A-3 Table A-2)

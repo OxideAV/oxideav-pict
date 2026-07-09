@@ -21,6 +21,15 @@ categories = ["multimedia::encoding", "multimedia::images"]
 # never references `oxideav-core`.
 oxideav-core = { version = "0.1", optional = true }
 
+[dev-dependencies]
+# Bench harness only — not a runtime dependency. `default-features =
+# false` keeps the tree lean (no rayon / plotters).
+criterion = { version = "0.5", default-features = false }
+
+[[bench]]
+name = "pict_bench"
+harness = false
+
 [features]
 default = ["registry"]
 
