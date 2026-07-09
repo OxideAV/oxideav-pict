@@ -136,6 +136,18 @@ assert_eq!(p.raster_count, 1);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+## Hostile-input hardening
+
+PICT length fields (`picFrame`, PixMap `bounds` / `rowBytes`, region /
+polygon sizes …) are attacker-controlled. Every decode-side buffer
+sized from them is checked against the [`MAX_RASTER_BYTES`] budget
+(256 MiB) with overflow-safe arithmetic before allocation, and raw
+pixel rows must physically fit their declared bounds width. The
+`hostile_round401` test suite drives `parse_pict` / `probe_pict`
+through every truncation prefix of an opcode-family corpus, seeded
+byte mutations, systematic length-field maxing, and hand-crafted
+giant-header records — the decoder returns `Err`, it never panics.
+
 ## Standalone vs registry-integrated
 
 The default `registry` Cargo feature pulls in `oxideav-core` and exposes

@@ -1029,7 +1029,7 @@ fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<bool> {
         }
         row_bytes = (rb_raw & 0x3FFF) as usize;
         let bounds = r.read_rect()?;
-        height = (bounds.2 - bounds.0).max(0) as usize;
+        height = (bounds.2 as i32 - bounds.0 as i32).max(0) as usize;
         let _pm_version = r.read_u16()?;
         pack_type = r.read_u16()?;
         let _pack_size = r.read_u32()?;
@@ -1058,7 +1058,7 @@ fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<bool> {
             indexed_pixmap = true;
             row_bytes = (rb_raw & 0x3FFF) as usize;
             let bounds = r.read_rect()?;
-            height = (bounds.2 - bounds.0).max(0) as usize;
+            height = (bounds.2 as i32 - bounds.0 as i32).max(0) as usize;
             let _pm_version = r.read_u16()?;
             pack_type = r.read_u16()?;
             let _pack_size = r.read_u32()?;
@@ -1087,7 +1087,7 @@ fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<bool> {
             // Legacy 1-bpp BitMap path.
             row_bytes = rb_raw as usize;
             let bounds = r.read_rect()?;
-            height = (bounds.2 - bounds.0).max(0) as usize;
+            height = (bounds.2 as i32 - bounds.0 as i32).max(0) as usize;
             pack_type = 0;
             pixel_size_for_indexed = 0;
         }
@@ -1192,7 +1192,7 @@ fn skip_pix_pat(r: &mut Reader<'_>) -> Result<()> {
             let rb_raw = r.read_u16()?;
             let row_bytes = (rb_raw & 0x3FFF) as usize;
             let bounds = r.read_rect()?;
-            let height = (bounds.2 - bounds.0).max(0) as usize;
+            let height = (bounds.2 as i32 - bounds.0 as i32).max(0) as usize;
             // pmVersion (2) + packType (2) + packSize (4) + hRes (4) +
             // vRes (4) + pixelType (2) + pixelSize (2) + cmpCount (2) +
             // cmpSize (2) + planeBytes (4) + pmTable (4) +

@@ -77,6 +77,36 @@ use crate::state::{
 /// Returns [`PictError::NoRaster`] if the opcode stream terminates
 /// (`OpEndPic`) or runs out of bytes without producing any drawing
 /// or raster output.
+/// Decode-allocation budget (round 401 hostile-input hardening).
+///
+/// Every buffer whose size is derived from attacker-controlled length
+/// fields (`picFrame`, PixMap `bounds` × `rowBytes`, …) is checked
+/// against this budget before allocation: 256 MiB, comfortably above
+/// any real QuickDraw-era picture (an 8192 × 8192 RGBA canvas) while
+/// keeping a hostile 12-byte header from demanding a multi-gigabyte
+/// allocation. Exceeding it returns [`PictError::InvalidData`].
+pub const MAX_RASTER_BYTES: usize = 1 << 28;
+
+/// Checked `rows × bytes_per_row` buffer sizing against
+/// [`MAX_RASTER_BYTES`]. `what` names the buffer in the error.
+fn checked_raster_len(rows: usize, bytes_per_row: usize, what: &str) -> Result<usize> {
+    match rows.checked_mul(bytes_per_row) {
+        Some(total) if total <= MAX_RASTER_BYTES => Ok(total),
+        _ => Err(PictError::invalid(format!(
+            "{what} of {rows} × {bytes_per_row} bytes exceeds the {MAX_RASTER_BYTES}-byte decode budget"
+        ))),
+    }
+}
+
+/// Width / height of an on-disk `(top, left, bottom, right)` rectangle,
+/// computed in i32 so the maximum i16 span (−32768..32767 = 65535)
+/// cannot overflow. Negative spans clamp to 0.
+fn rect_dims(bounds: (i16, i16, i16, i16)) -> (u32, u32) {
+    let w = (bounds.3 as i32 - bounds.1 as i32).max(0) as u32;
+    let h = (bounds.2 as i32 - bounds.0 as i32).max(0) as u32;
+    (w, h)
+}
+
 pub fn parse_pict(bytes: &[u8]) -> Result<PictImage> {
     let body_offset = detect_body_offset(bytes)?;
     let body = &bytes[body_offset..];
@@ -105,6 +135,9 @@ pub fn parse_pict(bytes: &[u8]) -> Result<PictImage> {
             )
         )));
     }
+    // Hostile-input hardening: a 12-byte header can claim a 65535 ×
+    // 65535 frame (~17 GB of RGBA canvas). Refuse before allocating.
+    checked_raster_len(height as usize, width as usize * 4, "picFrame canvas")?;
     let canvas = Canvas::new(width, height, Rgba::WHITE);
     let state = PictState {
         // Origin shifts so picFrame.top/left maps to canvas (0, 0).
@@ -1877,8 +1910,7 @@ fn decode_pack_bits_rect(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32)> {
     let dst_rect = r.read_rect()?;
     let mode = r.read_u16()?;
 
-    let width = (bounds.3 - bounds.1).max(0) as u32;
-    let height = (bounds.2 - bounds.0).max(0) as u32;
+    let (width, height) = checked_bitmap_dims(bounds, row_bytes, 1)?;
 
     let mut bitmap = vec![0u8; row_bytes * height as usize];
     if row_bytes < 8 {
@@ -1911,8 +1943,33 @@ fn decode_pack_bits_rect(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32)> {
     ))
 }
 
+/// Shared bounds / rowBytes validation for the BitMap / indexed-PixMap
+/// decode paths (round 401 hostile-input hardening). Returns the
+/// `(width, height)` of `bounds` after checking that
+///
+/// * a row physically fits its declared pixels
+///   (`width × bits_per_pixel ≤ row_bytes × 8`), and
+/// * both the packed buffer (`row_bytes × height`) and the expanded
+///   RGBA buffer (`width × height × 4`) fit the
+///   [`MAX_RASTER_BYTES`] decode budget.
+fn checked_bitmap_dims(
+    bounds: (i16, i16, i16, i16),
+    row_bytes: usize,
+    bits_per_pixel: usize,
+) -> Result<(u32, u32)> {
+    let (width, height) = rect_dims(bounds);
+    if (width as usize) * bits_per_pixel > row_bytes * 8 {
+        return Err(PictError::invalid(format!(
+            "bounds width {width} × {bits_per_pixel} bpp does not fit rowBytes {row_bytes}"
+        )));
+    }
+    checked_raster_len(height as usize, row_bytes, "pixel-data buffer")?;
+    checked_raster_len(height as usize, width as usize * 4, "RGBA buffer")?;
+    Ok((width, height))
+}
+
 fn expand_1bpp_to_rgba(bitmap: &[u8], width: u32, height: u32, row_bytes: usize) -> Vec<u8> {
-    let mut rgba = vec![0u8; (width * height * 4) as usize];
+    let mut rgba = vec![0u8; width as usize * height as usize * 4];
     for y in 0..height as usize {
         for x in 0..width as usize {
             let byte = bitmap[y * row_bytes + (x >> 3)];
@@ -1964,8 +2021,7 @@ fn decode_bits_rect_v2(
         None
     };
 
-    let width = (bounds.3 - bounds.1).max(0) as u32;
-    let height = (bounds.2 - bounds.0).max(0) as u32;
+    let (width, height) = checked_bitmap_dims(bounds, row_bytes, 1)?;
 
     let mut bitmap = vec![0u8; row_bytes * height as usize];
     for y in 0..height as usize {
@@ -2011,8 +2067,7 @@ fn decode_pack_bits_rgn(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32, Regio
     let mode = r.read_u16()?;
     let rgn = parse_region(r)?;
 
-    let width = (bounds.3 - bounds.1).max(0) as u32;
-    let height = (bounds.2 - bounds.0).max(0) as u32;
+    let (width, height) = checked_bitmap_dims(bounds, row_bytes, 1)?;
     let mut bitmap = vec![0u8; row_bytes * height as usize];
     if row_bytes < 8 {
         for y in 0..height as usize {
@@ -2132,8 +2187,12 @@ fn decode_indexed_pixmap_payload(
         None
     };
 
-    let width = (bounds.3 - bounds.1).max(0) as u32;
-    let height = (bounds.2 - bounds.0).max(0) as u32;
+    if !matches!(pixel_size, 1 | 2 | 4 | 8) {
+        return Err(PictError::unsupported(format!(
+            "indexed PixMap pixelSize {pixel_size} (expected 1/2/4/8)"
+        )));
+    }
+    let (width, height) = checked_bitmap_dims(bounds, row_bytes, pixel_size as usize)?;
 
     // PixData: raw rows when `rowBytes < 8` (§A-3 "PixData") or when the
     // caller is a `BitsRect` / `BitsRgn` (unpacked opcodes; `packed=false`).
@@ -2316,10 +2375,24 @@ fn read_pixmap_header(r: &mut Reader<'_>) -> Result<PixMapHeader> {
     let _pm_table = r.read_u32()?;
     let _pm_reserved = r.read_u32()?;
 
+    let (width, height) = rect_dims(bounds);
+    // Hostile-input hardening (round 401): the decode buffers
+    // (`width × height × 4` RGBA plus any packed intermediates) must
+    // fit the MAX_RASTER_BYTES budget. The per-row `rowBytes`-vs-width
+    // fit is checked in the raw decoders that index into a
+    // `rowBytes`-sized row — it can't live here because packType 2
+    // legitimately carries 3 bytes/pixel rows (the pad byte is
+    // dropped) while the raw 32-bit form carries 4.
+    checked_raster_len(
+        height as usize,
+        row_bytes.max(width as usize * 4),
+        "DirectBits buffer",
+    )?;
+
     Ok(PixMapHeader {
         row_bytes,
-        width: (bounds.3 - bounds.1).max(0) as u32,
-        height: (bounds.2 - bounds.0).max(0) as u32,
+        width,
+        height,
         pack_type,
         pixel_size,
         cmp_count,
@@ -2367,7 +2440,9 @@ fn decode_direct_bits_pixels(
     dst_rect: (i16, i16, i16, i16),
 ) -> Result<(Vec<u8>, RectI32)> {
     let dst = RectI32::from_be(dst_rect.0, dst_rect.1, dst_rect.2, dst_rect.3);
-    let mut rgba = vec![0u8; (h.width * h.height * 4) as usize];
+    // Sizing in usize — `read_pixmap_header` already budget-checked
+    // this buffer, but the multiply must not wrap u32 either.
+    let mut rgba = vec![0u8; h.width as usize * h.height as usize * 4];
     // §A-3 page A-16: resolve the default-packing alias before match.
     // `rowBytes < 8` keeps data unpacked (raw) for either pixel size.
     let pack_type = match (h.pack_type, h.pixel_size, h.row_bytes < 8) {
@@ -2400,6 +2475,14 @@ fn decode_dbr_16bpp_raw(r: &mut Reader<'_>, h: &PixMapHeader, rgba: &mut [u8]) -
             h.cmp_count, h.cmp_size
         )));
     }
+    // Round 401: a raw row is indexed at 2 bytes per pixel, so it must
+    // physically fit the declared bounds width.
+    if h.width as usize * 2 > h.row_bytes {
+        return Err(PictError::invalid(format!(
+            "DirectBits 16bpp raw bounds width {} does not fit rowBytes {}",
+            h.width, h.row_bytes
+        )));
+    }
     for y in 0..h.height as usize {
         let row = r.read_bytes(h.row_bytes)?;
         write_16bpp_row(row, h.width as usize, &mut rgba[y * h.width as usize * 4..]);
@@ -2428,6 +2511,14 @@ fn decode_dbr_32bpp_raw(r: &mut Reader<'_>, h: &PixMapHeader, rgba: &mut [u8]) -
         return Err(PictError::unsupported(format!(
             "DirectBitsRect 32bpp expects cmpSize=8 cmpCount=3|4, got {}/{}",
             h.cmp_count, h.cmp_size
+        )));
+    }
+    // Round 401: a raw row is indexed at 4 bytes per pixel, so it must
+    // physically fit the declared bounds width.
+    if h.width as usize * 4 > h.row_bytes {
+        return Err(PictError::invalid(format!(
+            "DirectBits 32bpp raw bounds width {} does not fit rowBytes {}",
+            h.width, h.row_bytes
         )));
     }
     for y in 0..h.height as usize {
@@ -2703,8 +2794,16 @@ fn decode_pix_pat(r: &mut Reader<'_>) -> Result<(Pattern, Option<PixPattern>)> {
             let _pm_table = r.read_u32()?;
             let _pm_reserved = r.read_u32()?;
 
-            let width = (bounds.3 - bounds.1).max(0) as usize;
-            let height = (bounds.2 - bounds.0).max(0) as usize;
+            // PixPat tiles are power-of-2 sided (checked below), but
+            // the dims / rowBytes / budget still need the hostile-
+            // input validation before `pix_data` is sized from them.
+            if !matches!(pixel_size, 1 | 2 | 4 | 8) {
+                return Err(PictError::unsupported(format!(
+                    "PixPat pixelSize {pixel_size} (expected 1/2/4/8)"
+                )));
+            }
+            let (width, height) = checked_bitmap_dims(bounds, row_bytes, pixel_size as usize)?;
+            let (width, height) = (width as usize, height as usize);
 
             // ColorTable.
             let ct_seed = r.read_u32()?;

@@ -67,7 +67,7 @@ pub mod state;
 /// Codec id for PICT image frames.
 pub const CODEC_ID_STR: &str = "pict";
 
-pub use decoder::parse_pict;
+pub use decoder::{parse_pict, MAX_RASTER_BYTES};
 pub use encoder::{
     build_clip_rgn_rect, build_direct_bits_rect_op, build_direct_bits_rect_op_with_mode,
     build_pix_pat_dither_op, build_pix_pat_op, build_pix_pat_op_sized, encode_pict,

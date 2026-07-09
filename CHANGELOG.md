@@ -41,7 +41,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   continuation, same-shape replay incl. the no-prior-shape no-op, clip
   masking).
 
+- round 401: **Hostile-input hardening + in-CI fuzz suite.** New
+  `MAX_RASTER_BYTES` decode budget (256 MiB): every buffer sized from
+  attacker-controlled length fields — the `picFrame` canvas (a 12-byte
+  header could previously demand a ~17 GB allocation), BitMap /
+  indexed-PixMap / DirectBits pixel buffers, PixPat tiles — is
+  checked (with overflow-safe arithmetic) before allocation and
+  rejected with `PictError::InvalidData` past the budget. All
+  `bounds`-rectangle width/height math moved from `i16` (which
+  overflow-panics in debug on the legal −32768..32767 span) to `i32`,
+  in both the decoder and the probe walker. New `tests/
+  hostile_round401.rs` suite: every truncation prefix of a 9-stream
+  opcode-family corpus, seeded xorshift byte mutations, systematic
+  16-bit length-field maxing (`0xFFFF`/`0x8000`/`0x0001` at every word
+  offset), and hand-crafted giant-`picFrame` / giant-PixMap-`bounds`
+  records — `parse_pict` / `probe_pict` must return without panicking
+  on all of them (validated locally at 40 000 mutations per seed).
+
 ### Fixed
+
+- round 401: **Raw `DirectBits` rows shorter than the bounds width
+  read out of bounds.** A hostile 16/32-bit `DirectBitsRect` whose
+  `rowBytes` was smaller than `bounds` width × bytes-per-pixel made
+  `write_16bpp_row` / `write_32bpp_row` index past the row slice — an
+  out-of-bounds panic on a 2-byte field edit. Both raw decoders now
+  require the row to physically fit its declared pixels (the check
+  lives per-decoder because packType 2 legitimately carries 3-byte
+  pixels against a 4-byte-derived `rowBytes`). Indexed PixMaps and
+  1-bpp BitMaps get the equivalent `width × bpp ≤ rowBytes × 8` check
+  plus a 1/2/4/8 `pixelSize` whitelist via the shared
+  `checked_bitmap_dims` helper.
 
 - round 401: **`Origin` (`$000C` v2 / `$0C` v1) applied its delta with
   the wrong sign.** Per the `SetOrigin` semantics (Inside Macintosh:
