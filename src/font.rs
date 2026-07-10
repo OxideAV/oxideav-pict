@@ -5,19 +5,14 @@
 //! `$002B`) carries only the text *bytes* plus a pen position; the glyph
 //! pixels themselves are supplied at draw time by the classic-Mac Font
 //! Manager from whichever installed system font the `txFont` number
-//! selects. Inside Macintosh: Imaging With QuickDraw is explicit that the
-//! glyph bitmaps,
-//! the per-font character widths, and the bold/italic/outline style
-//! synthesis all live in a separate book — "the chapter 'Font Manager'
-//! in Inside Macintosh: Text" (book page 2-34) — which is **not** part of
-//! this crate's clean-room reference set. None of the four Inside
-//! Macintosh volumes shipped in `docs/image/quickdraw/` carry a
-//! machine-readable Font Manager / `NFNT` strike-format spec.
+//! selects. The reference set carries no per-font glyph artwork (the
+//! `NFNT` strike *format* is described in Inside Macintosh Volume I's
+//! Font Manager chapter, but the actual system-font bitmaps live in Mac
+//! resource files, not in any spec), so pixel-for-pixel reproduction of
+//! a particular Mac system font is out of scope.
 //!
-//! So pixel-for-pixel reproduction of a particular Mac system font is
-//! out of scope: there is no public spec for it in-tree. What *is* fully
-//! spec-determined — and what this module implements — is QuickDraw's
-//! **text-drawing geometry model**:
+//! What *is* fully spec-determined — and what this module implements —
+//! is QuickDraw's **text-drawing geometry model**:
 //!
 //! * the baseline sits at the pen location (Imaging With QuickDraw,
 //!   "About Basic QuickDraw", book page 2-13);

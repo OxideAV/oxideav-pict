@@ -36,13 +36,16 @@
 //! clean-room ASCII bitmap face ([`font`]) at the text-drawing baseline
 //! pen, scaled by `txSize` and the `TxRatio` (`$0010`) horizontal /
 //! vertical `numer/denom` factors (round 361), inked in `fgColor`,
-//! honouring the `srcOr` / `srcXor` / `srcBic` text source modes and
-//! advancing the pen by each glyph plus `chExtra` / `spExtra` plus the
-//! `lineJustify` (`$002D`) intercharacter spacing (round 361). PICT
-//! carries no font data and Imaging With QuickDraw defers the actual
-//! system-font bitmaps + `txFace` style synthesis to Inside Macintosh:
-//! Text (absent from the crate's reference set), so text is legible and
-//! spec-positioned but not pixel-identical to a particular Mac font.
+//! honouring the `srcOr` / `srcXor` / `srcBic` text source modes plus
+//! the `grayishTextOr = 49` dimmed-text blend (round 407, Inside
+//! Macintosh Volume VI page 17-17), synthesising the `txFace` styles —
+//! bold / italic / underline / outline / shadow / condense / extend —
+//! per Volume I pages I-151/I-152 with the I-226 characterization-table
+//! amounts (round 407), and advancing the pen by each styled glyph plus
+//! `chExtra` / `spExtra` plus the `lineJustify` (`$002D`) intercharacter
+//! spacing (round 361). PICT carries no font data, so text is legible,
+//! spec-positioned and spec-styled, but not pixel-identical to a
+//! particular Mac font (the glyph artwork is the crate's own face).
 //!
 //! ## Standalone vs registry-integrated
 //!

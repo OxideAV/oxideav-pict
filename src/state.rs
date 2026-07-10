@@ -394,6 +394,12 @@ impl RectI32 {
 /// it verbatim through [`PictTextFace::bits`] so round-trip encoders
 /// don't drop reserved bits a future producer might set. The named-bit
 /// predicates only read bits 0..=6.
+///
+/// The bit order matches the classic `Style` Pascal set's ordinal order
+/// — `(bold, italic, underline, outline, shadow, condense, extend)` —
+/// declared in Inside Macintosh Volume I (page I-152). Since round 407
+/// the rasteriser *synthesises* these treatments onto every drawn glyph
+/// per Volume I's style rules; see [`crate::font::StyleParams`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct PictTextFace(u8);
 
@@ -597,9 +603,10 @@ pub struct PictTextState {
     /// Arithmetic-transfer-mode opcolor set by `OpColor` (`$001F` v2,
     /// `RGBColor`). §A-3 Table A-2: 6-byte payload. Consumed by the
     /// `blend`, `addPin`, `addOver`, `subPin`, `addMax`, `subOver` and
-    /// `addMin` arithmetic transfer modes; round 230 captures the
-    /// declared colour but does not yet honour the arithmetic transfer
-    /// modes on the canvas.
+    /// `addMin` arithmetic transfer modes, which the rasteriser honours
+    /// on pattern fills and the `CopyBits` blit (see
+    /// [`crate::raster::ArithMode`]); defaults per §4-39/4-40 apply
+    /// when the picture never declared one.
     pub op_color: Option<Rgba>,
     /// `true` once a `DefHilite` (`$001E` v2) opcode was observed.
     /// Mutually-exclusive with `hilite_color` in practice — a producer
@@ -649,12 +656,13 @@ pub struct PictTextState {
     /// increment). The first such delta opcode in a picture with no prior
     /// `LongText` advances from the graphics pen origin `(0, 0)`.
     ///
-    /// `None` until the picture emits its first text opcode. This crate
-    /// has no font rasteriser, so glyph bytes are still walked past
-    /// without rendering and without the per-character pen advance the
-    /// glyph widths would add; the slot tracks only the explicit
-    /// stream-encoded text origin / inter-call movement, which is fully
-    /// spec-determined. Round 295.
+    /// `None` until the picture emits its first text opcode. Since
+    /// round 352 the glyph bytes are rasterised (see [`crate::font`])
+    /// and the slot also advances by each drawn glyph's width — the
+    /// styled advance including the `txFace` `extra` widening (round
+    /// 407) plus the `chExtra` / `spExtra` / `lineJustify` adjustments —
+    /// so after a draw it reports where the next glyph would begin.
+    /// Round 295.
     pub text_pen: Option<(i32, i32)>,
     /// Number of text-glyph opcodes (`LongText` / `DHText` / `DVText` /
     /// `DHDVText`) observed in the stream. `0` for a picture with no

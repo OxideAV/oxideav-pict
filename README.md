@@ -4,8 +4,10 @@
 
 Pure-Rust PICT (Apple QuickDraw picture) reader + writer for the
 [`oxideav`](https://github.com/OxideAV/oxideav) framework. Clean-room
-implementation of the public **Inside Macintosh: Imaging With QuickDraw**
-(Apple, 1994); no external implementation source consulted.
+implementation of the public **Inside Macintosh** books — *Imaging With
+QuickDraw* (1994) plus Volumes I (1985), V (1986) and VI (1991) for the
+classic QuickDraw / Color QuickDraw behaviour the opcode tables defer
+to; no external implementation source consulted.
 
 ## Decode
 
@@ -29,7 +31,7 @@ returned as a `PictImage`.
 | `BitsRect` / `BitsRgn` / `PackBitsRect` / `PackBitsRgn` | 1-bpp BitMap or indexed 1/2/4/8-bit PixMap → RGBA; the embedded `ColorTable` is resolved by each `ColorSpec`'s `value` field (book page 4-55), not by array position |
 | `DirectBitsRect` / `DirectBitsRgn` | 16-bit A1R5G5B5 / 32-bit XRGB\|ARGB → RGBA; `packType` 1 (raw), 2 (drop-pad), 3 (16-bit RLE), 4 (component RLE), and 0 → §A-3 page A-16 default packing (3 for 16-bit / 4 for 32-bit when `rowBytes ≥ 8`, else raw) |
 | `ShortComment` / `LongComment` | captured as structured [`PictComment`] |
-| Text-glyph opcodes (`LongText` / `DH/DV/DHDVText`) | **rasterised** — glyph bytes drawn through a built-in clean-room ASCII bitmap face at the baseline pen, scaled by `txSize` **and the `TxRatio` (`$0010`) horizontal / vertical `numer/denom` factors** (book page 12-13), inked in `fgColor`, advancing the pen by each glyph + `chExtra` / `spExtra` + the `lineJustify` (`$002D`) intercharacter spacing (§A-3 footnote `†`); honours the `srcOr` / `srcXor` / `srcBic` text source modes |
+| Text-glyph opcodes (`LongText` / `DH/DV/DHDVText`) | **rasterised** — glyph bytes drawn through a built-in clean-room ASCII bitmap face at the baseline pen, scaled by `txSize` **and the `TxRatio` (`$0010`) horizontal / vertical `numer/denom` factors** (book page 12-13), inked in `fgColor`, advancing the pen by each glyph + `chExtra` / `spExtra` + the `lineJustify` (`$002D`) intercharacter spacing (§A-3 footnote `†`); honours the `srcOr` / `srcXor` / `srcBic` text source modes plus `grayishTextOr = 49` (Inside Macintosh Vol VI page 17-17), and **synthesises the full `txFace` style set** — bold / italic / underline / outline / shadow / condense / extend — per Vol I pages I-151/I-152 with the page I-226 characterization-table amounts |
 | CompressedQuickTime / UncompressedQuickTime | payload captured verbatim into `PictImage::quicktime` (bytes are private to QuickTime per §A-3; the embedded image — typically JPEG — is not decoded in-crate) |
 | Reserved-for-Apple opcodes | walked past per published payload size |
 | OpEndPic | terminate |
@@ -80,6 +82,10 @@ assert_eq!(img.data.len(), img.width as usize * img.height as usize * 4);
 - **Highlighting** (`hilite = 50`) is honoured on both pattern fills and
   the raster blit, using the `HiliteColor` opcode (reverting to `srcXor`
   when none was emitted).
+- **Dimmed text** (`grayishTextOr = 49`, text-only) inks glyphs in the
+  per-channel fg/bg average per Inside Macintosh Vol VI page 17-17
+  (Vol VI notes the mode is not normally stored in pictures; this is
+  defensive-decode fidelity).
 - `ditherCopy = 64` is recognised and stripped (no-op on RGBA).
 
 Invert verbs (`InvertRect` / `InvertRRect` / `InvertOval` / `InvertArc`
@@ -166,22 +172,20 @@ oxideav-pict = { version = "0.0", default-features = false } # standalone
 
 ## What's not yet in
 
-* **System-font fidelity.** Text opcodes **are** rasterised (`LongText` /
-  `DH/DV/DHDVText` draw glyphs at the baseline pen, scaled by `txSize`,
-  inked in `fgColor`, honouring the `srcOr` / `srcXor` / `srcBic` text
-  source modes). The glyph artwork is the crate's own built-in clean-room
-  ASCII bitmap face — PICT embeds no font data, and Imaging With QuickDraw
-  defers the actual system-font bitmaps + `txFace` bold/italic/outline
-  style synthesis to a separate book ("the chapter 'Font Manager' in
-  Inside Macintosh: Text") that is not in this crate's reference set. So
-  text is legible and positioned per spec, but not pixel-identical to a
-  particular Mac font. Text *geometry* that **is** fully spec-determined —
-  `txSize` cell scaling, the `TxRatio` (`$0010`) horizontal / vertical
-  scaling factors, and the `lineJustify` (`$002D`) intercharacter spacing
-  — is applied to the built-in face. The `txFace` style bits (bold /
-  italic / underline pixel synthesis) and the `grayishTextOr = 49`
-  shading mode remain tracked-but-not-synthesised: their per-pixel
-  geometry lives in the absent Font Manager / Color-QuickDraw chapters.
+* **System-font fidelity.** Text opcodes **are** rasterised, positioned,
+  scaled, styled (`txFace` synthesis per Inside Macintosh Vol I — round
+  407) and moded (`srcOr` / `srcXor` / `srcBic` / `grayishTextOr`) per
+  spec — but the glyph artwork itself is the crate's own built-in
+  clean-room ASCII bitmap face. PICT embeds no font data and the actual
+  Mac system-font bitmaps live in resource files, not in any staged
+  spec, so text is legible and spec-faithful in geometry and styling
+  without being pixel-identical to a particular Mac font. (Within the
+  spec-set rules, two knobs are book-acknowledged implementation
+  choices: the italic shear rate — Vol I page I-227 leaves the
+  characterization-table factor's exact use to experimentation, this
+  crate fixes `8` as a `>>4` slope, one pixel per two rows — and the
+  bold smear count for "an appropriate number of times", which the
+  screen table sets to 1.)
 * **CompressedQuickTime decode.** The payload is parsed and captured
   verbatim (`PictImage::quicktime`), but the embedded image (typically
   JPEG) is not decoded in-crate — the payload's internal structure is
