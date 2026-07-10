@@ -219,8 +219,13 @@ fn render_text(canvas: &mut Canvas, state: &mut PictState, text: &[u8]) {
         crate::raster::SourceMode::SrcCopy => crate::raster::SourceMode::SrcOr,
         other => other,
     };
+    // `txFace` style synthesis (bold / italic / underline / outline /
+    // shadow / condense / extend) per Inside Macintosh Volume I pages
+    // I-151/I-152 with the I-226 screen characterization-table amounts —
+    // see [`crate::font::StyleParams`].
+    let face = state.text_state.tx_face;
     let advanced = crate::font::draw_text(
-        canvas, text, cx, cy, scale, ch_extra, sp_extra, inter_char, state.fg, state.bg, mode,
+        canvas, text, cx, cy, scale, ch_extra, sp_extra, inter_char, face, state.fg, state.bg, mode,
     );
     // Move the running text pen by the drawn width (in picture-frame
     // coords, which equals canvas advance since x-scale is 1:1).

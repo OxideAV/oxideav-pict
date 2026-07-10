@@ -16,6 +16,7 @@
 
 use oxideav_pict::font::{measure_text, TextScale, GLYPH_H};
 use oxideav_pict::ops::PictBuilder;
+use oxideav_pict::PictTextFace;
 use oxideav_pict::{
     build_dh_text, build_dhdv_text, build_dv_text, build_long_text, build_tx_size, parse_pict,
     probe_pict, PictImage,
@@ -207,7 +208,7 @@ fn chained_text_methods_round_trip_pen_and_probe_counts() {
     let bytes = b.finish();
 
     let scale = TextScale::isotropic(8);
-    let adv = |t: &[u8]| measure_text(t, scale, 0, 0, 0);
+    let adv = |t: &[u8]| measure_text(t, scale, 0, 0, 0, PictTextFace::PLAIN);
     // Pen walk: LongText sets (6, 14) then advances by "HI"; each delta
     // form advances from where the previous op left the pen, then by
     // its own text.

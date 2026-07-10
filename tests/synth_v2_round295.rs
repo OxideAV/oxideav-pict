@@ -37,6 +37,7 @@
 use oxideav_pict::font::{measure_text, TextScale};
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::parse_pict;
+use oxideav_pict::PictTextFace;
 
 /// The default text size a freshly-initialised `PictTextState` carries
 /// (`TxSize` defaults to 12 points). The synth pictures below never emit
@@ -45,7 +46,14 @@ const DEFAULT_TX_SIZE: i32 = 12;
 
 /// Horizontal advance the rasteriser adds for `text` at the default size.
 fn adv(text: &[u8]) -> i32 {
-    measure_text(text, TextScale::isotropic(DEFAULT_TX_SIZE), 0, 0, 0)
+    measure_text(
+        text,
+        TextScale::isotropic(DEFAULT_TX_SIZE),
+        0,
+        0,
+        0,
+        PictTextFace::PLAIN,
+    )
 }
 
 /// A `LongText` opcode body: `$0028`, `txLoc (v, h)`, `count`, `text`.

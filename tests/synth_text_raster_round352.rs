@@ -14,6 +14,7 @@
 
 use oxideav_pict::font::{measure_text, TextScale, ADVANCE, GLYPH_H};
 use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::PictTextFace;
 use oxideav_pict::{build_rgb_fg_col, build_tx_size, parse_pict, PictImage};
 
 /// A `LongText` opcode body: `$0028`, `txLoc (v, h)`, `count`, `text`.
@@ -78,7 +79,7 @@ fn long_text_paints_ink_at_baseline() {
 
     // Ink must appear in the glyph box: x in [6, 6 + advance("HI")),
     // y in (baseline - cell_height, baseline].
-    let adv = measure_text(b"HI", TextScale::isotropic(8), 0, 0, 0) as u32;
+    let adv = measure_text(b"HI", TextScale::isotropic(8), 0, 0, 0, PictTextFace::PLAIN) as u32;
     let ink = count_ink(&img, 6, (14 - GLYPH_H) as u32, 6 + adv, 15);
     assert!(ink >= 10, "expected legible ink, got {ink} pixels");
 

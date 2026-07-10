@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- round 407: **`txFace` style synthesis is rasterised.** The re-staged
+  Inside Macintosh Volume I (1985) closes the gap that had kept the
+  style bits tracked-but-not-drawn: the QuickDraw chapter (pages
+  I-151/I-152) specifies each treatment — bold smears the character one
+  pixel right; italic skews above-baseline rows right and
+  below-baseline rows left; underline draws below the baseline and
+  gaps one pixel either side of descender ink; outline hollows the
+  character behind a one-pixel ring; shadow thickens that ring below
+  and to the right (bold widens the hollow when combined); condense /
+  extend tighten / widen every character's advance — and the Font
+  Manager chapter's screen font-characterization table (page I-226
+  Figure 4, mechanism on I-227) supplies the amounts, including the
+  per-style `extra` advance widening (bold +1, outline +1, shadow +2,
+  condensed −1, extended +1; the book's own worked example, bold
+  shadowed = 3, is pinned in tests). New `font::StyleParams` derives
+  the amounts from a `PictTextFace`; `font::draw_text` /
+  `font::measure_text` take the face and synthesise the styled glyph
+  mask in design space before scaling, and the decoder feeds the
+  captured `TxFace` (`$0004`) state into every text draw. Eight
+  `parse_pict`-level tests in `synth_text_face_round407` plus
+  eight `font`-level unit tests pin each treatment's pixels and
+  advances.
+
+### Fixed
+
+- round 407: **Glyph placement no longer folds design columns 0 and 1
+  together.** The 1-px floor in the `txSize × TxRatio` scaling helper —
+  needed so a scaled *block* never collapses to nothing — was also
+  applied to *offsets*, making `scale(0) == scale(1) == 1`: at native
+  scale every glyph lost its leftmost column into its second one and
+  painted one pixel right of the pen. Placement now uses floor-less
+  offset scaling (`TextScale::h_off` / `v_off`), so glyph columns land
+  distinctly and the glyph's left edge sits exactly at the pen.
+
+### Added
+
 - round 401: **Text-opcode emission — `build_long_text` /
   `build_dh_text` / `build_dv_text` / `build_dhdv_text` plus the
   chainable `PictBuilder::long_text` / `dh_text` / `dv_text` /
