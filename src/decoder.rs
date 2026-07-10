@@ -214,10 +214,26 @@ fn render_text(canvas: &mut Canvas, state: &mut PictState, text: &[u8]) {
     // the stream's txMode is srcCopy (0), because a srcCopy text draw would
     // paint an opaque white box behind every glyph, which is never what a
     // picture intends for inline text on an existing canvas.
+    //
+    // `grayishTextOr = 49` is text-only and resolved here, before the
+    // shared raster resolver would fold it: on a colour destination it
+    // "draws with a blend of the foreground and background colors"
+    // (Inside Macintosh Volume VI, page 17-17), i.e. the glyph ink is
+    // the fg/bg average composited like srcOr. See
+    // [`crate::raster::GRAYISH_TEXT_OR_MODE`].
     let bg_key = state.bg;
-    let mode = match state.text_state.tx_source_mode(bg_key) {
-        crate::raster::SourceMode::SrcCopy => crate::raster::SourceMode::SrcOr,
-        other => other,
+    let base_word = state.text_state.tx_mode & !crate::raster::SourceMode::DITHER_COPY;
+    let (ink, mode) = if base_word == crate::raster::GRAYISH_TEXT_OR_MODE {
+        (
+            state.fg.blend_half(state.bg),
+            crate::raster::SourceMode::SrcOr,
+        )
+    } else {
+        let mode = match state.text_state.tx_source_mode(bg_key) {
+            crate::raster::SourceMode::SrcCopy => crate::raster::SourceMode::SrcOr,
+            other => other,
+        };
+        (state.fg, mode)
     };
     // `txFace` style synthesis (bold / italic / underline / outline /
     // shadow / condense / extend) per Inside Macintosh Volume I pages
@@ -225,7 +241,7 @@ fn render_text(canvas: &mut Canvas, state: &mut PictState, text: &[u8]) {
     // see [`crate::font::StyleParams`].
     let face = state.text_state.tx_face;
     let advanced = crate::font::draw_text(
-        canvas, text, cx, cy, scale, ch_extra, sp_extra, inter_char, face, state.fg, state.bg, mode,
+        canvas, text, cx, cy, scale, ch_extra, sp_extra, inter_char, face, ink, state.bg, mode,
     );
     // Move the running text pen by the drawn width (in picture-frame
     // coords, which equals canvas advance since x-scale is 1:1).

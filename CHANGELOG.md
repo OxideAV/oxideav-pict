@@ -32,6 +32,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eight `font`-level unit tests pin each treatment's pixels and
   advances.
 
+- round 407: **`grayishTextOr = 49` dimmed-text mode.** Inside
+  Macintosh Volume VI (pages 17-16/17-17) specifies the previously
+  unresolved text drawing mode: on a colour destination it *"draws with
+  a blend of the foreground and background colors"* — so the text
+  renderer now intercepts a `TxMode 49` word (before the shared raster
+  resolver would fold it to `srcCopy`) and inks the glyphs in the new
+  `Rgba::blend_half` fg/bg average, composited like `srcOr`. Volume VI
+  notes the mode is *"not a standard transfer mode in that currently it
+  is not stored in pictures"*, so this is defensive-decode fidelity for
+  nonconforming producers; the mode stays text-only (the `CopyBits` /
+  pen paths are unchanged). New `GRAYISH_TEXT_OR_MODE` constant
+  documents the code point; three `parse_pict`-level tests pin the
+  blend arithmetic against declared fg/bg colours and the srcOr-style
+  compositing.
+
 ### Fixed
 
 - round 407: **Glyph placement no longer folds design columns 0 and 1

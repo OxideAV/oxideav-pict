@@ -16,7 +16,10 @@
 
 use oxideav_pict::font::{measure_text, TextScale};
 use oxideav_pict::ops::PictBuilder;
-use oxideav_pict::{build_tx_face, build_tx_size, parse_pict, PictImage, PictTextFace};
+use oxideav_pict::{
+    build_rgb_bk_col, build_rgb_fg_col, build_tx_face, build_tx_mode, build_tx_size, parse_pict,
+    PictImage, PictTextFace, GRAYISH_TEXT_OR_MODE,
+};
 
 /// A `LongText` opcode body: `$0028`, `txLoc (v, h)`, `count`, `text`.
 fn long_text(v: i16, h: i16, text: &[u8]) -> Vec<u8> {
@@ -200,6 +203,61 @@ fn condense_and_extend_move_the_pen() {
         .0;
     assert_eq!(cond, plain - 2);
     assert_eq!(ext, plain + 2);
+}
+
+// ---------------------------------------------------------------------------
+// grayishTextOr (TxMode 49): dimmed text — the glyph ink is the per-
+// channel fg/bg blend on a colour destination (Inside Macintosh
+// Volume VI page 17-17), composited like srcOr.
+// ---------------------------------------------------------------------------
+
+/// Pixel at `(x, y)` as an `(r, g, b)` triple.
+fn px(img: &PictImage, x: u32, y: u32) -> (u8, u8, u8) {
+    let off = ((y * img.width + x) * 4) as usize;
+    (img.data[off], img.data[off + 1], img.data[off + 2])
+}
+
+#[test]
+fn grayish_text_or_draws_the_fg_bg_blend() {
+    // Red fg over white bg: dimmed ink = ((255+255)/2, (0+255)/2,
+    // (0+255)/2) = (255, 127, 127).
+    let mut b = PictBuilder::new(0, 0, 32, 64);
+    b.push(&build_tx_size(8));
+    b.push(&build_rgb_fg_col(0xFF, 0x00, 0x00));
+    b.push(&build_tx_mode(GRAYISH_TEXT_OR_MODE));
+    b.push(&long_text(16, 8, b"|"));
+    let img = parse_pict(&b.finish()).unwrap();
+
+    // The '|' stroke column (design col 2 → x = 10) rows 10..=16.
+    for y in 10..=16 {
+        assert_eq!(px(&img, 10, y), (255, 127, 127), "dimmed ink at y={y}");
+    }
+    // Off-bits stay paper white — the mode composites like srcOr.
+    assert_eq!(px(&img, 9, 12), (255, 255, 255));
+    assert_eq!(px(&img, 11, 12), (255, 255, 255));
+}
+
+#[test]
+fn grayish_text_or_blends_toward_the_declared_background() {
+    // Black fg over a declared blue bg: ink = (0, 0, 127).
+    let mut b = PictBuilder::new(0, 0, 32, 64);
+    b.push(&build_tx_size(8));
+    b.push(&build_rgb_bk_col(0x00, 0x00, 0xFF));
+    b.push(&build_tx_mode(GRAYISH_TEXT_OR_MODE));
+    b.push(&long_text(16, 8, b"|"));
+    let img = parse_pict(&b.finish()).unwrap();
+    assert_eq!(px(&img, 10, 12), (0, 0, 127));
+}
+
+#[test]
+fn plain_src_or_still_draws_full_fg() {
+    // Control: without TxMode 49 the same stream paints undimmed fg.
+    let mut b = PictBuilder::new(0, 0, 32, 64);
+    b.push(&build_tx_size(8));
+    b.push(&build_rgb_fg_col(0xFF, 0x00, 0x00));
+    b.push(&long_text(16, 8, b"|"));
+    let img = parse_pict(&b.finish()).unwrap();
+    assert_eq!(px(&img, 10, 12), (255, 0, 0));
 }
 
 // ---------------------------------------------------------------------------

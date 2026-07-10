@@ -28,6 +28,20 @@ impl Rgba {
     pub const WHITE: Self = Self::new(255, 255, 255, 255);
     pub const BLACK: Self = Self::new(0, 0, 0, 255);
 
+    /// Per-channel 50/50 average of two colours — the "blend of the
+    /// foreground and background colors" that `grayishTextOr = 49`
+    /// draws dimmed text with on a colour destination (Inside
+    /// Macintosh Volume VI, page 17-17). Truncating average, worked at
+    /// 8-bit channel precision like every other resolver in this crate.
+    pub const fn blend_half(self, other: Self) -> Self {
+        Self {
+            r: ((self.r as u16 + other.r as u16) / 2) as u8,
+            g: ((self.g as u16 + other.g as u16) / 2) as u8,
+            b: ((self.b as u16 + other.b as u16) / 2) as u8,
+            a: ((self.a as u16 + other.a as u16) / 2) as u8,
+        }
+    }
+
     /// Pack a Mac `RGBColor` (16-bit per channel) into 8-bit RGBA.
     /// QuickDraw stores the most-significant byte of each channel
     /// first; the low byte is just colour resolution that doesn't
@@ -714,10 +728,14 @@ impl PictTextState {
     /// to `srcCopy`, the total-function posture every other mode resolver
     /// in this crate shares.
     ///
-    /// This is an interpretation-only accessor: text glyphs are still not
-    /// rasterised (see the crate README "Text glyphs"), so the resolved
-    /// mode is not yet applied to any drawn glyph — it surfaces the
-    /// structured shape of the captured word for consumers that need it.
+    /// The text rasteriser applies this resolution to every drawn glyph
+    /// (round 352 onward), with two text-channel adjustments made at the
+    /// draw site rather than here: a `srcCopy` word folds to `srcOr`
+    /// (an opaque white box behind inline text is never what a picture
+    /// intends), and `grayishTextOr = 49` — text-only, Inside Macintosh
+    /// Volume VI page 17-17 — is intercepted before this resolver would
+    /// fold it, drawing the glyphs in the fg/bg `blend_half` average
+    /// (see [`crate::raster::GRAYISH_TEXT_OR_MODE`]).
     #[inline]
     pub fn tx_source_mode(&self, bg_key: Rgba) -> SourceMode {
         SourceMode::from_mode_word(self.tx_mode, self.op_color, bg_key, self.hilite_color)

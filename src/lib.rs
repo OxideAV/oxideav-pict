@@ -102,7 +102,10 @@ pub use ops::{
     PictV1Builder, Verb,
 };
 pub use probe::{probe_pict, PictProbe, ProbeRect, ProbeTermination, ProbeVersion};
-pub use raster::{blend_arith, blend_source, ArithMode, PatternMode, SourceMode, HILITE_MODE};
+pub use raster::{
+    blend_arith, blend_source, ArithMode, PatternMode, SourceMode, GRAYISH_TEXT_OR_MODE,
+    HILITE_MODE,
+};
 pub use state::{
     Pattern, PictFontName, PictGlyphState, PictLineJustify, PictPattern, PictTextFace,
     PictTextState, PixPattern, Rgba, TextRatio,

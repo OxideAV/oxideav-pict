@@ -1466,6 +1466,26 @@ pub enum ArithMode {
 /// highlighting}"*). Legal in the `PenMode` / `CopyBits` mode word.
 pub const HILITE_MODE: i16 = 50;
 
+/// `grayishTextOr = 49` — the Color QuickDraw dimmed-text drawing mode
+/// (Inside Macintosh Volume VI, "Color QuickDraw", pages 17-16/17-17:
+/// *"You can use a new text drawing mode, grayishTextOr, to draw dimmed
+/// text on the screen. If the destination device is color, it draws
+/// with a blend of the foreground and background colors."*). On this
+/// crate's true-colour canvas the "color destination" branch applies:
+/// glyph ink is the per-channel average of `fgColor` and `bkColor`,
+/// composited like `srcOr` (only the glyph's on-bits touch the canvas —
+/// the mode exists to render *dimmed* text, e.g. disabled UI items).
+///
+/// Volume VI also notes it *"is not a standard transfer mode in that
+/// currently it is not stored in pictures"* — so a conforming producer
+/// should never emit `TxMode 49`; this crate still resolves it
+/// defensively when a stream carries one. It is **text-only**: the
+/// `CopyBits` / pen mode words do not accept it, so
+/// [`SourceMode::from_mode_word`] (the shared raster resolver) keeps
+/// folding `49` to `srcCopy` and the text renderer intercepts the code
+/// before that fold.
+pub const GRAYISH_TEXT_OR_MODE: i16 = 49;
+
 impl ArithMode {
     /// Map a `PnMode` integer in `32..=39` to its arithmetic mode.
     /// Codes outside that band return `None`.
