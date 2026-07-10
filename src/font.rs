@@ -174,7 +174,10 @@ fn ratio_scale(len: i32, tx_size: i32, numer: i32, denom: i32) -> i32 {
     let num = len as i64 * size as i64 * numer as i64;
     let den = DESIGN_EM as i64 * denom as i64;
     let scaled = (num + den / 2) / den;
-    (scaled as i32).max(1)
+    // Saturating narrow: a hostile txSize × TxRatio product can exceed
+    // i32 (round 407 hardening — the wrap would turn a huge cell into a
+    // negative offset).
+    (scaled.clamp(i32::MIN as i64, i32::MAX as i64) as i32).max(1)
 }
 
 /// [`ratio_scale`] without the 1-px floor, for scaling positions rather
@@ -187,7 +190,8 @@ fn offset_scale(len: i32, tx_size: i32, numer: i32, denom: i32) -> i32 {
     let size = if tx_size <= 0 { DESIGN_EM } else { tx_size };
     let num = len.unsigned_abs() as i64 * size as i64 * numer as i64;
     let den = DESIGN_EM as i64 * denom as i64;
-    let scaled = ((num + den / 2) / den) as i32;
+    // Saturating narrow — see `ratio_scale`.
+    let scaled = ((num + den / 2) / den).min(i32::MAX as i64) as i32;
     if len < 0 {
         -scaled
     } else {
@@ -573,10 +577,15 @@ pub fn measure_text(
     let style = StyleParams::from_face(face);
     let mut adv = 0i32;
     for &b in text {
-        adv += scale.h((char_advance_design(b) + style.extra).max(1));
-        adv += ch_extra + inter_char;
+        // Saturating: hostile txSize × TxRatio words can push a single
+        // advance toward i32 range (round 407 hardening — mirrors
+        // `draw_text`'s pen walk so the two stay equal).
+        adv = adv
+            .saturating_add(scale.h((char_advance_design(b) + style.extra).max(1)))
+            .saturating_add(ch_extra)
+            .saturating_add(inter_char);
         if b == b' ' {
-            adv += sp_extra;
+            adv = adv.saturating_add(sp_extra);
         }
     }
     adv
@@ -645,15 +654,29 @@ pub fn draw_text(
             // at the pen line. Rows above the baseline stack upward;
             // synthesised rows below it (underline / outline ring) stack
             // downward starting at `pen_y + 1`.
+            // Saturating placement arithmetic: `txSize` / `TxRatio` are
+            // attacker-controlled i16 words, so a hostile stream can
+            // push the scaled offsets toward i32 range (round 407
+            // hardening).
             let y_top = if rows_above_baseline >= 0 {
-                pen_y - scale.v(rows_above_baseline + 1) + 1
+                pen_y
+                    .saturating_sub(scale.v(rows_above_baseline + 1))
+                    .saturating_add(1)
             } else {
-                pen_y + 1 + scale.v_off(rd - BASELINE_ROW - 1)
+                pen_y
+                    .saturating_add(1)
+                    .saturating_add(scale.v_off(rd - BASELINE_ROW - 1))
             };
             // Off-bits are only painted by the opaque modes, and only
             // inside the nominal 5×7 character cell (the styled margins
             // around it carry no "source image" of their own).
             let in_cell_row = (0..GLYPH_H).contains(&rd);
+            // Clip each scaled block to the canvas *before* iterating:
+            // a hostile `txSize` makes `cw × ch` enormous, and walking
+            // the off-canvas cells (every write discarded) would be a
+            // CPU DoS on a 2-byte field (round 407 hardening).
+            let py0 = y_top.max(0);
+            let py1 = y_top.saturating_add(ch).min(canvas.height as i32);
             for col in 0..MASK_W {
                 let on = rowbits >> col & 1 != 0;
                 let cd = col - MASK_OX; // design column within the cell
@@ -664,11 +687,11 @@ pub fn draw_text(
                 // and white on the off-bits; blend_source maps that to the
                 // active text mode.
                 let src = if on { Rgba::BLACK } else { Rgba::WHITE };
-                let bx = x + scale.h_off(cd);
-                for dy in 0..ch {
-                    let py = y_top + dy;
-                    for dx in 0..cw {
-                        let px = bx + dx;
+                let bx = x.saturating_add(scale.h_off(cd));
+                let px0 = bx.max(0);
+                let px1 = bx.saturating_add(cw).min(canvas.width as i32);
+                for py in py0..py1 {
+                    for px in px0..px1 {
                         let dst = canvas.pixel_at(px, py).unwrap_or(bg);
                         let out = blend_source(mode, src, dst, fg, bg);
                         canvas.put(px, py, out);
@@ -676,12 +699,15 @@ pub fn draw_text(
                 }
             }
         }
-        x += scale.h(advance) + ch_extra + inter_char;
+        x = x
+            .saturating_add(scale.h(advance))
+            .saturating_add(ch_extra)
+            .saturating_add(inter_char);
         if b == b' ' {
-            x += sp_extra;
+            x = x.saturating_add(sp_extra);
         }
     }
-    x - pen_x
+    x.saturating_sub(pen_x)
 }
 
 #[cfg(test)]

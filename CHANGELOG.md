@@ -49,6 +49,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- round 407: **Hostile `txSize` / `TxRatio` words could hang or panic
+  the text rasteriser.** The glyph painter iterated every cell of each
+  scaled design-pixel block (`cw × ch`) before bounds-checking, so a
+  2-byte `TxSize 0x7FFF` (or a large `TxRatio` numerator) made a single
+  glyph walk billions of discarded off-canvas writes — a CPU DoS — and
+  the pen-advance / placement sums could overflow `i32` (a debug-build
+  panic). Blocks are now clipped to the canvas before iteration, the
+  pen walk and `measure_text` use saturating arithmetic, and the
+  `txSize × TxRatio` scale helpers narrow from `i64` with saturation.
+  Found by extending the `hostile_round401` corpus with a styled-text
+  seed (every `txFace` bit, `grayishTextOr`, anisotropic `TxRatio`,
+  large `txSize`) that now runs under truncation / mutation /
+  length-maxing like every other opcode family.
+
 - round 407: **Glyph placement no longer folds design columns 0 and 1
   together.** The 1-px floor in the `txSize × TxRatio` scaling helper —
   needed so a scaled *block* never collapses to nothing — was also

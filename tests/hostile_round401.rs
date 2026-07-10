@@ -21,10 +21,10 @@
 
 use oxideav_pict::ops::{PictBuilder, PictV1Builder};
 use oxideav_pict::{
-    build_fg_color_code, build_rect_op, build_short_line, build_tx_size, encode_pict,
-    encode_pict_indexed_pack_bits_rect, encode_pict_pack_bits_rect, encode_pict_v1,
-    encode_pict_v1_pack_bits_rect, encode_pict_v2, parse_pict, probe_pict, IndexedPixelSize,
-    PackType, Verb,
+    build_fg_color_code, build_rect_op, build_short_line, build_tx_face, build_tx_mode,
+    build_tx_ratio, build_tx_size, encode_pict, encode_pict_indexed_pack_bits_rect,
+    encode_pict_pack_bits_rect, encode_pict_v1, encode_pict_v1_pack_bits_rect, encode_pict_v2,
+    parse_pict, probe_pict, IndexedPixelSize, PackType, Verb, GRAYISH_TEXT_OR_MODE,
 };
 
 /// Deterministic xorshift64* PRNG — keeps the suite reproducible with
@@ -73,6 +73,30 @@ fn corpus() -> Vec<Vec<u8>> {
     b.pen_pattern([0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55]);
     b.rect(Verb::Paint, 50, 0, 64, 14);
     seeds.push(b.finish());
+
+    // Styled text (round 407): every txFace bit + combinations, the
+    // grayishTextOr text mode, an anisotropic TxRatio and a large
+    // txSize — drives the style-synthesis mask pipeline (bold smear /
+    // italic shear / outline ring / shadow thickening / underline gap)
+    // through truncation and mutation.
+    let mut st = PictBuilder::new(0, 0, 64, 96);
+    st.push(&build_tx_size(8));
+    for (i, face) in [
+        0x01u8, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1F, 0x7F, 0xFF,
+    ]
+    .iter()
+    .enumerate()
+    {
+        st.push(&build_tx_face(*face));
+        st.long_text(2 + (i as i16 % 4) * 20, 8 + (i as i16 / 4) * 10, b"Ag|_")
+            .unwrap();
+    }
+    st.push(&build_tx_mode(GRAYISH_TEXT_OR_MODE));
+    st.push(&build_tx_ratio(3, 2, 1, 1));
+    st.push(&build_tx_size(96));
+    st.push(&build_tx_face(0xFF));
+    st.long_text(4, 60, b"W").unwrap();
+    seeds.push(st.finish());
 
     // Direct rasters at each PackType.
     let rgba: Vec<u8> = (0..16u32 * 16 * 4).map(|i| (i * 7) as u8).collect();

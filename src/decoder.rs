@@ -245,7 +245,9 @@ fn render_text(canvas: &mut Canvas, state: &mut PictState, text: &[u8]) {
     );
     // Move the running text pen by the drawn width (in picture-frame
     // coords, which equals canvas advance since x-scale is 1:1).
-    state.text_state.text_pen = Some((pen_h + advanced, pen_v));
+    // Saturating: `advanced` can approach i32 range under hostile
+    // txSize / TxRatio words (round 407 hardening).
+    state.text_state.text_pen = Some((pen_h.saturating_add(advanced), pen_v));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
