@@ -39,6 +39,8 @@
 use crate::state::{Pattern, PixPattern, Rgba};
 
 /// A row-major RGBA8 canvas. Origin at (0, 0); y grows downward.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub struct Canvas {
     pub width: u32,
     pub height: u32,
@@ -341,6 +343,8 @@ impl Canvas {
 
 /// Bresenham line from `(x0, y0)` to `(x1, y1)`, inclusive of both
 /// endpoints. Single-pixel pen.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn line(canvas: &mut Canvas, mut x0: i32, mut y0: i32, x1: i32, y1: i32, c: Rgba) {
     let dx = (x1 - x0).abs();
     let dy = -(y1 - y0).abs();
@@ -366,6 +370,8 @@ pub fn line(canvas: &mut Canvas, mut x0: i32, mut y0: i32, x1: i32, y1: i32, c: 
 
 /// Outline rectangle (1 pixel pen). `right` and `bottom` are
 /// exclusive (QuickDraw rect convention).
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_rect(canvas: &mut Canvas, top: i32, left: i32, bottom: i32, right: i32, c: Rgba) {
     if right <= left || bottom <= top {
         return;
@@ -383,6 +389,8 @@ pub fn frame_rect(canvas: &mut Canvas, top: i32, left: i32, bottom: i32, right: 
 }
 
 /// Filled rectangle. `right` / `bottom` exclusive.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_rect(canvas: &mut Canvas, top: i32, left: i32, bottom: i32, right: i32, c: Rgba) {
     if right <= left || bottom <= top {
         return;
@@ -394,11 +402,15 @@ pub fn fill_rect(canvas: &mut Canvas, top: i32, left: i32, bottom: i32, right: i
 
 /// Mid-point ellipse outline, axis-aligned, fitted to `(top, left,
 /// bottom, right)` (right / bottom exclusive). Single-pixel pen.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_oval(canvas: &mut Canvas, top: i32, left: i32, bottom: i32, right: i32, c: Rgba) {
     walk_ellipse(top, left, bottom, right, |x, y| canvas.put(x, y, c));
 }
 
 /// Filled ellipse (axis-aligned).
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_oval(canvas: &mut Canvas, top: i32, left: i32, bottom: i32, right: i32, c: Rgba) {
     if right <= left || bottom <= top {
         return;
@@ -470,6 +482,8 @@ fn walk_ellipse<F: FnMut(i32, i32)>(top: i32, left: i32, bottom: i32, right: i32
 /// Frame round-rectangle. Ovals at the four corners (with the
 /// supplied oval-size half-axes) plus four straight edges between
 /// them.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_round_rect(
     canvas: &mut Canvas,
     top: i32,
@@ -486,6 +500,8 @@ pub fn frame_round_rect(
 }
 
 /// Filled round-rectangle.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_round_rect(
     canvas: &mut Canvas,
     top: i32,
@@ -566,6 +582,8 @@ pub fn fill_round_rect(
 /// Filled polygon by even-odd active-edge-list scanline. Vertices in
 /// `(x, y)` order; the polygon is implicitly closed (last vertex
 /// connects back to the first).
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_polygon(canvas: &mut Canvas, vertices: &[(i32, i32)], c: Rgba) {
     if vertices.len() < 3 {
         return;
@@ -620,6 +638,8 @@ pub fn fill_polygon(canvas: &mut Canvas, vertices: &[(i32, i32)], c: Rgba) {
 
 /// Outline polygon: just connect the consecutive vertices with
 /// Bresenham lines; closes implicitly.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_polygon(canvas: &mut Canvas, vertices: &[(i32, i32)], c: Rgba) {
     if vertices.len() < 2 {
         return;
@@ -664,6 +684,8 @@ fn walk_line(mut x0: i32, mut y0: i32, x1: i32, y1: i32, mut plot: impl FnMut(i3
 /// line-drawing commands… The graphics pen hangs below and to the
 /// right of each point on the boundary…"* — so the outline extends
 /// rightward / downward by the pen size, matching [`stamp_pen`].
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_polygon_thick(
     canvas: &mut Canvas,
     vertices: &[(i32, i32)],
@@ -691,6 +713,8 @@ pub fn frame_polygon_thick(
 /// pattern / pattern mode). Each pen-brush pixel is plotted through the
 /// §3-44 pattern-mode cell logic, so a non-solid `PnPat` outline tiles
 /// the same way the patterned fills / rect frames do.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_polygon_pattern_thick_mode(
     canvas: &mut Canvas,
     vertices: &[(i32, i32)],
@@ -721,6 +745,8 @@ pub fn frame_polygon_pattern_thick_mode(
 
 /// Colour-pixmap pen-pattern polygon frame (book page 3-81 pen
 /// pattern). Each pen-brush pixel samples the [`PixPattern`] tile.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_polygon_pix_pattern_thick(
     canvas: &mut Canvas,
     vertices: &[(i32, i32)],
@@ -749,6 +775,8 @@ pub fn frame_polygon_pix_pattern_thick(
 /// Frame an arc of the bounding ellipse from `start_deg` (clockwise,
 /// 0° = 12 o'clock per QuickDraw convention) sweeping `arc_deg`
 /// degrees.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_arc(
     canvas: &mut Canvas,
     top: i32,
@@ -810,6 +838,8 @@ fn walk_arc_outline<F: FnMut(i32, i32)>(
 /// pen"). Stamps a `pen_h × pen_v` pattern brush at every arc boundary
 /// pixel.
 #[allow(clippy::too_many_arguments)]
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_arc_pattern_thick_mode(
     canvas: &mut Canvas,
     top: i32,
@@ -832,6 +862,8 @@ pub fn frame_arc_pattern_thick_mode(
 
 /// Colour-pixmap pen-pattern arc frame (book page 3-13).
 #[allow(clippy::too_many_arguments)]
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_arc_pix_pattern_thick(
     canvas: &mut Canvas,
     top: i32,
@@ -850,6 +882,8 @@ pub fn frame_arc_pix_pattern_thick(
 }
 
 /// Filled wedge of the bounding ellipse (paint slice).
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_arc(
     canvas: &mut Canvas,
     top: i32,
@@ -933,6 +967,8 @@ fn stamp_pen(canvas: &mut Canvas, x: i32, y: i32, pen_h: i32, pen_v: i32, c: Rgb
 
 /// Bresenham line with a `pen_h × pen_v` brush stamped at every
 /// rasterised pixel. Falls back to [`line`] when the pen is 1×1.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn line_thick(
     canvas: &mut Canvas,
     mut x0: i32,
@@ -976,6 +1012,8 @@ pub fn line_thick(
 /// "using the size, pattern, and pattern mode of the graphics pen." A
 /// solid-fg `patCopy` pen reproduces [`line_thick`] / [`line`] exactly.
 #[allow(clippy::too_many_arguments)]
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn line_pattern_thick_mode(
     canvas: &mut Canvas,
     mut x0: i32,
@@ -1013,6 +1051,8 @@ pub fn line_pattern_thick_mode(
 
 /// Colour-pixmap pen-pattern line (book page 3-81): each brush pixel
 /// samples the [`PixPattern`] tile directly.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn line_pix_pattern_thick(
     canvas: &mut Canvas,
     mut x0: i32,
@@ -1050,6 +1090,8 @@ pub fn line_pix_pattern_thick(
 /// `framePen` rule (Inside Macintosh §2: "the pen size is added to
 /// the rectangle's right and bottom"). Falls back to [`frame_rect`]
 /// for 1×1 pens.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_rect_thick(
     canvas: &mut Canvas,
     top: i32,
@@ -1090,6 +1132,8 @@ pub fn frame_rect_thick(
 /// the outline of a `(right + ph - left) × (bottom + pv - top)`
 /// ellipse" but stamping is visually close and matches the
 /// rasteriser's other thick-pen primitives.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_oval_thick(
     canvas: &mut Canvas,
     top: i32,
@@ -1162,6 +1206,8 @@ fn stamp_pen_pix_pattern(
 /// size, pattern, and pattern mode of the graphics pen."*). The ellipse
 /// boundary is walked once and a `pen_h × pen_v` pattern brush stamped
 /// at every boundary pixel.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_oval_pattern_thick_mode(
     canvas: &mut Canvas,
     top: i32,
@@ -1181,6 +1227,8 @@ pub fn frame_oval_pattern_thick_mode(
 }
 
 /// Colour-pixmap pen-pattern oval frame (book page 3-13 pen pattern).
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_oval_pix_pattern_thick(
     canvas: &mut Canvas,
     top: i32,
@@ -1202,6 +1250,8 @@ pub fn frame_oval_pix_pattern_thick(
 /// them, but each boundary pixel is stamped with the `pen_h × pen_v`
 /// pattern brush instead of a single solid colour.
 #[allow(clippy::too_many_arguments)]
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_round_rect_pattern_thick_mode(
     canvas: &mut Canvas,
     top: i32,
@@ -1224,6 +1274,8 @@ pub fn frame_round_rect_pattern_thick_mode(
 
 /// Colour-pixmap pen-pattern round-rectangle frame (book page 3-13).
 #[allow(clippy::too_many_arguments)]
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_round_rect_pix_pattern_thick(
     canvas: &mut Canvas,
     top: i32,
@@ -1920,6 +1972,8 @@ fn plot_pattern_pixel(canvas: &mut Canvas, x: i32, y: i32, pat: Pattern, fg: Rgb
 /// per-region-cell `contains()` walk does its own iteration and only
 /// needs the per-pixel op.
 #[inline]
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn plot_region_cell_mode(
     canvas: &mut Canvas,
     x: i32,
@@ -1943,6 +1997,8 @@ pub fn plot_region_cell_mode(
 /// through the §3-44 pattern-mode logic, so a non-solid `PnPat` tiles
 /// the outline the same way the patterned rect / poly frames do.
 #[inline]
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn stamp_region_pen_cell_mode(
     canvas: &mut Canvas,
     x: i32,
@@ -1967,6 +2023,8 @@ pub fn stamp_region_pen_cell_mode(
 /// each pen-brush pixel samples the [`PixPattern`] tile directly (book
 /// page 3-81 pen pattern). Same below-and-right pen-hang geometry.
 #[inline]
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn stamp_region_pen_cell_pix(
     canvas: &mut Canvas,
     x: i32,
@@ -2088,6 +2146,8 @@ fn hilite_exchange(dst: Rgba, bg: Rgba, hilite: Rgba) -> Rgba {
 /// as [`fill_rect`] but every cell is stippled via `pat` between `fg`
 /// (on bits) and `bg` (off bits). Falls back to the solid-colour
 /// path when the pattern collapses.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_rect_pattern(
     canvas: &mut Canvas,
     top: i32,
@@ -2118,6 +2178,8 @@ pub fn fill_rect_pattern(
 
 /// Patterned-fill ellipse. Same boundary as [`fill_oval`] but every
 /// span is stippled via `pat`.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_oval_pattern(
     canvas: &mut Canvas,
     top: i32,
@@ -2169,6 +2231,8 @@ pub fn fill_oval_pattern(
 /// Patterned-fill round rectangle. Reuses the inner-rect + four-corner
 /// quarter-oval shape from [`fill_round_rect`] but every span is
 /// stippled.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_round_rect_pattern(
     canvas: &mut Canvas,
     top: i32,
@@ -2231,6 +2295,8 @@ pub fn fill_round_rect_pattern(
 
 /// Patterned-fill polygon. Reuses the active-edge-list scan converter
 /// from [`fill_polygon`] but every span is stippled.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_polygon_pattern(
     canvas: &mut Canvas,
     vertices: &[(i32, i32)],
@@ -2286,6 +2352,8 @@ pub fn fill_polygon_pattern(
 
 /// Patterned-frame rectangle with a `pen_h × pen_v` brush. Each stamped
 /// pen pixel respects the pattern's stipple at that coordinate.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_rect_pattern_thick(
     canvas: &mut Canvas,
     top: i32,
@@ -2349,6 +2417,8 @@ pub fn frame_rect_pattern_thick(
 
 /// Mode-aware rectangle fill — see [`fill_rect_pattern`] for the
 /// `patCopy` baseline shape.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_rect_pattern_mode(
     canvas: &mut Canvas,
     top: i32,
@@ -2375,6 +2445,8 @@ pub fn fill_rect_pattern_mode(
 }
 
 /// Mode-aware oval fill — see [`fill_oval_pattern`].
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_oval_pattern_mode(
     canvas: &mut Canvas,
     top: i32,
@@ -2421,6 +2493,8 @@ pub fn fill_oval_pattern_mode(
 }
 
 /// Mode-aware round-rectangle fill — see [`fill_round_rect_pattern`].
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_round_rect_pattern_mode(
     canvas: &mut Canvas,
     top: i32,
@@ -2477,6 +2551,8 @@ pub fn fill_round_rect_pattern_mode(
 }
 
 /// Mode-aware polygon fill — see [`fill_polygon_pattern`].
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_polygon_pattern_mode(
     canvas: &mut Canvas,
     vertices: &[(i32, i32)],
@@ -2534,6 +2610,8 @@ pub fn fill_polygon_pattern_mode(
 
 /// Mode-aware patterned-frame rectangle — see
 /// [`frame_rect_pattern_thick`].
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_rect_pattern_thick_mode(
     canvas: &mut Canvas,
     top: i32,
@@ -2585,6 +2663,8 @@ fn plot_pix_pattern(canvas: &mut Canvas, x: i32, y: i32, pp: &PixPattern) {
 }
 
 /// Colour-pixmap rectangle fill.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_rect_pix_pattern(
     canvas: &mut Canvas,
     top: i32,
@@ -2604,6 +2684,8 @@ pub fn fill_rect_pix_pattern(
 }
 
 /// Colour-pixmap ellipse fill.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_oval_pix_pattern(
     canvas: &mut Canvas,
     top: i32,
@@ -2643,6 +2725,8 @@ pub fn fill_oval_pix_pattern(
 }
 
 /// Colour-pixmap round-rectangle fill.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_round_rect_pix_pattern(
     canvas: &mut Canvas,
     top: i32,
@@ -2690,6 +2774,8 @@ pub fn fill_round_rect_pix_pattern(
 }
 
 /// Colour-pixmap polygon fill.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn fill_polygon_pix_pattern(canvas: &mut Canvas, vertices: &[(i32, i32)], pp: &PixPattern) {
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
     for &(x, y) in vertices {
@@ -2727,6 +2813,8 @@ pub fn fill_polygon_pix_pattern(canvas: &mut Canvas, vertices: &[(i32, i32)], pp
 }
 
 /// Colour-pixmap frame-rect with a `pen_h × pen_v` brush.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn frame_rect_pix_pattern_thick(
     canvas: &mut Canvas,
     top: i32,
@@ -2778,6 +2866,8 @@ pub fn frame_rect_pix_pattern_thick(
 
 /// Invert every pixel of the filled-ellipse interior fitted to
 /// `(top, left, bottom, right)` per Inside Macintosh §3 `InvertOval`.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn invert_oval(canvas: &mut Canvas, top: i32, left: i32, bottom: i32, right: i32) {
     if right <= left || bottom <= top {
         return;
@@ -2808,6 +2898,8 @@ pub fn invert_oval(canvas: &mut Canvas, top: i32, left: i32, bottom: i32, right:
 
 /// Invert every pixel of the filled-round-rectangle interior per
 /// Inside Macintosh §3 `InvertRoundRect`.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn invert_round_rect(
     canvas: &mut Canvas,
     top: i32,
@@ -2885,6 +2977,8 @@ pub fn invert_round_rect(
 /// Invert every pixel of the polygon interior (even-odd parity) per
 /// Inside Macintosh §3 `InvertPoly`. Vertices in `(x, y)` order; the
 /// polygon is implicitly closed.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn invert_polygon(canvas: &mut Canvas, vertices: &[(i32, i32)]) {
     if vertices.len() < 3 {
         return;
@@ -2933,6 +3027,8 @@ pub fn invert_polygon(canvas: &mut Canvas, vertices: &[(i32, i32)]) {
 /// Invert every pixel of the filled-arc wedge per Inside Macintosh §3
 /// `InvertArc`. Mirrors [`fill_arc`]'s polygon-approximation shape
 /// (centre + sampled boundary along the wedge).
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub fn invert_arc(
     canvas: &mut Canvas,
     top: i32,

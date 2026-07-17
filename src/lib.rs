@@ -59,15 +59,25 @@
 pub mod decoder;
 pub mod encoder;
 pub mod error;
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub mod font;
 pub mod header;
 pub mod image;
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub mod opcodes;
 pub mod ops;
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub mod packbits;
 pub mod probe;
 pub mod raster;
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub mod reader;
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 pub mod region;
 #[cfg(feature = "registry")]
 pub mod registry;

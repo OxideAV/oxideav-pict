@@ -846,6 +846,8 @@ impl Default for TextRatio {
 }
 
 /// Drawing state carried across the v2 opcode walk.
+// internal — exposed for tests/fuzz; not part of the stable API
+#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct PictState {
     /// Current pen position, in picture-frame coordinates.

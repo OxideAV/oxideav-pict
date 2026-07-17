@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Marked the crate's internal plumbing `#[doc(hidden)]` (the `font`,
+  `opcodes`, `packbits`, `reader` and `region` modules; the `raster`
+  rasteriser kernels; `state::PictState`) so cargo-semver-checks no
+  longer tracks test/fuzz-only surface as stable API. No signatures,
+  visibility or behaviour change; the documented decode/encode/probe/
+  registry surface is unaffected.
+
 ### Added
 
 - round 407: **`txFace` style synthesis is rasterised.** The re-staged
