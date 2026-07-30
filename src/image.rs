@@ -76,21 +76,26 @@ impl PictComment {
 }
 
 /// One embedded QuickTime image payload captured from the opcode
-/// stream (round 401).
+/// stream (round 401; typed interior round 435).
 ///
 /// Inside Macintosh: Imaging With QuickDraw §A-3 Table A-2 defines two
 /// QuickTime opcodes, each carrying `Data length (Long)` followed by
-/// `data length` bytes that are **private to QuickTime**:
+/// `data length` bytes:
 ///
 /// * `CompressedQuickTime` (`$8200`) — a compressed embedded image
 ///   (typically JPEG in late-1990s PICT files).
-/// * `UncompressedQuickTime` (`$8201`) — the uncompressed variant.
+/// * `UncompressedQuickTime` (`$8201`) — the uncompressed variant,
+///   wrapping one ordinary `$98`–`$9B` pixel-data subopcode.
 ///
-/// The payload's internal structure is documented in Inside Macintosh:
-/// QuickTime, not in the Imaging book, so the decoder captures the raw
-/// bytes verbatim and leaves interpretation to the consumer (e.g. a
-/// JPEG decoder fed from `data`). The drawing-state machine itself
-/// treats the opcode as opaque.
+/// §A-3 calls the bytes "private to QuickTime"; their layout is
+/// published in Inside Macintosh: QuickTime (1993) Chapter 3 (see
+/// [`crate::quicktime`]). The decoder keeps the verbatim capture in
+/// [`Self::data`] *and* attaches the typed view in [`Self::image`]
+/// when the interior matches the published layout. Per page 3-26 the
+/// `Size` field is authoritative even for a reader that cannot decode
+/// the payload, so an interior that fails the typed parse degrades to
+/// the verbatim capture (`image == None`) instead of failing the
+/// picture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PictQuickTime {
     /// `true` for `CompressedQuickTime` (`$8200`); `false` for
@@ -99,6 +104,13 @@ pub struct PictQuickTime {
     /// The raw payload bytes following the `Data length` Long, exactly
     /// as stored.
     pub data: Vec<u8>,
+    /// Typed view of `data` per Inside Macintosh: QuickTime Tables
+    /// 3-1 / 3-2 — the opcode wrapper fields (display matrix, matte,
+    /// mask region, transfer mode, source rect), the embedded
+    /// `ImageDescription` with its compressor FourCC, and the image
+    /// payload. `None` when the interior did not match the published
+    /// layout (the verbatim `data` capture still stands).
+    pub image: Option<crate::quicktime::QuickTimePayload>,
 }
 
 /// Pixel layout used by [`PictImage`].

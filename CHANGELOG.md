@@ -28,6 +28,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ImageDescription::to_bytes` / `QuickTimeMatrix::to_wire` provide
   the emit direction for round-trip tooling.
 
+- round 435: **The decoder consumes the typed QuickTime interiors.**
+  `PictQuickTime` gains an `image: Option<QuickTimePayload>` typed
+  view alongside the verbatim `data` capture. `$8200` surfaces the
+  wrapper (matrix, matte, mask region, mode, srcRect, accuracy) plus
+  the embedded `ImageDescription` and compressed image bytes — the
+  codec FourCC is a CODEC-tag boundary, so no in-crate decode.
+  `$8201` now **rasterises**: the wrapper's embedded `$98`–`$9B`
+  pixel-data subopcode re-enters the normal raster dispatch and its
+  pixels land on the canvas (previously the payload was only
+  captured). Degradation per page 3-26 ("the `Size` field must be
+  honoured even by a reader that cannot decode the payload"): an
+  interior that fails the typed parse — or a `$8201` whose sub-pixel
+  data is truncated — keeps the verbatim capture with `image = None`
+  and never fails the picture. Seven `parse_pict`-level tests in
+  `synth_v2_round435_quicktime` pin the typed surface, the
+  zero-`dataSize` recovery, matte/mask carriage on both opcodes, the
+  `$9A` blit, and both degradation paths.
+
 ### Changed
 
 - Marked the crate's internal plumbing `#[doc(hidden)]` (the `font`,

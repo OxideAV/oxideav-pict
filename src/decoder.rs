@@ -923,22 +923,75 @@ fn dispatch_v2_opcode(
             Ok(true)
         }
         OP_COMPRESSED_QUICKTIME | OP_UNCOMPRESSED_QUICKTIME => {
-            // Embedded QuickTime image (typically JPEG). Per §A-3
-            // Table A-2 the payload is `Data length (Long)` followed
-            // by `data length` bytes that are *private to QuickTime*
+            // Embedded QuickTime image. Per §A-3 Table A-2 the payload
+            // is `Data length (Long)` followed by `data length` bytes
             // (total additional data = `4 + data length` — the length
             // word excludes itself; round 401 fixes the previous
             // self-inclusive reading, which under-walked conforming
             // streams by 4 bytes). The bytes are captured verbatim
-            // into `state.quicktime` so a consumer can hand them to
-            // the matching image decoder; their internal structure is
-            // documented in Inside Macintosh: QuickTime, not here, so
-            // the walker treats them as opaque.
+            // into `state.quicktime`, and — round 435 — the interior
+            // is additionally parsed into the typed
+            // `quicktime::QuickTimePayload` per Inside Macintosh:
+            // QuickTime (1993) Tables 3-1 / 3-2.
+            //
+            // Degradation policy (page 3-26: the `Size` field must be
+            // honoured even by a reader that cannot decode the
+            // payload — a machine without QuickTime "ignores the new
+            // opcodes"): an interior that fails the typed parse, or a
+            // `$8201` whose embedded subopcode pixel data fails to
+            // decode, keeps the verbatim capture with `image = None`
+            // and leaves the canvas untouched instead of failing the
+            // picture.
             let data_length = r.read_u32()? as usize;
             let data = r.read_bytes(data_length)?.to_vec();
+            let compressed = opcode == OP_COMPRESSED_QUICKTIME;
+            let image = if compressed {
+                // `$8200`: the compressed image data is a CODEC-tag
+                // boundary — the FourCC in the ImageDescription names
+                // the decompressor, so no pixels land on the canvas
+                // here. With the `registry` feature the caller routes
+                // `image_description.codec` through oxideav-core's
+                // resolver (`registry::resolve_quicktime_codec`).
+                crate::quicktime::parse_compressed_quicktime(&data)
+                    .ok()
+                    .map(crate::quicktime::QuickTimePayload::Compressed)
+            } else {
+                // `$8201`: the wrapper embeds one ordinary `$98`–`$9B`
+                // pixel-data subopcode whose bytes sit wholly inside
+                // the `Size` window — re-enter the normal raster
+                // dispatch on it and blit the result.
+                crate::quicktime::parse_uncompressed_quicktime(&data)
+                    .ok()
+                    .and_then(|u| {
+                        let mut sub = Reader::new(&u.sub_data);
+                        let blitted = match u.subopcode {
+                            OP_PACK_BITS_RECT => decode_pack_bits_rect(&mut sub)
+                                .map(|(img, dst)| blit_subimage(canvas, state, &img, &dst)),
+                            OP_PACK_BITS_RGN => {
+                                decode_pack_bits_rgn(&mut sub).map(|(img, dst, rgn)| {
+                                    blit_subimage_with_rgn(canvas, state, &img, &dst, Some(&rgn))
+                                })
+                            }
+                            OP_DIRECT_BITS_RECT => decode_direct_bits_rect(&mut sub)
+                                .map(|(img, dst)| blit_subimage(canvas, state, &img, &dst)),
+                            OP_DIRECT_BITS_RGN => {
+                                decode_direct_bits_rgn(&mut sub).map(|(img, dst, rgn)| {
+                                    blit_subimage_with_rgn(canvas, state, &img, &dst, Some(&rgn))
+                                })
+                            }
+                            // parse_uncompressed_quicktime guarantees
+                            // the $98–$9B range.
+                            _ => unreachable!("subopcode range enforced by the parser"),
+                        };
+                        blitted
+                            .ok()
+                            .map(|()| crate::quicktime::QuickTimePayload::Uncompressed(u))
+                    })
+            };
             state.quicktime.push(crate::image::PictQuickTime {
-                compressed: opcode == OP_COMPRESSED_QUICKTIME,
+                compressed,
                 data,
+                image,
             });
             Ok(true)
         }
