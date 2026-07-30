@@ -173,7 +173,10 @@ before paying decode cost), and encoder tests asserting an opcode mix.
 It shares its opcode walker with the decoder and surfaces counts
 (`raster_count`, `indexed_raster_count`, `drawing_count`,
 `comment_count`, `reserved_op_count`, `text_state_op_count`), the parsed
-`header` / `text_state` / `comments`, and a `termination` reason.
+`header` / `text_state` / `comments`, per-opcode QuickTime wrapper
+summaries (`quicktime: Vec<ProbeQuickTime>` — compressor FourCC,
+dimensions, depth, matte / mask presence, `$8201` subopcode — without
+retaining payload bytes), and a `termination` reason.
 
 ```rust
 use oxideav_pict::{encode_pict, probe_pict, ProbeVersion};
