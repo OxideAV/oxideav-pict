@@ -23,9 +23,16 @@
 //!
 //! `CompressedQuickTime` (`0x8200`) and `UncompressedQuickTime`
 //! (`0x8201`) payloads are captured verbatim into
-//! [`PictImage::quicktime`] (round 401) — the bytes are private to
-//! QuickTime per §A-3, so the embedded image (typically JPEG) is left
-//! to the consumer's decoder.
+//! [`PictImage::quicktime`] (round 401) **and** parsed into typed
+//! [`quicktime::QuickTimePayload`] interiors (round 435) per Inside
+//! Macintosh: QuickTime (1993) Chapter 3: `$8200` surfaces its
+//! wrapper (display matrix, matte, mask region, mode, srcRect,
+//! accuracy), the embedded [`quicktime::ImageDescription`] and the
+//! compressed image bytes — a CODEC-tag boundary routed through the
+//! framework resolver (`registry::resolve_quicktime_codec`, never
+//! decoded in-crate) — while `$8201`'s embedded `$98`–`$9B`
+//! pixel-data subopcode is rasterised through the normal raster
+//! dispatch.
 //!
 //! Decode-side allocations sized from attacker-controlled fields are
 //! bounded by [`MAX_RASTER_BYTES`] (round 401 hostile-input

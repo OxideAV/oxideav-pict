@@ -82,7 +82,7 @@ oxideav_core::register!("pict", register);
 
 /// Resolve the codec named by a QuickTime picture opcode's
 /// [`ImageDescription`](crate::quicktime::ImageDescription) through
-/// the framework's [`CodecResolver`].
+/// the framework's [`oxideav_core::CodecResolver`].
 ///
 /// The `$8200` `CompressedQuickTime` opcode is a CODEC-tag boundary:
 /// the compressor FourCC in `cType` (Inside Macintosh: QuickTime,

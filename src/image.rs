@@ -168,9 +168,12 @@ pub struct PictImage {
     pub comments: Vec<PictComment>,
     /// Embedded QuickTime image payloads (`CompressedQuickTime $8200`
     /// / `UncompressedQuickTime $8201`) captured during the opcode
-    /// walk, in stream order (round 401). The bytes are private to
-    /// QuickTime per §A-3 — a consumer wanting the embedded image
-    /// (typically JPEG) hands [`PictQuickTime::data`] to the matching
+    /// walk, in stream order (round 401; typed interiors round 435).
+    /// Each entry carries the verbatim bytes ([`PictQuickTime::data`])
+    /// plus the typed [`crate::quicktime::QuickTimePayload`] view
+    /// ([`PictQuickTime::image`]) when the interior matched the
+    /// Inside Macintosh: QuickTime Table 3-1 / 3-2 layout — including
+    /// the compressor FourCC a consumer routes to the matching
     /// decoder. Empty for PICTs without QuickTime opcodes.
     pub quicktime: Vec<PictQuickTime>,
     /// Final tracked text / pen-mode / highlight state as observed by
