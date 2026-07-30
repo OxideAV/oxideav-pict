@@ -46,6 +46,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero-`dataSize` recovery, matte/mask carriage on both opcodes, the
   `$9A` blit, and both degradation paths.
 
+- round 435: **Typed QuickTime emit direction.**
+  `QuickTimeCompressed::still` (identity matrix / `srcCopy` /
+  `dataSize`-synchronised still-image form) and
+  `QuickTimeUncompressed::wrapping` (wrap an already-built `$98`–`$9B`
+  raster chunk) construct the typed forms;
+  `QuickTimeCompressed::to_payload_bytes` /
+  `QuickTimeUncompressed::to_payload_bytes` serialise them with the
+  `MatteSize` / `MaskSize` gates derived from the optional fields
+  (rejecting un-round-trippable structures: empty-data mattes,
+  sub-10-byte mask regions, `dataSize` disagreements, out-of-range
+  subopcodes). `build_compressed_quicktime_image` /
+  `build_uncompressed_quicktime_image` and the matching
+  `PictBuilder::compressed_quicktime_image` /
+  `uncompressed_quicktime_image` methods emit the full opcode; emit →
+  `parse_pict` round-trips compare equal at the typed level.
+
 ### Changed
 
 - Marked the crate's internal plumbing `#[doc(hidden)]` (the `font`,

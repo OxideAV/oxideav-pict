@@ -21,8 +21,8 @@
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::state::RectI32;
 use oxideav_pict::{
-    build_direct_bits_rect_op, parse_pict, Fixed, ImageDescription, PackType, QuickTimeMatrix,
-    QuickTimePayload, Verb,
+    build_direct_bits_rect_op, parse_pict, Fixed, ImageDescription, PackType, QuickTimeCompressed,
+    QuickTimeMatrix, QuickTimePayload, QuickTimeUncompressed, Verb,
 };
 
 /// A minimal conforming `ImageDescription` (idSize = 86).
@@ -315,4 +315,64 @@ fn compressed_quicktime_matte_and_mask_survive_parse_pict() {
     assert_eq!(matte.data, matte_data);
     assert_eq!(c.mask_region.as_deref(), Some(mask.as_slice()));
     assert_eq!(c.image_data, img_data);
+}
+
+// ---------------------------------------------------------------------------
+// Typed emit → parse round-trips
+// ---------------------------------------------------------------------------
+
+#[test]
+fn typed_compressed_builder_round_trips_through_parse_pict() {
+    let blob: Vec<u8> = (0..150u32).map(|i| (i * 3) as u8).collect();
+    let qt = QuickTimeCompressed::still(desc(*b"jpeg", 40, 30, 0), blob.clone());
+    assert_eq!(qt.image_description.data_size, blob.len() as u32);
+    assert_eq!(qt.src_rect, RectI32::from_be(0, 0, 30, 40));
+
+    let mut b = PictBuilder::new(0, 0, 8, 8);
+    b.rect(Verb::Paint, 0, 0, 2, 2);
+    b.compressed_quicktime_image(&qt).unwrap();
+    let img = parse_pict(&b.finish()).unwrap();
+
+    let Some(QuickTimePayload::Compressed(back)) = &img.quicktime[0].image else {
+        panic!("typed $8200 payload expected");
+    };
+    assert_eq!(back, &qt);
+}
+
+#[test]
+fn typed_uncompressed_builder_round_trips_and_blits() {
+    let red: Vec<u8> = [255u8, 0, 0, 255].repeat(16);
+    let sub = build_direct_bits_rect_op(2, 2, 6, 6, &red, PackType::Raw).unwrap();
+    let qt = QuickTimeUncompressed::wrapping(&sub).unwrap();
+    assert_eq!(qt.subopcode, 0x009A);
+
+    let mut b = PictBuilder::new(0, 0, 16, 16);
+    b.uncompressed_quicktime_image(&qt).unwrap();
+    let img = parse_pict(&b.finish()).unwrap();
+
+    let Some(QuickTimePayload::Uncompressed(back)) = &img.quicktime[0].image else {
+        panic!("typed $8201 payload expected");
+    };
+    assert_eq!(back, &qt);
+    let off = (3 * 16 + 3) * 4;
+    assert_eq!(&img.data[off..off + 4], &[255, 0, 0, 255]);
+}
+
+#[test]
+fn typed_builders_reject_inconsistent_structures() {
+    // dataSize disagreement (non-zero but wrong).
+    let mut qt = QuickTimeCompressed::still(desc(*b"jpeg", 8, 8, 0), vec![1, 2, 3]);
+    qt.image_description.data_size = 999;
+    assert!(qt.to_payload_bytes().is_err());
+    // dataSize = 0 stays legal ("size unknown" form).
+    qt.image_description.data_size = 0;
+    assert!(qt.to_payload_bytes().is_ok());
+    // Undersized mask region.
+    qt.mask_region = Some(vec![0u8; 4]);
+    assert!(qt.to_payload_bytes().is_err());
+
+    // Sub-chunk with a non-pixel-data opcode.
+    assert!(QuickTimeUncompressed::wrapping(&[0x00, 0x90, 0xAA]).is_err());
+    // Sub-chunk shorter than the opcode word.
+    assert!(QuickTimeUncompressed::wrapping(&[0x00]).is_err());
 }

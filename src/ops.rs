@@ -40,6 +40,7 @@ use crate::encoder::build_clip_rgn_rect;
 use crate::error::{PictError, Result};
 use crate::header::PictHeader;
 use crate::opcodes::*;
+use crate::quicktime::{QuickTimeCompressed, QuickTimeUncompressed};
 use crate::state::RectI32;
 
 // ---------------------------------------------------------------------------
@@ -1007,6 +1008,30 @@ pub fn build_uncompressed_quicktime(data: &[u8]) -> Result<Vec<u8>> {
     build_quicktime_op(OP_UNCOMPRESSED_QUICKTIME, data)
 }
 
+/// Build a `CompressedQuickTime` (`$8200`) opcode from the typed
+/// [`QuickTimeCompressed`] form — the Inside Macintosh: QuickTime
+/// Table 3-1 wrapper (version, display matrix, matte, mask region,
+/// transfer mode, source rect, accuracy) around an
+/// `ImageDescription` + compressed image data. The `Size` long and
+/// the `MatteSize` / `MaskSize` gates are derived from the structure.
+///
+/// See [`QuickTimeCompressed::still`] for the common
+/// identity-matrix / `srcCopy` still-image construction. Errors are
+/// those of [`QuickTimeCompressed::to_payload_bytes`].
+pub fn build_compressed_quicktime_image(qt: &QuickTimeCompressed) -> Result<Vec<u8>> {
+    build_quicktime_op(OP_COMPRESSED_QUICKTIME, &qt.to_payload_bytes()?)
+}
+
+/// Build an `UncompressedQuickTime` (`$8201`) opcode from the typed
+/// [`QuickTimeUncompressed`] form — the Table 3-2 wrapper around one
+/// embedded `$98`–`$9B` pixel-data subopcode. See
+/// [`QuickTimeUncompressed::wrapping`] for wrapping an already-built
+/// raster chunk. Errors are those of
+/// [`QuickTimeUncompressed::to_payload_bytes`].
+pub fn build_uncompressed_quicktime_image(qt: &QuickTimeUncompressed) -> Result<Vec<u8>> {
+    build_quicktime_op(OP_UNCOMPRESSED_QUICKTIME, &qt.to_payload_bytes()?)
+}
+
 fn build_quicktime_op(opcode: u16, data: &[u8]) -> Result<Vec<u8>> {
     let data_length: u32 = data.len().try_into().map_err(|_| {
         PictError::invalid(format!(
@@ -1559,6 +1584,29 @@ impl PictBuilder {
     /// 32-bit length field.
     pub fn uncompressed_quicktime(&mut self, data: &[u8]) -> Result<&mut Self> {
         let bytes = build_uncompressed_quicktime(data)?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
+    /// Push a `CompressedQuickTime` opcode (`$8200`) from the typed
+    /// [`QuickTimeCompressed`] form (Inside Macintosh: QuickTime
+    /// Table 3-1). Errors are those of
+    /// [`build_compressed_quicktime_image`].
+    pub fn compressed_quicktime_image(&mut self, qt: &QuickTimeCompressed) -> Result<&mut Self> {
+        let bytes = build_compressed_quicktime_image(qt)?;
+        self.push(&bytes);
+        Ok(self)
+    }
+
+    /// Push an `UncompressedQuickTime` opcode (`$8201`) from the
+    /// typed [`QuickTimeUncompressed`] form (Inside Macintosh:
+    /// QuickTime Table 3-2). Errors are those of
+    /// [`build_uncompressed_quicktime_image`].
+    pub fn uncompressed_quicktime_image(
+        &mut self,
+        qt: &QuickTimeUncompressed,
+    ) -> Result<&mut Self> {
+        let bytes = build_uncompressed_quicktime_image(qt)?;
         self.push(&bytes);
         Ok(self)
     }

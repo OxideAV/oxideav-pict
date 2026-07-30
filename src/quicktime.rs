@@ -377,6 +377,166 @@ impl QuickTimeUncompressed {
     }
 }
 
+impl QuickTimeCompressed {
+    /// Convenience constructor for the common still-image case: an
+    /// identity display matrix, `srcCopy` transfer mode, a source
+    /// rectangle spanning the description's `width × height`, no
+    /// matte, no mask. `image_description.data_size` is synchronised
+    /// to `image_data.len()`.
+    pub fn still(mut image_description: ImageDescription, image_data: Vec<u8>) -> Self {
+        image_description.data_size = image_data.len() as u32;
+        let src_rect = RectI32 {
+            top: 0,
+            left: 0,
+            bottom: image_description.height as i32,
+            right: image_description.width as i32,
+        };
+        Self {
+            version: 0,
+            matrix: QuickTimeMatrix::IDENTITY,
+            matte_rect: RectI32::default(),
+            mode: 0, // srcCopy
+            src_rect,
+            accuracy: 0,
+            matte: None,
+            mask_region: None,
+            image_description,
+            image_data,
+        }
+    }
+
+    /// Serialise to the on-disk `$8200` payload form (the bytes after
+    /// the 4-byte `Size` field) per Table 3-1. `MatteSize` /
+    /// `MaskSize` are derived from the optional fields' lengths.
+    ///
+    /// Errors when the structure cannot round-trip: a matte with
+    /// empty data (its gate would read as absent), a mask region
+    /// shorter than the 10-byte `Region` header, or a non-zero
+    /// `image_description.data_size` disagreeing with
+    /// `image_data.len()` (zero stays zero — the documented "size
+    /// unknown" form, recovered from the `Size` window on parse).
+    pub fn to_payload_bytes(&self) -> Result<Vec<u8>> {
+        if let Some(m) = &self.matte {
+            if m.data.is_empty() {
+                return Err(PictError::invalid(
+                    "QuickTime matte with empty data: MatteSize 0 gates the matte off entirely",
+                ));
+            }
+        }
+        if let Some(rgn) = &self.mask_region {
+            if rgn.len() < 10 {
+                return Err(PictError::invalid(format!(
+                    "QuickTime mask region of {} bytes is smaller than the 10-byte Region header",
+                    rgn.len()
+                )));
+            }
+        }
+        if self.image_description.data_size != 0
+            && self.image_description.data_size as usize != self.image_data.len()
+        {
+            return Err(PictError::invalid(format!(
+                "ImageDescription dataSize {} disagrees with image data length {}",
+                self.image_description.data_size,
+                self.image_data.len()
+            )));
+        }
+        let mut p = Vec::new();
+        p.extend_from_slice(&self.version.to_be_bytes());
+        p.extend_from_slice(&self.matrix.to_wire());
+        let matte_size = self.matte.as_ref().map_or(0, |m| m.data.len() as u32);
+        p.extend_from_slice(&matte_size.to_be_bytes());
+        write_rect(&mut p, &self.matte_rect);
+        p.extend_from_slice(&self.mode.to_be_bytes());
+        write_rect(&mut p, &self.src_rect);
+        p.extend_from_slice(&self.accuracy.to_be_bytes());
+        let mask_size = self.mask_region.as_ref().map_or(0, |r| r.len() as u32);
+        p.extend_from_slice(&mask_size.to_be_bytes());
+        if let Some(m) = &self.matte {
+            p.extend_from_slice(&m.description.to_bytes());
+            p.extend_from_slice(&m.data);
+        }
+        if let Some(rgn) = &self.mask_region {
+            p.extend_from_slice(rgn);
+        }
+        p.extend_from_slice(&self.image_description.to_bytes());
+        p.extend_from_slice(&self.image_data);
+        Ok(p)
+    }
+}
+
+impl QuickTimeUncompressed {
+    /// Convenience constructor wrapping one already-built `$98`–`$9B`
+    /// opcode chunk (opcode word first, as produced by
+    /// `build_direct_bits_rect_op` and friends): identity matrix, no
+    /// matte. Errors when the chunk is shorter than the 2-byte
+    /// subopcode word or its opcode is outside the documented
+    /// `$98`–`$9B` set.
+    pub fn wrapping(sub_chunk: &[u8]) -> Result<Self> {
+        if sub_chunk.len() < 2 {
+            return Err(PictError::invalid(
+                "UncompressedQuickTime sub-chunk shorter than the 2-byte subopcode word",
+            ));
+        }
+        let subopcode = u16::from_be_bytes([sub_chunk[0], sub_chunk[1]]);
+        if !(0x0098..=0x009B).contains(&subopcode) {
+            return Err(PictError::invalid(format!(
+                "UncompressedQuickTime subopcode 0x{subopcode:04X} outside the documented $98–$9B set"
+            )));
+        }
+        Ok(Self {
+            version: 0,
+            matrix: QuickTimeMatrix::IDENTITY,
+            matte_rect: RectI32::default(),
+            matte: None,
+            subopcode,
+            sub_data: sub_chunk[2..].to_vec(),
+        })
+    }
+
+    /// Serialise to the on-disk `$8201` payload form (the bytes after
+    /// the 4-byte `Size` field) per Table 3-2. Errors mirror
+    /// [`QuickTimeCompressed::to_payload_bytes`] for the matte gate,
+    /// plus the `$98`–`$9B` subopcode range check.
+    pub fn to_payload_bytes(&self) -> Result<Vec<u8>> {
+        if let Some(m) = &self.matte {
+            if m.data.is_empty() {
+                return Err(PictError::invalid(
+                    "QuickTime matte with empty data: MatteSize 0 gates the matte off entirely",
+                ));
+            }
+        }
+        if !self.subopcode_in_range() {
+            return Err(PictError::invalid(format!(
+                "UncompressedQuickTime subopcode 0x{:04X} outside the documented $98–$9B set",
+                self.subopcode
+            )));
+        }
+        let mut p = Vec::new();
+        p.extend_from_slice(&self.version.to_be_bytes());
+        p.extend_from_slice(&self.matrix.to_wire());
+        let matte_size = self.matte.as_ref().map_or(0, |m| m.data.len() as u32);
+        p.extend_from_slice(&matte_size.to_be_bytes());
+        write_rect(&mut p, &self.matte_rect);
+        if let Some(m) = &self.matte {
+            p.extend_from_slice(&m.description.to_bytes());
+            p.extend_from_slice(&m.data);
+        }
+        p.extend_from_slice(&self.subopcode.to_be_bytes());
+        p.extend_from_slice(&self.sub_data);
+        Ok(p)
+    }
+}
+
+/// Write a QuickDraw `Rect` (top, left, bottom, right as big-endian
+/// i16) from the crate's widened [`RectI32`] form. Values outside the
+/// i16 range saturate — on-disk rects are i16 by definition.
+fn write_rect(out: &mut Vec<u8>, r: &RectI32) {
+    for v in [r.top, r.left, r.bottom, r.right] {
+        let clamped = v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        out.extend_from_slice(&clamped.to_be_bytes());
+    }
+}
+
 /// Typed view of a QuickTime picture-opcode payload, attached to
 /// [`crate::PictQuickTime::image`] when the payload interior matched
 /// the published layout.
