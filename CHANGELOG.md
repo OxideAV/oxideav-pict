@@ -73,6 +73,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays available as typed bytes — `oxideav-pict` never decodes an
   embedded codec itself.
 
+- round 435: **Probe skims QuickTime wrappers.** `PictProbe` gains
+  `quicktime: Vec<ProbeQuickTime>` — one lightweight summary per
+  `$8200` / `$8201` opcode in stream order (compressor FourCC,
+  width / height / depth, matte / mask presence, `$8201` subopcode,
+  payload length) without keeping the payload bytes in the probe
+  result, so a content scanner can report "embeds a `jpeg` 640×480
+  payload" before paying any decode cost. Non-conforming interiors
+  degrade to a bare-count row with the typed fields `None`.
+
 ### Changed
 
 - Marked the crate's internal plumbing `#[doc(hidden)]` (the `font`,

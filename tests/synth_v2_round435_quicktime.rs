@@ -376,3 +376,54 @@ fn typed_builders_reject_inconsistent_structures() {
     // Sub-chunk shorter than the opcode word.
     assert!(QuickTimeUncompressed::wrapping(&[0x00]).is_err());
 }
+
+// ---------------------------------------------------------------------------
+// Probe surfaces per-opcode QuickTime summaries
+// ---------------------------------------------------------------------------
+
+#[test]
+fn probe_summarises_quicktime_opcodes() {
+    use oxideav_pict::probe_pict;
+
+    let blob = vec![0x5Au8; 33];
+    let c = QuickTimeCompressed::still(desc(*b"jpeg", 640, 480, 0), blob);
+    let red: Vec<u8> = [255u8, 0, 0, 255].repeat(16);
+    let sub = build_direct_bits_rect_op(2, 2, 6, 6, &red, PackType::Raw).unwrap();
+    let u = QuickTimeUncompressed::wrapping(&sub).unwrap();
+
+    let mut b = PictBuilder::new(0, 0, 16, 16);
+    b.compressed_quicktime_image(&c).unwrap();
+    b.uncompressed_quicktime_image(&u).unwrap();
+    // A garbage $8200 interior still shows up as a bare-count row.
+    b.compressed_quicktime(&[0xEE; 12]).unwrap();
+    let p = probe_pict(&b.finish()).unwrap();
+
+    assert!(p.has_quicktime());
+    assert_eq!(p.compressed_quicktime_count, 2);
+    assert_eq!(p.uncompressed_quicktime_count, 1);
+    assert_eq!(p.quicktime.len(), 3);
+
+    let q0 = &p.quicktime[0];
+    assert!(q0.compressed);
+    assert_eq!(q0.codec, Some(*b"jpeg"));
+    assert_eq!(q0.codec_str().as_deref(), Some("jpeg"));
+    assert_eq!(
+        (q0.width, q0.height, q0.depth),
+        (Some(640), Some(480), Some(24))
+    );
+    assert_eq!(q0.has_matte, Some(false));
+    assert_eq!(q0.has_mask, Some(false));
+    assert_eq!(q0.subopcode, None);
+
+    let q1 = &p.quicktime[1];
+    assert!(!q1.compressed);
+    assert_eq!(q1.codec, None);
+    assert_eq!(q1.subopcode, Some(0x009A));
+    assert_eq!(q1.has_matte, Some(false));
+
+    let q2 = &p.quicktime[2];
+    assert!(q2.compressed);
+    assert_eq!(q2.payload_len, 12);
+    assert_eq!(q2.codec, None); // interior didn't match the layout
+    assert_eq!(q2.has_matte, None);
+}

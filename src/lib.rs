@@ -115,7 +115,7 @@ pub use ops::{
     build_tx_font, build_tx_mode, build_tx_ratio, build_tx_size, build_uncompressed_quicktime,
     build_uncompressed_quicktime_image, PictBuilder, PictV1Builder, Verb,
 };
-pub use probe::{probe_pict, PictProbe, ProbeRect, ProbeTermination, ProbeVersion};
+pub use probe::{probe_pict, PictProbe, ProbeQuickTime, ProbeRect, ProbeTermination, ProbeVersion};
 pub use quicktime::{
     parse_compressed_quicktime, parse_uncompressed_quicktime, ImageDescription,
     QuickTimeCompressed, QuickTimeMatrix, QuickTimeMatte, QuickTimePayload, QuickTimeUncompressed,

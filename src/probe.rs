@@ -108,11 +108,22 @@ pub struct PictProbe {
     /// dither both count).
     pub pix_pattern_set_count: u32,
     /// How many `CompressedQuickTime` (`0x8200`) opcodes appear. Each
-    /// carries an embedded QuickTime image (typically JPEG) the
-    /// decoder currently skips.
+    /// carries an embedded QuickTime image (typically JPEG); the
+    /// decoder surfaces the payload typed + verbatim, and the codec
+    /// FourCC is a CODEC-tag boundary routed through the framework
+    /// resolver rather than decoded in-crate.
     pub compressed_quicktime_count: u32,
     /// How many `UncompressedQuickTime` (`0x8201`) opcodes appear.
     pub uncompressed_quicktime_count: u32,
+    /// One lightweight summary per QuickTime opcode, in stream order
+    /// (round 435) — the Inside Macintosh: QuickTime Table 3-1 / 3-2
+    /// wrapper skimmed without materialising the image bytes into the
+    /// probe result. Lets a content scanner report "this PICT embeds
+    /// a `jpeg` 640×480 payload" (or spot a codec with no workspace
+    /// implementation) before paying any decode cost. An interior
+    /// that doesn't match the published layout yields a summary with
+    /// the typed fields `None` (the count fields above still tick).
+    pub quicktime: Vec<ProbeQuickTime>,
     /// How many §A-3 *reserved* v2 opcodes the walker stepped past
     /// without dispatching — i.e. opcodes in the ranges Inside
     /// Macintosh: Imaging With QuickDraw §A-3 (Table A-2) lists as
@@ -174,6 +185,53 @@ impl PictProbe {
     /// `true` if the probe saw any embedded QuickTime payload.
     pub fn has_quicktime(&self) -> bool {
         self.compressed_quicktime_count > 0 || self.uncompressed_quicktime_count > 0
+    }
+}
+
+/// Lightweight per-opcode QuickTime summary reported by
+/// [`PictProbe::quicktime`] (round 435).
+///
+/// Skims the Inside Macintosh: QuickTime (1993) Table 3-1 / 3-2
+/// wrapper — for `$8200` the embedded `ImageDescription`'s compressor
+/// FourCC / dimensions / depth, for `$8201` the embedded `$98`–`$9B`
+/// subopcode — without keeping the payload bytes in the probe result.
+/// The typed fields are `None` when the payload interior didn't match
+/// the published layout (`Size` remains authoritative, so the walk
+/// continues regardless).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeQuickTime {
+    /// `true` for `CompressedQuickTime` (`0x8200`); `false` for
+    /// `UncompressedQuickTime` (`0x8201`).
+    pub compressed: bool,
+    /// Byte length of the `Size`-bounded payload.
+    pub payload_len: usize,
+    /// `$8200`: the main image description's compressor FourCC
+    /// (`cType`). Always `None` for `$8201` (its image is raw
+    /// QuickDraw pixel data, not a coded payload).
+    pub codec: Option<[u8; 4]>,
+    /// `$8200`: source width in pixels from the image description.
+    pub width: Option<u16>,
+    /// `$8200`: source height in pixels from the image description.
+    pub height: Option<u16>,
+    /// `$8200`: colour depth from the image description (34/36/40 =
+    /// 2-/4-/8-bit grayscale per page 3-51).
+    pub depth: Option<u16>,
+    /// Whether the wrapper carries a matte (`MatteSize != 0`).
+    /// `None` when the interior didn't parse.
+    pub has_matte: Option<bool>,
+    /// `$8200`: whether the wrapper carries a mask region
+    /// (`MaskSize != 0`). `None` for `$8201` or unparsed interiors.
+    pub has_mask: Option<bool>,
+    /// `$8201`: the embedded pixel-data subopcode word (`0x0098`–
+    /// `0x009B`). `None` for `$8200` or unparsed interiors.
+    pub subopcode: Option<u16>,
+}
+
+impl ProbeQuickTime {
+    /// The compressor FourCC as a lossy printable string, when
+    /// present.
+    pub fn codec_str(&self) -> Option<String> {
+        self.codec.map(|c| c.iter().map(|&b| b as char).collect())
     }
 }
 
@@ -265,6 +323,7 @@ pub fn probe_pict(bytes: &[u8]) -> Result<PictProbe> {
         pix_pattern_set_count: 0,
         compressed_quicktime_count: 0,
         uncompressed_quicktime_count: 0,
+        quicktime: Vec::new(),
         reserved_op_count: 0,
         end_pic_seen: false,
         termination: ProbeTermination::Eof,
@@ -708,16 +767,44 @@ fn probe_v2_opcode(r: &mut Reader<'_>, opcode: u16, p: &mut PictProbe) -> Result
         OP_COMPRESSED_QUICKTIME => {
             // §A-3 Table A-2: `Data length (Long)` then `data length`
             // bytes — the length word excludes itself (round 401 fix,
-            // mirroring the decoder arm).
+            // mirroring the decoder arm). Round 435 additionally
+            // skims the Inside Macintosh: QuickTime Table 3-1
+            // interior into a `ProbeQuickTime` summary; a
+            // non-conforming interior degrades to the bare count
+            // (`Size` is authoritative, page 3-26).
             let data_length = r.read_u32()? as usize;
-            r.skip(data_length)?;
+            let payload = r.read_bytes(data_length)?;
             p.compressed_quicktime_count += 1;
+            let parsed = crate::quicktime::parse_compressed_quicktime(payload).ok();
+            p.quicktime.push(ProbeQuickTime {
+                compressed: true,
+                payload_len: data_length,
+                codec: parsed.as_ref().map(|c| c.image_description.codec),
+                width: parsed.as_ref().map(|c| c.image_description.width),
+                height: parsed.as_ref().map(|c| c.image_description.height),
+                depth: parsed.as_ref().map(|c| c.image_description.depth),
+                has_matte: parsed.as_ref().map(|c| c.matte.is_some()),
+                has_mask: parsed.as_ref().map(|c| c.mask_region.is_some()),
+                subopcode: None,
+            });
             Ok(OpStep::Continue)
         }
         OP_UNCOMPRESSED_QUICKTIME => {
             let data_length = r.read_u32()? as usize;
-            r.skip(data_length)?;
+            let payload = r.read_bytes(data_length)?;
             p.uncompressed_quicktime_count += 1;
+            let parsed = crate::quicktime::parse_uncompressed_quicktime(payload).ok();
+            p.quicktime.push(ProbeQuickTime {
+                compressed: false,
+                payload_len: data_length,
+                codec: None,
+                width: None,
+                height: None,
+                depth: None,
+                has_matte: parsed.as_ref().map(|u| u.matte.is_some()),
+                has_mask: None,
+                subopcode: parsed.as_ref().map(|u| u.subopcode),
+            });
             Ok(OpStep::Continue)
         }
         _ => {
