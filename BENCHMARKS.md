@@ -32,3 +32,18 @@ widening.
 `probe_pict` stays ~150× cheaper than `parse_pict` on the drawing
 stream (and ~140× on the raster stream) — the "introspect before you
 pay decode cost" contract the probe API documents.
+
+## QuickTime opcodes (round 435)
+
+Stream: one `$8200` CompressedQuickTime (64 KiB image blob behind a
+`jpeg`-tagged `ImageDescription`) + one `$8201` UncompressedQuickTime
+(64 × 64 DirectBitsRect subopcode blitted onto the canvas).
+
+| Path | time |
+| ---- | ---- |
+| `parse_pict` (typed `$8200` parse incl. 64 KiB payload copy + `$8201` sub-blit) | ~14.3 µs |
+| `probe_pict` (`ProbeQuickTime` wrapper skim, payload bytes not retained) | ~1.5 µs |
+
+The probe skim stays ~9.5× cheaper than the decode even though both
+walk the same typed wrapper parse — the gap is the payload
+materialisation + sub-blit the probe avoids.
