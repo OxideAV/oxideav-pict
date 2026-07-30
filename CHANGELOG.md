@@ -62,6 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `uncompressed_quicktime_image` methods emit the full opcode; emit →
   `parse_pict` round-trips compare equal at the typed level.
 
+- round 435: **Codec routing for the `$8200` payload** (`registry`
+  feature). The compressor FourCC is a CODEC-tag boundary, so
+  `registry::resolve_quicktime_codec` hands the `ImageDescription`'s
+  `cType` (with width / height hints) to `oxideav-core`'s
+  `CodecResolver`, and `registry::quicktime_codec_parameters` builds
+  the ready-to-decode `CodecParameters` (dimensions + preserved
+  on-wire FourCC tag) for `CodecRegistry::first_decoder`. A FourCC
+  with no workspace implementation resolves to `None` and the payload
+  stays available as typed bytes — `oxideav-pict` never decodes an
+  embedded codec itself.
+
 ### Changed
 
 - Marked the crate's internal plumbing `#[doc(hidden)]` (the `font`,

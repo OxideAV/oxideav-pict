@@ -130,4 +130,7 @@ pub use state::{
 };
 
 #[cfg(feature = "registry")]
-pub use registry::{__oxideav_entry, register, register_codecs, register_containers};
+pub use registry::{
+    __oxideav_entry, quicktime_codec_parameters, register, register_codecs, register_containers,
+    resolve_quicktime_codec,
+};

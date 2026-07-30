@@ -80,6 +80,59 @@ pub fn register(ctx: &mut RuntimeContext) {
 
 oxideav_core::register!("pict", register);
 
+/// Resolve the codec named by a QuickTime picture opcode's
+/// [`ImageDescription`](crate::quicktime::ImageDescription) through
+/// the framework's [`CodecResolver`].
+///
+/// The `$8200` `CompressedQuickTime` opcode is a CODEC-tag boundary:
+/// the compressor FourCC in `cType` (Inside Macintosh: QuickTime,
+/// page 3-50) names the decompressor, exactly like a container's
+/// sample-entry tag — so `oxideav-pict` never decodes the embedded
+/// image itself. This helper hands the FourCC (plus the
+/// description's width / height hints) to the resolver; `Some(id)`
+/// means the registry carries a matching codec and the caller can
+/// construct its decoder (see [`quicktime_codec_parameters`]);
+/// `None` means the payload has no workspace implementation and
+/// stays available as typed bytes on
+/// [`QuickTimeCompressed::image_data`](crate::quicktime::QuickTimeCompressed::image_data).
+pub fn resolve_quicktime_codec(
+    desc: &crate::quicktime::ImageDescription,
+    resolver: &dyn oxideav_core::CodecResolver,
+) -> Option<CodecId> {
+    let tag = oxideav_core::CodecTag::fourcc(&desc.codec);
+    let ctx = oxideav_core::ProbeContext::new(&tag)
+        .width(desc.width as u32)
+        .height(desc.height as u32);
+    resolver.resolve_tag(&ctx)
+}
+
+/// Build the [`CodecParameters`](oxideav_core::CodecParameters) for a
+/// resolved QuickTime payload codec, ready to hand to
+/// `CodecRegistry::first_decoder` (or `decoder_by_impl`) together
+/// with the payload bytes as a packet.
+///
+/// Populates the video dimensions from the image description and
+/// preserves the on-wire FourCC via `with_tag` so a consumer
+/// re-muxing the stream round-trips the original tag. The
+/// description's extension bytes (`idSize > 86` tail) are *not*
+/// copied into `extradata` — their layout is per-extension, and the
+/// caller holding the [`ImageDescription`](crate::quicktime::ImageDescription)
+/// keeps them on
+/// [`extension`](crate::quicktime::ImageDescription::extension).
+///
+/// Returns `None` when the resolver knows no codec for the FourCC.
+pub fn quicktime_codec_parameters(
+    desc: &crate::quicktime::ImageDescription,
+    resolver: &dyn oxideav_core::CodecResolver,
+) -> Option<oxideav_core::CodecParameters> {
+    let id = resolve_quicktime_codec(desc, resolver)?;
+    let mut params = oxideav_core::CodecParameters::video(id)
+        .with_tag(oxideav_core::CodecTag::fourcc(&desc.codec));
+    params.width = Some(desc.width as u32);
+    params.height = Some(desc.height as u32);
+    Some(params)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +179,74 @@ mod tests {
         register_containers(&mut reg);
         assert_eq!(reg.container_for_extension("png"), None);
         assert_eq!(reg.container_for_extension(""), None);
+    }
+
+    fn qt_desc(codec: [u8; 4]) -> crate::quicktime::ImageDescription {
+        crate::quicktime::ImageDescription {
+            id_size: 86,
+            codec,
+            version: 1,
+            revision_level: 1,
+            vendor: *b"appl",
+            temporal_quality: 0,
+            spatial_quality: 0x0200,
+            width: 64,
+            height: 48,
+            h_res: crate::header::Fixed::SEVENTY_TWO_DPI,
+            v_res: crate::header::Fixed::SEVENTY_TWO_DPI,
+            data_size: 0,
+            frame_count: 1,
+            name_raw: [0u8; 32],
+            depth: 24,
+            clut_id: -1,
+            extension: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_quicktime_codec_routes_fourcc_through_registry() {
+        use oxideav_core::CodecTag;
+        let mut reg = CodecRegistry::new();
+        reg.register(CodecInfo::new(CodecId::new("jpeg")).tag(CodecTag::fourcc(b"jpeg")));
+        let desc = qt_desc(*b"jpeg");
+        assert_eq!(
+            resolve_quicktime_codec(&desc, &reg),
+            Some(CodecId::new("jpeg"))
+        );
+        // FourCC matching is case-insensitive through CodecTag::fourcc.
+        let desc_upper = qt_desc(*b"JPEG");
+        assert_eq!(
+            resolve_quicktime_codec(&desc_upper, &reg),
+            Some(CodecId::new("jpeg"))
+        );
+    }
+
+    #[test]
+    fn resolve_quicktime_codec_without_workspace_impl_is_none() {
+        // A codec with no workspace implementation stays unresolved —
+        // decoding it is out of scope; the payload remains typed
+        // bytes on QuickTimeCompressed::image_data.
+        let reg = CodecRegistry::new();
+        assert_eq!(resolve_quicktime_codec(&qt_desc(*b"rpza"), &reg), None);
+        assert_eq!(
+            resolve_quicktime_codec(&qt_desc(*b"jpeg"), &oxideav_core::NullCodecResolver),
+            None
+        );
+    }
+
+    #[test]
+    fn quicktime_codec_parameters_carry_dims_and_wire_tag() {
+        use oxideav_core::CodecTag;
+        let mut reg = CodecRegistry::new();
+        reg.register(CodecInfo::new(CodecId::new("jpeg")).tag(CodecTag::fourcc(b"jpeg")));
+        let desc = qt_desc(*b"jpeg");
+        let params = quicktime_codec_parameters(&desc, &reg).expect("resolved");
+        assert_eq!(params.codec_id, CodecId::new("jpeg"));
+        assert_eq!(params.width, Some(64));
+        assert_eq!(params.height, Some(48));
+        assert_eq!(params.tag, Some(CodecTag::fourcc(b"jpeg")));
+        assert!(params.extradata.is_empty());
+        assert!(quicktime_codec_parameters(&qt_desc(*b"rpza"), &reg).is_none());
     }
 
     #[test]
