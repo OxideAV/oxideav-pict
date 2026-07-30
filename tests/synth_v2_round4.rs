@@ -210,13 +210,22 @@ fn imagemagick_accepts(bytes: &[u8]) -> Option<bool> {
     if Command::new("magick").arg("-version").output().is_err() {
         return None;
     }
+    // Unique per call even when parallel test threads land on the
+    // same clock tick (Windows' SystemTime resolution is coarse
+    // enough for nanos alone to collide, and each caller deletes its
+    // files afterwards — a shared name would yank another test's
+    // input mid-convert): pid + atomic counter + nanos.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let pid = std::process::id();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()?
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("oxideav_pict_xcheck_{nanos}.pict"));
+    let stem = format!("oxideav_pict_xcheck_{pid}_{seq}_{nanos}");
+    let path = std::env::temp_dir().join(format!("{stem}.pict"));
     fs::write(&path, bytes).ok()?;
-    let out_path = std::env::temp_dir().join(format!("oxideav_pict_xcheck_{nanos}.png"));
+    let out_path = std::env::temp_dir().join(format!("{stem}.png"));
     let status = Command::new("magick")
         .arg(&path)
         .arg(&out_path)
