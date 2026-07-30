@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- round 435: **QuickTime picture-opcode payload internals are typed.**
+  The staged Inside Macintosh: QuickTime (1993) volume — Chapter 3
+  "Image Compression Manager", Tables 3-1 / 3-2 (pages 3-25 – 3-27) and
+  the `ImageDescription` structure (pages 3-49 – 3-51) — resolves the
+  layout that Imaging With QuickDraw §A-3 declares "private to
+  QuickTime". New `quicktime` module: `parse_compressed_quicktime`
+  (`$8200`: version, 3×3 `Fixed` display matrix, matte size/rect,
+  transfer mode, source rect, accuracy, mask-region bytes, the
+  `idSize`-self-sizing `ImageDescription` with compressor FourCC /
+  dimensions / resolution / `Str31` name / depth (incl. the 34/36/40
+  grayscale encodings) / `clutID` / extension tail, and the compressed
+  image data — honouring the "dataSize may be 0 if unknown" rule by
+  falling back to the `Size`-bounded remainder) and
+  `parse_uncompressed_quicktime` (`$8201`: the shorter fixed header
+  plus the embedded `$98`–`$9B` pixel-data subopcode window). All
+  interior reads are bounded by the already-`Size`-bounded payload;
+  `ImageDescription::to_bytes` / `QuickTimeMatrix::to_wire` provide
+  the emit direction for round-trip tooling.
+
 ### Changed
 
 - Marked the crate's internal plumbing `#[doc(hidden)]` (the `font`,

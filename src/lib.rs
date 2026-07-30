@@ -72,6 +72,7 @@ pub mod ops;
 #[doc(hidden)]
 pub mod packbits;
 pub mod probe;
+pub mod quicktime;
 pub mod raster;
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
@@ -115,6 +116,10 @@ pub use ops::{
     PictV1Builder, Verb,
 };
 pub use probe::{probe_pict, PictProbe, ProbeRect, ProbeTermination, ProbeVersion};
+pub use quicktime::{
+    parse_compressed_quicktime, parse_uncompressed_quicktime, ImageDescription,
+    QuickTimeCompressed, QuickTimeMatrix, QuickTimeMatte, QuickTimePayload, QuickTimeUncompressed,
+};
 pub use raster::{
     blend_arith, blend_source, ArithMode, PatternMode, SourceMode, GRAYISH_TEXT_OR_MODE,
     HILITE_MODE,
