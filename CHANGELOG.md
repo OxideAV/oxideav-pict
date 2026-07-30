@@ -82,6 +82,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   payload" before paying any decode cost. Non-conforming interiors
   degrade to a bare-count row with the typed fields `None`.
 
+- round 435: **Hostile-input suite for the QuickTime parsers**
+  (`hostile_round435_quicktime`): every truncation prefix of a
+  five-payload conforming corpus (matte / mask / extension /
+  zero-`dataSize` / `$8201` variants), seeded byte mutations,
+  systematic 32-bit length-field maxing at every even offset, and
+  mid-payload stream truncation — each corruption driven through the
+  standalone parsers *and* through `parse_pict` / `probe_pict`,
+  asserting the walk never fails on a `Size`-bounded interior and
+  nothing panics or over-allocates.
+
 ### Changed
 
 - Marked the crate's internal plumbing `#[doc(hidden)]` (the `font`,
