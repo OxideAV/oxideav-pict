@@ -378,6 +378,37 @@ fn typed_builders_reject_inconsistent_structures() {
 }
 
 // ---------------------------------------------------------------------------
+// QuickTime-only PICTs are not "empty"
+// ---------------------------------------------------------------------------
+
+#[test]
+fn quicktime_only_pict_parses_instead_of_no_raster() {
+    // The common QuickTime-era file shape: nothing but the $8200
+    // opcode (no drawing, no raster). The captured payload IS the
+    // picture's content — parse_pict must succeed with the untouched
+    // background canvas plus the typed payload, not error NoRaster.
+    let blob = vec![0x42u8; 64];
+    let qt = QuickTimeCompressed::still(desc(*b"jpeg", 32, 24, 0), blob);
+    let mut b = PictBuilder::new(0, 0, 24, 32); // picFrame: 32 wide × 24 tall
+    b.compressed_quicktime_image(&qt).unwrap();
+    let img = parse_pict(&b.finish()).unwrap();
+
+    assert_eq!((img.width, img.height), (32, 24));
+    assert_eq!(img.quicktime.len(), 1);
+    let Some(QuickTimePayload::Compressed(c)) = &img.quicktime[0].image else {
+        panic!("typed $8200 payload expected");
+    };
+    assert_eq!(c.image_description.codec, *b"jpeg");
+
+    // A truly empty PICT still reports NoRaster.
+    let empty = PictBuilder::new(0, 0, 8, 8).finish();
+    assert_eq!(
+        parse_pict(&empty).unwrap_err(),
+        oxideav_pict::PictError::NoRaster
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Probe surfaces per-opcode QuickTime summaries
 // ---------------------------------------------------------------------------
 

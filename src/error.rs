@@ -26,13 +26,15 @@ pub enum PictError {
     /// past end of stream, PackBits packet runs past end of row, …).
     InvalidData(String),
     /// The byte stream uses a feature this codec doesn't implement
-    /// (CompressedQuickTime, region-clipped DirectBitsRgn, packType
-    /// 2/3/4, v1 raster opcodes, …).
+    /// (an undocumented-size "Not determined" opcode, an unknown
+    /// opcode word, …).
     Unsupported(String),
-    /// The opcode stream terminated (`OpEndPic` reached) before any
-    /// `PackBitsRect` / `DirectBitsRect` was seen, so no raster could
-    /// be extracted. v2 PICTs that contain only drawing commands hit
-    /// this until round 2 adds drawing-command rasterisation.
+    /// The opcode stream terminated (`OpEndPic` reached or bytes ran
+    /// out) without producing any drawing, raster, or captured
+    /// QuickTime-payload content — the picture is empty. A PICT whose
+    /// only content is a `$8200` / `$8201` QuickTime opcode does
+    /// *not* hit this (round 435): the captured payload counts as
+    /// content and decode succeeds with the background canvas.
     NoRaster,
 }
 

@@ -121,10 +121,8 @@ fn drive(compressed: bool, payload: &[u8]) {
         let _ = parse_uncompressed_quicktime(payload);
     }
     let mut b = PictBuilder::new(0, 0, 16, 16);
-    // A visible op so a fully-degraded QuickTime interior doesn't
-    // leave the picture raster-free (parse_pict rejects pictures
-    // with no visible content as NoRaster — that's unrelated to the
-    // QuickTime walk under test).
+    // A visible op alongside the QuickTime payload, so the walk also
+    // proves it resumes cleanly past the (possibly corrupt) opcode.
     b.rect(Verb::Paint, 0, 0, 2, 2);
     if compressed {
         b.compressed_quicktime(payload).unwrap();

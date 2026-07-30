@@ -92,6 +92,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asserting the walk never fails on a `Size`-bounded interior and
   nothing panics or over-allocates.
 
+- round 435: **QuickTime-only PICTs decode.** A picture whose entire
+  content is a `$8200` / `$8201` opcode (the common QuickTime-era
+  JPEG-in-PICT shape: clip + payload + `OpEndPic`) previously failed
+  `parse_pict` with `NoRaster`, losing the payload. The captured
+  QuickTime payload now counts as picture content: decode succeeds
+  with the untouched background canvas plus the typed payload. A
+  truly empty PICT still reports `NoRaster`.
+
 ### Changed
 
 - Marked the crate's internal plumbing `#[doc(hidden)]` (the `font`,

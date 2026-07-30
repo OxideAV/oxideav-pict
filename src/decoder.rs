@@ -17,7 +17,10 @@
 //! end-of-stream, or an unsupported opcode) the canvas — sized to
 //! `picFrame` and pre-filled with the background colour (paper) — is
 //! returned as the [`PictImage`]. PICTs that contain no drawing
-//! commands at all return [`PictError::NoRaster`].
+//! commands at all return [`PictError::NoRaster`] — unless they carry
+//! a QuickTime payload (`$8200` / `$8201`), in which case the
+//! captured payload *is* the picture's content and the untouched
+//! background canvas is returned alongside it (round 435).
 //!
 //! v1 PICTs (8-bit opcodes) have basic raster + line/rect/region
 //! support — same drawing-state model, smaller opcode roster.
@@ -1933,9 +1936,16 @@ fn crop_to_src_rect(
     (out, cw, ch)
 }
 
-/// Final canvas → PictImage. Returns NoRaster if nothing was drawn.
+/// Final canvas → PictImage. Returns NoRaster if nothing was drawn
+/// **and** no QuickTime payload was captured: a picture whose entire
+/// content is a `CompressedQuickTime $8200` opcode (a JPEG-in-PICT
+/// wrapper emitted with nothing but a clip and the payload — the
+/// common shape for QuickTime-era files) is not empty; its image is
+/// the embedded payload, which the caller routes to the codec named
+/// by the `ImageDescription` FourCC (round 435). The canvas comes
+/// back as the untouched background in that case.
 fn finalise_canvas(canvas: Canvas, state: &PictState) -> Result<PictImage> {
-    if !canvas.dirty {
+    if !canvas.dirty && state.quicktime.is_empty() {
         return Err(PictError::NoRaster);
     }
     Ok(PictImage {
