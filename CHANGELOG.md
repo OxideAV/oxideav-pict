@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/OxideAV/oxideav-pict/compare/v0.0.4...v0.0.5) - 2026-09-01
+
+### Other
+
+- hide internal pub surface from rustdoc/semver (fleet rule 2026-09-01)
+- collision-proof temp names in the black-box validator helper
+- QuickTime-only PICTs are content, not NoRaster
+- probe section lists the ProbeQuickTime summary surface
+- QuickTime opcode decode + probe throughput
+- QuickTime payload surface documented across README + rustdoc
+- hostile-input suite for the QuickTime payload parsers
+- per-opcode QuickTime wrapper summaries
+- route $8200 payload FourCC through the core CodecResolver
+- typed $8200/$8201 emit direction
+- consume typed QuickTime interiors; $8201 subopcodes now blit
+- typed $8200/$8201 payload parsers from Inside Macintosh: QuickTime (1993)
+- mark internal plumbing #[doc(hidden)] for semver-checks
+- styled-text hostile seed + text-rasteriser DoS/overflow hardening (canvas-clipped blocks, saturating pen walk)
+- retire closed text-gap notes — Volume I/V/VI-backed doc refresh (README, font/state/lib docs)
+- grayishTextOr (49) dimmed-text mode per Volume VI 17-16/17-17 — fg/bg blend_half ink on the text channel
+- rasterise txFace style synthesis (Volume I I-151/I-152 + I-226 characterization table) + fix glyph offset-scaling column fold
+- extend the hostile-input corpus with the round-401 stream shapes
+- arbitrary-region ClipRgn emission (build_clip_rgn + PictBuilder::clip_region) + stale doc refresh
+- strict Table-A-3 v1 raster encoders + pnLocHFrac 0.5 default fix + $9A-in-v1 caveat
+- criterion bench suite (raster PackTypes, vector rasterise, probe)
+- QuickTime payload capture + $8200/$8201 length-word conformance fix + emitters
+- PictV1Builder (v1 stream assembly) + classic colour-code builders + v1 probe text-count fix
+- hostile-input hardening + in-CI fuzz suite (decode budget, overflow-safe dims, raw-row fit)
+- encoder-parity sweep (ShortLine* / Origin / same-shape verbs / clip_rect) + Origin sign fix
+- PictBuilder text-opcode emission (LongText / DH/DV/DHDVText)
+- add CI / crates.io / docs.rs / MIT-license badges
+- indexed ColorTable resolves by ColorSpec.value, not array position
+- reattach apply_rect_verb doc comment (cosmetic, no behaviour change)
+- Line family honours the pen pattern + pixel-pattern + pattern mode
+- FrameOval/FrameRoundRect/FrameArc honour the pen size + pattern + pattern mode
+- FrameRgn honours pen size + pen pattern / mode (book page 3-13)
+- fix Region inversion decoder panic on right-border runs; single-pass rewrite
+- parse_pict-level tests + docs for TxRatio scaling / lineJustify spacing
+- apply TxRatio glyph scaling + lineJustify intercharacter spacing to text
+- drop specific Mac font names from the font-module doc (naming hygiene)
+- text-raster integration tests + README/CHANGELOG/lib docs for the new text path
+- rasterise the QuickDraw text opcodes (LongText / DH/DV/DHDVText) onto the canvas
+- add clean-room built-in bitmap glyph set + QuickDraw text rasteriser (src/font.rs)
+- round 333: FramePoly honours pen size + pen pattern / mode
+- round 328: DirectBits packType 0 resolves to §A-3 default packing
+- round 322: honour srcRect on every raster blit (§A-3 Listings A-2/A-3)
+
 ### Added
 
 - round 435: **QuickTime picture-opcode payload internals are typed.**
