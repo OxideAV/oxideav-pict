@@ -172,6 +172,7 @@ pub struct ImageDescription {
 }
 
 /// Fixed (pre-extension) byte length of an [`ImageDescription`].
+#[doc(hidden)] // internal wire plumbing; not part of the stable API
 pub const IMAGE_DESCRIPTION_FIXED_LEN: usize = 86;
 
 impl ImageDescription {
@@ -333,11 +334,13 @@ pub struct QuickTimeCompressed {
 /// 4-byte `Size`): `Version` 2 + `Matrix` 36 + `MatteSize` 4 +
 /// `MatteRect` 8 + `Mode` 2 + `SrcRect` 8 + `Accuracy` 4 +
 /// `MaskSize` 4.
+#[doc(hidden)] // internal wire plumbing; not part of the stable API
 pub const COMPRESSED_QT_FIXED_LEN: usize = 68;
 
 /// Fixed byte length of the `$8201` payload before the variable
 /// fields (Table 3-2 stops after `MatteRect`): `Version` 2 +
 /// `Matrix` 36 + `MatteSize` 4 + `MatteRect` 8.
+#[doc(hidden)] // internal wire plumbing; not part of the stable API
 pub const UNCOMPRESSED_QT_FIXED_LEN: usize = 50;
 
 /// Typed form of an `UncompressedQuickTime` (`$8201`) payload — the
