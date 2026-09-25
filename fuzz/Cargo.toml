@@ -1,0 +1,40 @@
+[package]
+name = "oxideav-pict-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+oxideav-pict = { path = ".." }
+
+# Prevent this from interfering with workspaces.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "parse_pict"
+path = "fuzz_targets/parse_pict.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "probe_pict"
+path = "fuzz_targets/probe_pict.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "quicktime_8200"
+path = "fuzz_targets/quicktime_8200.rs"
+test = false
+doc = false
+bench = false

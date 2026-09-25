@@ -56,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numbers standing in for pixel indices. Both bits now index
   sequentially; a bit-14 fixture pins it and the README quotes the
   paragraph.
+- round 461: `fuzz/` — three `cargo fuzz` targets: `parse_pict`,
+  `probe_pict` (+ the typed QuickTime payload parsers) and
+  `quicktime_8200`, which wraps the fuzzer's bytes as the interior of
+  a `$8200` and a `$8201` opcode inside a valid picture so the new
+  compositor and decoders are driven directly. Seeded with a real
+  emitter `$8200` interior and hand-built `'raw '` wrappers (matte,
+  mask, rotation); ~8 minutes across the three targets found no
+  panic, timeout or runaway allocation.
 - round 461: **the emitter's default warning placeholder is suppressed
   once the `$8200` image draws.** Inside Macintosh: QuickTime page
   3-139: `StdPix` appends "default picture opcodes (for displaying a

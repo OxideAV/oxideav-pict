@@ -277,6 +277,16 @@ through every truncation prefix of an opcode-family corpus, seeded
 byte mutations, systematic length-field maxing, and hand-crafted
 giant-header records — the decoder returns `Err`, it never panics.
 
+`fuzz/` carries three `cargo fuzz` targets (round 461): `parse_pict`
+(whole-file decode through the default QuickTime decoder chain),
+`probe_pict` (the decode-free walker + the typed `$8200` / `$8201`
+payload parsers) and `quicktime_8200` (the fuzzer's bytes become the
+interior of one `$8200` — and one `$8201` — opcode inside a valid
+picture, so the matrix / mask / matte / mode compositor and the
+`'raw '` + `'jpeg'` decoders are hit far more often than a whole-file
+target reaches them). Run with
+`cargo +nightly fuzz run quicktime_8200 -- -max_len=65536`.
+
 ## Standalone vs registry-integrated
 
 The default `registry` Cargo feature pulls in `oxideav-core` and exposes
