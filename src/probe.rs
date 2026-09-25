@@ -1224,11 +1224,8 @@ fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<bool> {
                 r.skip(row_bytes * height)?;
             } else {
                 for _ in 0..height {
-                    let byte_count = if row_bytes > 250 {
-                        r.read_u16()? as usize
-                    } else {
-                        r.read_u8()? as usize
-                    };
+                    let byte_count =
+                        crate::decoder::read_packed_row_count(r, row_bytes, row_bytes)?;
                     r.skip(byte_count)?;
                 }
             }
@@ -1250,11 +1247,8 @@ fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<bool> {
                 }
                 3 | 4 => {
                     for _ in 0..height {
-                        let byte_count = if row_bytes > 250 {
-                            r.read_u16()? as usize
-                        } else {
-                            r.read_u8()? as usize
-                        };
+                        let byte_count =
+                            crate::decoder::read_packed_row_count(r, row_bytes, row_bytes)?;
                         r.skip(byte_count)?;
                     }
                 }
@@ -1301,11 +1295,7 @@ fn skip_pix_pat(r: &mut Reader<'_>) -> Result<()> {
                 r.skip(row_bytes * height)?;
             } else {
                 for _ in 0..height {
-                    let bc = if row_bytes > 250 {
-                        r.read_u16()? as usize
-                    } else {
-                        r.read_u8()? as usize
-                    };
+                    let bc = crate::decoder::read_packed_row_count(r, row_bytes, row_bytes)?;
                     r.skip(bc)?;
                 }
             }

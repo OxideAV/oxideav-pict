@@ -110,6 +110,45 @@ fn rect_dims(bounds: (i16, i16, i16, i16)) -> (u32, u32) {
     (w, h)
 }
 
+/// Read the per-scanline `byteCount` that precedes PackBits row data.
+///
+/// §A-3 PixData (Appendix A, book page A-16): "each scan line consists
+/// of \[byteCount\] \[data\]; IF rowBytes > 250 THEN byteCount is a
+/// word ELSE byteCount is a byte". `unpacked_len` is the row's
+/// unpacked size (the bound every packet must stay within).
+///
+/// Emitter tolerance: ImageMagick's PICT writer emits a one-byte
+/// count even when `rowBytes > 250` (observed on its 32-bit
+/// `packType = 4` output, `rowBytes = 256`, black-box checked against
+/// its own reader). A word read of such a row yields a count that can
+/// never describe the row — larger than the PackBits worst case for
+/// `unpacked_len` bytes, or than what is left in the stream — so when,
+/// and only when, the word reading is impossible and the first byte
+/// alone is a plausible count, the byte reading is used. A conforming
+/// stream is never reinterpreted.
+pub(crate) fn read_packed_row_count(
+    r: &mut Reader<'_>,
+    row_bytes: usize,
+    unpacked_len: usize,
+) -> Result<usize> {
+    if row_bytes <= 250 {
+        return Ok(r.read_u8()? as usize);
+    }
+    // PackBits worst case: every byte literal in 128-byte packets.
+    let worst = unpacked_len + unpacked_len.div_ceil(128).max(1);
+    let start = r.pos;
+    let word = r.read_u16()? as usize;
+    if word <= worst && word <= r.remaining() {
+        return Ok(word);
+    }
+    let byte = (word >> 8) & 0xFF;
+    if byte <= worst {
+        r.pos = start + 1;
+        return Ok(byte);
+    }
+    Ok(word)
+}
+
 pub fn parse_pict(bytes: &[u8]) -> Result<PictImage> {
     let mut qt = crate::qtimage::DefaultQuickTimeDecoder::default();
     parse_pict_with(bytes, &mut qt)
@@ -2546,11 +2585,7 @@ fn decode_pack_bits_rect(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32)> {
         }
     } else {
         for y in 0..height as usize {
-            let _byte_count = if row_bytes > 250 {
-                r.read_u16()? as usize
-            } else {
-                r.read_u8()? as usize
-            };
+            let _byte_count = read_packed_row_count(r, row_bytes, row_bytes)?;
             let dst = &mut bitmap[y * row_bytes..(y + 1) * row_bytes];
             packbits::decode_into(r, dst)?;
         }
@@ -2702,11 +2737,7 @@ fn decode_pack_bits_rgn(r: &mut Reader<'_>) -> Result<(RasterSub, RectI32, Regio
         }
     } else {
         for y in 0..height as usize {
-            let _byte_count = if row_bytes > 250 {
-                r.read_u16()? as usize
-            } else {
-                r.read_u8()? as usize
-            };
+            let _byte_count = read_packed_row_count(r, row_bytes, row_bytes)?;
             let dst = &mut bitmap[y * row_bytes..(y + 1) * row_bytes];
             packbits::decode_into(r, dst)?;
         }
@@ -2831,11 +2862,7 @@ fn decode_indexed_pixmap_payload(
         }
     } else {
         for y in 0..height as usize {
-            let _byte_count = if row_bytes > 250 {
-                r.read_u16()? as usize
-            } else {
-                r.read_u8()? as usize
-            };
+            let _byte_count = read_packed_row_count(r, row_bytes, row_bytes)?;
             let dst = &mut pix_data[y * row_bytes..(y + 1) * row_bytes];
             packbits::decode_into(r, dst)?;
         }
@@ -3249,11 +3276,7 @@ fn decode_dbr_16bpp_packbits(r: &mut Reader<'_>, h: &PixMapHeader, rgba: &mut [u
     let row_pixels = h.width as usize;
     let mut row_buf = vec![0u8; row_pixels * 2];
     for y in 0..h.height as usize {
-        let _byte_count = if h.row_bytes > 250 {
-            r.read_u16()? as usize
-        } else {
-            r.read_u8()? as usize
-        };
+        let _byte_count = read_packed_row_count(r, h.row_bytes, row_buf.len())?;
         decode_packbits_u16_into(r, &mut row_buf)?;
         write_16bpp_row(&row_buf, row_pixels, &mut rgba[y * row_pixels * 4..]);
     }
@@ -3321,17 +3344,15 @@ fn decode_dbr_32bpp_planar_packbits(
     let plane_bytes = row_pixels;
     let mut plane_buf = vec![0u8; plane_bytes * n_planes];
     for y in 0..h.height as usize {
-        let _byte_count = if h.row_bytes > 250 {
-            r.read_u16()? as usize
-        } else {
-            r.read_u8()? as usize
-        };
-        // The per-row byteCount covers ALL planes together; PackBits
-        // packets reset between planes since we know each plane is
-        // exactly `row_pixels` bytes long.
-        for p in 0..n_planes {
-            packbits::decode_into(r, &mut plane_buf[p * plane_bytes..(p + 1) * plane_bytes])?;
-        }
+        let _byte_count = read_packed_row_count(r, h.row_bytes, plane_bytes * n_planes)?;
+        // The per-row byteCount covers ALL planes together, and so does
+        // the packed data: the row is one PackBits stream over the
+        // concatenated component planes. Decoding it in one go accepts
+        // both an emitter that restarts packets at each plane boundary
+        // (the packets simply line up) and one that lets a run span
+        // planes (ImageMagick does, e.g. a 128-byte zero run covering
+        // the G and B planes of a red row).
+        packbits::decode_into(r, &mut plane_buf[..plane_bytes * n_planes])?;
         // Interleave: plane order is R, G, B (cmpCount=3) or A, R,
         // G, B (cmpCount=4).
         for x in 0..row_pixels {
@@ -3490,11 +3511,7 @@ fn decode_pix_pat(r: &mut Reader<'_>) -> Result<(Pattern, Option<PixPattern>)> {
                 pix_data.copy_from_slice(raw);
             } else {
                 for y in 0..height {
-                    let _bc = if row_bytes > 250 {
-                        r.read_u16()? as usize
-                    } else {
-                        r.read_u8()? as usize
-                    };
+                    let _bc = read_packed_row_count(r, row_bytes, row_bytes)?;
                     let dst = &mut pix_data[y * row_bytes..(y + 1) * row_bytes];
                     crate::packbits::decode_into(r, dst)?;
                 }

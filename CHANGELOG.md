@@ -56,6 +56,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numbers standing in for pixel indices. Both bits now index
   sequentially; a bit-14 fixture pins it and the README quotes the
   paragraph.
+- round 461: **ImageMagick-emitted PICTs decode.** Two §A-3 "PixData"
+  deviations of ImageMagick's writer are tolerated (black-box checked
+  against its own reader: byte-identical render): a one-byte
+  per-scanline count under `rowBytes > 250` (taken only when the word
+  reading is impossible for the row — larger than the PackBits worst
+  case or than the bytes left — so a conforming stream is never
+  reinterpreted), and `packType = 4` rows packed as one PackBits stream
+  across the component planes (now decoded as one stream, which also
+  covers emitters that restart packets per plane). The probe's walker
+  shares the count rule. Fixture: a tool-generated 64×48 gradient.
 - round 461: `fuzz/` — three `cargo fuzz` targets: `parse_pict`,
   `probe_pict` (+ the typed QuickTime payload parsers) and
   `quicktime_8200`, which wraps the fuzzer's bytes as the interior of

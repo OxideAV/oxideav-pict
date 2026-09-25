@@ -29,7 +29,7 @@ returned as a `PictImage`.
 | `BkPat` / `PnPat` / `FillPat` | 8-byte monochrome patterns |
 | `BkPixPat` / `PnPixPat` / `FillPixPat` | colour pixel patterns (`patType=1` colour-pixmap, `patType=2` ditherPat) |
 | `BitsRect` / `BitsRgn` / `PackBitsRect` / `PackBitsRgn` | 1-bpp BitMap or indexed 1/2/4/8-bit PixMap → RGBA; the embedded `ColorTable` is resolved by each `ColorSpec`'s `value` field (book page 4-55) for a plain pixel-map table, and **sequentially** (entry *n* ↔ pixel value *n*) for a table flagged device (`ctFlags` bit 15) or palette-index (bit 14) — see "Colour tables" below |
-| `DirectBitsRect` / `DirectBitsRgn` | 16-bit A1R5G5B5 / 32-bit XRGB\|ARGB → RGBA; `packType` 1 (raw), 2 (drop-pad), 3 (16-bit RLE), 4 (component RLE), and 0 → §A-3 page A-16 default packing (3 for 16-bit / 4 for 32-bit when `rowBytes ≥ 8`, else raw) |
+| `DirectBitsRect` / `DirectBitsRgn` | 16-bit A1R5G5B5 / 32-bit XRGB\|ARGB → RGBA; `packType` 1 (raw), 2 (drop-pad), 3 (16-bit RLE), 4 (component RLE — the row's planes decoded as one PackBits stream, so emitter runs spanning planes are fine), and 0 → §A-3 page A-16 default packing (3 for 16-bit / 4 for 32-bit when `rowBytes ≥ 8`, else raw) |
 | `ShortComment` / `LongComment` | captured as structured [`PictComment`] |
 | Text-glyph opcodes (`LongText` / `DH/DV/DHDVText`) | **rasterised** — glyph bytes drawn through a built-in clean-room ASCII bitmap face at the baseline pen, scaled by `txSize` **and the `TxRatio` (`$0010`) horizontal / vertical `numer/denom` factors** (book page 12-13), inked in `fgColor`, advancing the pen by each glyph + `chExtra` / `spExtra` + the `lineJustify` (`$002D`) intercharacter spacing (§A-3 footnote `†`); honours the `srcOr` / `srcXor` / `srcBic` text source modes plus `grayishTextOr = 49` (Inside Macintosh Vol VI page 17-17), and **synthesises the full `txFace` style set** — bold / italic / underline / outline / shadow / condense / extend — per Vol I pages I-151/I-152 with the page I-226 characterization-table amounts |
 | CompressedQuickTime / UncompressedQuickTime | payload captured verbatim into `PictImage::quicktime`, parsed into a typed [`QuickTimePayload`] per Inside Macintosh: QuickTime (1993) Tables 3-1 / 3-2, **and rendered**: `$8200`'s image data goes to a [`QuickTimeImageDecoder`] (`'raw '` built in, `'jpeg'` through `oxideav-mjpeg`, anything else through a caller decoder / `oxideav-core` registry) and both opcodes composite through one `StdPix` path — 3×3 matrix, `srcRect`, mask region, `CopyDeepMask` matte, transfer mode; outcome on `PictQuickTime::render` |
@@ -276,6 +276,14 @@ pixel rows must physically fit their declared bounds width. The
 through every truncation prefix of an opcode-family corpus, seeded
 byte mutations, systematic length-field maxing, and hand-crafted
 giant-header records — the decoder returns `Err`, it never panics.
+
+Emitter tolerance (round 461): ImageMagick's PICT writer emits a
+one-byte per-scanline PackBits count even when `rowBytes > 250`
+(§A-3 calls for a word); the decoder and probe take the byte reading
+only when the word reading cannot describe the row, so conforming
+streams are never reinterpreted. `tests/emitter_round461_imagemagick.rs`
+pins a tool-generated fixture byte-identical to ImageMagick's own
+render of it.
 
 `fuzz/` carries three `cargo fuzz` targets (round 461): `parse_pict`
 (whole-file decode through the default QuickTime decoder chain),
