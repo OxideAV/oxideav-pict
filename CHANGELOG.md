@@ -74,7 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   canvas mean against ImageMagick's render (0.375545 vs 0.375555;
   45.6 dB PSNR, 18 of 140 500 pixels beyond 3 %). Bench:
   `quicktime_raw_8200_identity` / `_rotate` (256 × 256 `'raw '`:
-  ~234 µs / ~649 µs).
+  ~116 µs / ~680 µs — the identity / no-mask / no-matte case takes a
+  straight blit fast path, 2× the general route).
 - round 461: `fuzz/` — three `cargo fuzz` targets: `parse_pict`,
   `probe_pict` (+ the typed QuickTime payload parsers) and
   `quicktime_8200`, which wraps the fuzzer's bytes as the interior of

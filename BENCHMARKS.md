@@ -59,10 +59,13 @@ Stream: one `$8200` CompressedQuickTime carrying a 256 × 256 32-bit
 
 | Matrix | time |
 | ------ | ---- |
-| identity (1:1 placement) | ~234 µs |
-| 90° rotation (every destination pixel inverse-mapped) | ~649 µs |
+| identity (1:1 placement), no mask / matte | ~116 µs |
+| 90° rotation (every destination pixel inverse-mapped) | ~680 µs |
 
-≈ 0.28 Gpixel/s at identity — the `'raw '` unpack, the per-pixel
-destination resolve, the transient clip mask and the mode blit each
-touch every pixel once; the rotation adds a 3×3 `f64` inverse map per
-destination pixel (~6 ns each).
+≈ 0.57 Gpixel/s at identity — the `'raw '` unpack plus the same
+mode-aware blit every raster opcode uses (the decoded buffer moves,
+no per-pixel resolve, no transient clip mask); before the fast path
+the general route cost ~234 µs. Rotation, mask and matte take the
+general route: per-pixel destination resolve, a canvas-sized clip
+mask, and for rotation a 3×3 `f64` inverse map per destination pixel
+(~6 ns each).

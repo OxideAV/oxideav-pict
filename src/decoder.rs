@@ -2051,7 +2051,7 @@ fn render_compressed_quicktime(
         matte,
         matte_skipped,
     };
-    composite_quicktime(canvas, state, &rgba, w, h, placement, &comp)
+    composite_quicktime(canvas, state, rgba, w, h, placement, &comp)
 }
 
 /// `$8201`: decode the embedded `$98`–`$9B` subopcode through the
@@ -2102,7 +2102,7 @@ fn render_uncompressed_quicktime(
         matte_skipped,
     };
     Ok(composite_quicktime(
-        canvas, state, &img.data, img.width, img.height, dst, &comp,
+        canvas, state, img.data, img.width, img.height, dst, &comp,
     ))
 }
 
@@ -2205,7 +2205,7 @@ fn crop_rgba(data: &[u8], bounds: RectI32, rect: RectI32) -> Option<(Vec<u8>, u3
 fn composite_quicktime(
     canvas: &mut Canvas,
     state: &PictState,
-    rgba: &[u8],
+    rgba: Vec<u8>,
     w: u32,
     h: u32,
     placement: RectI32,
@@ -2215,6 +2215,25 @@ fn composite_quicktime(
         return QuickTimeRender::Failed("empty source rectangle".into());
     }
     let identity = comp.matrix.is_identity();
+    if identity && comp.mask.is_none() && comp.matte.is_none() {
+        // The common emitter case (identity matrix, no mask, no
+        // matte): a plain CopyBits-style blit of the crop at its own
+        // source coordinates, through the same mode-aware path every
+        // raster opcode uses — no per-pixel resolve, no transient
+        // clip mask, and the decoded buffer moves without a copy.
+        let sub = RasterSub {
+            width: w,
+            height: h,
+            data: rgba,
+            mode: comp.mode,
+        };
+        blit_subimage(canvas, state, &sub, &placement);
+        return QuickTimeRender::Rendered {
+            dst: placement,
+            matte_skipped: comp.matte_skipped.clone(),
+            placeholder_skipped: 0,
+        };
+    }
     if !identity {
         // A matrix whose linear part is singular collapses the source
         // rectangle to a line or point: nothing to draw, and
