@@ -76,6 +76,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `quicktime_raw_8200_identity` / `_rotate` (256 × 256 `'raw '`:
   ~116 µs / ~680 µs — the identity / no-mask / no-matte case takes a
   straight blit fast path, 2× the general route).
+- round 461: `tests/hostile_round461_quicktime.rs` — every truncation
+  prefix, 7 500 seeded byte mutations, and systematic maxing of the
+  matrix cells / description dimensions / rectangles over a
+  `$8200`-`$8201` fixture family (identity, matte + mask, rotation,
+  `'jpeg'`, `$8201` with matrix + matte): `Err` or a typed non-render,
+  never a panic, never an allocation beyond the canvas.
 - round 461: `fuzz/` — three `cargo fuzz` targets: `parse_pict`,
   `probe_pict` (+ the typed QuickTime payload parsers) and
   `quicktime_8200`, which wraps the fuzzer's bytes as the interior of
