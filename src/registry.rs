@@ -133,6 +133,85 @@ pub fn quicktime_codec_parameters(
     Some(params)
 }
 
+/// A [`QuickTimeImageDecoder`](crate::qtimage::QuickTimeImageDecoder)
+/// that resolves each `$8200` compressor FourCC through a caller's
+/// [`CodecRegistry`] (via [`resolve_quicktime_codec`] /
+/// [`quicktime_codec_parameters`]), runs the registry's first decoder
+/// on the image data as one packet, and folds the resulting frame to
+/// RGBA. FourCCs the registry does not know fall back to
+/// [`DefaultQuickTimeDecoder`](crate::qtimage::DefaultQuickTimeDecoder)
+/// (`'raw '` built in, `'jpeg'` through `oxideav-mjpeg`).
+///
+/// ```no_run
+/// use oxideav_core::RuntimeContext;
+/// use oxideav_pict::{parse_pict_with, RegistryQuickTimeDecoder};
+///
+/// let mut ctx = RuntimeContext::new();
+/// // … register the sibling codecs you want available …
+/// let mut qt = RegistryQuickTimeDecoder::new(&ctx.codecs);
+/// let bytes = std::fs::read("photo.pict")?;
+/// let img = parse_pict_with(&bytes, &mut qt)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct RegistryQuickTimeDecoder<'a> {
+    registry: &'a CodecRegistry,
+    fallback: crate::qtimage::DefaultQuickTimeDecoder,
+}
+
+impl<'a> RegistryQuickTimeDecoder<'a> {
+    /// Route FourCCs through `registry`.
+    pub fn new(registry: &'a CodecRegistry) -> Self {
+        Self {
+            registry,
+            fallback: crate::qtimage::DefaultQuickTimeDecoder::default(),
+        }
+    }
+}
+
+impl crate::qtimage::QuickTimeImageDecoder for RegistryQuickTimeDecoder<'_> {
+    fn decode_image(
+        &mut self,
+        description: &crate::quicktime::ImageDescription,
+        data: &[u8],
+    ) -> crate::error::Result<crate::qtimage::DecodedQuickTimeImage> {
+        let Some(params) = quicktime_codec_parameters(description, self.registry) else {
+            return self.fallback.decode_image(description, data);
+        };
+        let Ok(mut dec) = self.registry.first_decoder(&params) else {
+            return self.fallback.decode_image(description, data);
+        };
+        let wrap = |e: oxideav_core::Error| {
+            PictError::invalid(format!(
+                "'{}' QuickTime image via {}: {e}",
+                description.codec_str(),
+                params.codec_id
+            ))
+        };
+        let packet = oxideav_core::Packet::new(0, oxideav_core::TimeBase::new(1, 1), data.to_vec());
+        dec.send_packet(&packet).map_err(wrap)?;
+        let frame = match dec.receive_frame() {
+            Ok(f) => f,
+            Err(oxideav_core::Error::NeedMore) => {
+                dec.flush().map_err(wrap)?;
+                dec.receive_frame().map_err(wrap)?
+            }
+            Err(e) => return Err(wrap(e)),
+        };
+        match frame {
+            oxideav_core::Frame::Video(v) => crate::qtimage::video_frame_to_rgba(
+                &v,
+                description.width as u32,
+                description.height as u32,
+                crate::qtimage::PackedQuad::Rgba,
+            ),
+            _ => Err(PictError::invalid(format!(
+                "'{}' QuickTime image: decoder produced a non-video frame",
+                description.codec_str()
+            ))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

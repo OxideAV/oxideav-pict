@@ -111,6 +111,11 @@ pub struct PictQuickTime {
     /// payload. `None` when the interior did not match the published
     /// layout (the verbatim `data` capture still stands).
     pub image: Option<crate::quicktime::QuickTimePayload>,
+    /// What became of the opcode's pixels (round 461): rendered onto
+    /// the canvas (with the destination rectangle), unsupported
+    /// compressor, decode failure, or not attempted because the
+    /// interior did not parse. See [`crate::qtimage::QuickTimeRender`].
+    pub render: crate::qtimage::QuickTimeRender,
 }
 
 /// Pixel layout used by [`PictImage`].

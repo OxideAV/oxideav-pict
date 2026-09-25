@@ -20,6 +20,13 @@ categories = ["multimedia::encoding", "multimedia::images"]
 # `parse_pict` API plus crate-local `PictImage` / `PictError` types and
 # never references `oxideav-core`.
 oxideav-core = { version = "0.1", optional = true }
+# `'jpeg'` ("Photo - JPEG") is by far the compressor real-world
+# `$8200` CompressedQuickTime pictures carry. The payload is a codec
+# boundary (the ImageDescription's cType names the decompressor), so
+# the pixels come from the sibling JPEG decoder rather than from any
+# JPEG code in this crate — the same shape the workspace's other
+# embedded-codec image formats use. Rides on the `registry` feature.
+oxideav-mjpeg = { version = "0.1", optional = true }
 
 [dev-dependencies]
 # Bench harness only — not a runtime dependency. `default-features =
@@ -37,4 +44,4 @@ default = ["registry"]
 # `oxideav-core` so the crate can plug into the `oxideav` framework
 # registry. Default-on; turn off for image-library use-cases that just
 # want the standalone `parse_pict` API.
-registry = ["dep:oxideav-core"]
+registry = ["dep:oxideav-core", "dep:oxideav-mjpeg"]

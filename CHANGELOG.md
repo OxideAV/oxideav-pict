@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- round 461: **`$8200` CompressedQuickTime pictures render pixels on
+  the canvas.** The payload is a codec boundary (Inside Macintosh:
+  QuickTime, page 3-50: the `ImageDescription` `cType` names the
+  decompressor), so the decoder hands the description + image bytes to
+  a new `qtimage::QuickTimeImageDecoder` hook and composites whatever
+  RGBA comes back through one shared `StdPix` path (book pages 3-137 –
+  3-139) that `$8201` now uses too: the 3×3 matrix in the row-vector
+  convention of Figure 2-19 (`x' = a·x + c·y + tx`, `y' = b·x + d·y +
+  ty`; third column `Fract` 2.30) maps `SrcRect` to the destination
+  (`TransformRect`, pages 2-348 – 2-352 — exact for scale/translate,
+  corner bounding box + inverse-mapped nearest-neighbour sampling for
+  rotation / skew / perspective), the mask region clips in destination
+  space (page 3-138), the matte blends in source space per Imaging With
+  QuickDraw `CopyDeepMask` (page 3-120: "(1 – mask) × source + (mask) ×
+  destination", black = source, white = destination, per colour
+  component; `MatteRect` crops the matte), and `Mode` resolves like
+  every other raster opcode. Shipped decoders: `RawQuickTimeDecoder`
+  (`'raw '` at depth 32 / 24 / 16 — the compressor that "does not
+  compress", Table 3-3), `DefaultQuickTimeDecoder` (what `parse_pict`
+  and the framework `Decoder` use: `'raw '` plus, with the `registry`
+  feature, `'jpeg'` / "Photo - JPEG" through the sibling
+  `oxideav-mjpeg` decoder — new optional dependency riding on
+  `registry`), and `registry::RegistryQuickTimeDecoder` (FourCC →
+  caller `CodecRegistry` → first decoder → frame folded to RGBA by
+  plane geometry, falling back to the default chain). New
+  `parse_pict_with(bytes, &mut dyn QuickTimeImageDecoder)`. Every
+  QuickTime opcode now reports what became of its pixels on
+  `PictQuickTime::render: QuickTimeRender` — `Rendered { dst,
+  matte_skipped }`, `Unsupported { codec, reason }` (compressor nobody
+  decodes: canvas untouched, wrapper stays typed, never a panic),
+  `Failed(reason)`, or `NotAttempted` (interior did not parse).
+  `QuickTimeMatrix` gains `IDENTITY_FRACT`, `scale_translate`,
+  `rect_matrix`, `is_affine`, `is_scale_translate`, `to_f64`,
+  `transform_point`, `transform_rect`, `transform_rect_f64` and
+  `inverse_map`. A hostile matrix (huge translation / scale) only ever
+  materialises the canvas-visible part of the destination.
+
 - round 435: **QuickTime picture-opcode payload internals are typed.**
   The staged Inside Macintosh: QuickTime (1993) volume — Chapter 3
   "Image Compression Manager", Tables 3-1 / 3-2 (pages 3-25 – 3-27) and

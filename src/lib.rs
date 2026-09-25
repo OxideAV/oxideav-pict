@@ -79,6 +79,7 @@ pub mod ops;
 #[doc(hidden)]
 pub mod packbits;
 pub mod probe;
+pub mod qtimage;
 pub mod quicktime;
 pub mod raster;
 // internal — exposed for tests/fuzz; not part of the stable API
@@ -94,7 +95,7 @@ pub mod state;
 /// Codec id for PICT image frames.
 pub const CODEC_ID_STR: &str = "pict";
 
-pub use decoder::{parse_pict, MAX_RASTER_BYTES};
+pub use decoder::{parse_pict, parse_pict_with, MAX_RASTER_BYTES};
 pub use encoder::{
     build_clip_rgn_rect, build_direct_bits_rect_op, build_direct_bits_rect_op_with_mode,
     build_pix_pat_dither_op, build_pix_pat_op, build_pix_pat_op_sized, encode_pict,
@@ -123,6 +124,10 @@ pub use ops::{
     build_uncompressed_quicktime_image, PictBuilder, PictV1Builder, Verb,
 };
 pub use probe::{probe_pict, PictProbe, ProbeQuickTime, ProbeRect, ProbeTermination, ProbeVersion};
+pub use qtimage::{
+    DecodedQuickTimeImage, DefaultQuickTimeDecoder, QuickTimeImageDecoder, QuickTimeRender,
+    RawQuickTimeDecoder,
+};
 pub use quicktime::{
     parse_compressed_quicktime, parse_uncompressed_quicktime, ImageDescription,
     QuickTimeCompressed, QuickTimeMatrix, QuickTimeMatte, QuickTimePayload, QuickTimeUncompressed,
@@ -139,5 +144,5 @@ pub use state::{
 #[cfg(feature = "registry")]
 pub use registry::{
     __oxideav_entry, quicktime_codec_parameters, register, register_codecs, register_containers,
-    resolve_quicktime_codec,
+    resolve_quicktime_codec, RegistryQuickTimeDecoder,
 };

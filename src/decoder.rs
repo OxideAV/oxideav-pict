@@ -111,6 +111,25 @@ fn rect_dims(bounds: (i16, i16, i16, i16)) -> (u32, u32) {
 }
 
 pub fn parse_pict(bytes: &[u8]) -> Result<PictImage> {
+    let mut qt = crate::qtimage::DefaultQuickTimeDecoder::default();
+    parse_pict_with(bytes, &mut qt)
+}
+
+/// [`parse_pict`] with a caller-supplied decoder for the image data
+/// of `CompressedQuickTime` (`$8200`) opcodes and QuickTime mattes.
+///
+/// The `$8200` payload is a codec boundary (Inside Macintosh:
+/// QuickTime, page 3-50: the `cType` FourCC names the decompressor);
+/// `qt` is asked for the pixels of every such image and the result is
+/// composited per the opcode's matrix / matte / mask / mode. Pass a
+/// `registry::RegistryQuickTimeDecoder` (feature `registry`) to route
+/// FourCCs through an `oxideav_core::CodecRegistry`, or any
+/// [`crate::qtimage::QuickTimeImageDecoder`] of your own. [`parse_pict`] uses
+/// [`DefaultQuickTimeDecoder`](crate::qtimage::DefaultQuickTimeDecoder).
+pub fn parse_pict_with(
+    bytes: &[u8],
+    qt: &mut dyn crate::qtimage::QuickTimeImageDecoder,
+) -> Result<PictImage> {
     let body_offset = detect_body_offset(bytes)?;
     let body = &bytes[body_offset..];
 
@@ -150,7 +169,7 @@ pub fn parse_pict(bytes: &[u8]) -> Result<PictImage> {
 
     let mut img = match version {
         PictVersion::V1 => parse_v1_opcodes(&mut r, pic_frame, canvas, state)?,
-        PictVersion::V2 => parse_v2_opcodes(&mut r, pic_frame, canvas, state)?,
+        PictVersion::V2 => parse_v2_opcodes(&mut r, pic_frame, canvas, state, qt)?,
     };
     img.header = header;
     Ok(img)
@@ -364,6 +383,7 @@ fn parse_v2_opcodes(
     pic_frame: RectI32,
     mut canvas: Canvas,
     mut state: PictState,
+    qt: &mut dyn crate::qtimage::QuickTimeImageDecoder,
 ) -> Result<PictImage> {
     while !r.at_eof() {
         r.align_word()?;
@@ -371,7 +391,7 @@ fn parse_v2_opcodes(
             break;
         }
         let opcode = r.read_u16()?;
-        if !dispatch_v2_opcode(r, opcode, &pic_frame, &mut canvas, &mut state)? {
+        if !dispatch_v2_opcode(r, opcode, &pic_frame, &mut canvas, &mut state, qt)? {
             break; // OpEndPic
         }
     }
@@ -386,6 +406,7 @@ fn dispatch_v2_opcode(
     pic_frame: &RectI32,
     canvas: &mut Canvas,
     state: &mut PictState,
+    qt: &mut dyn crate::qtimage::QuickTimeImageDecoder,
 ) -> Result<bool> {
     match opcode {
         OP_NOP => Ok(true),
@@ -948,53 +969,50 @@ fn dispatch_v2_opcode(
             let data_length = r.read_u32()? as usize;
             let data = r.read_bytes(data_length)?.to_vec();
             let compressed = opcode == OP_COMPRESSED_QUICKTIME;
-            let image = if compressed {
+            let (image, render) = if compressed {
                 // `$8200`: the compressed image data is a CODEC-tag
                 // boundary — the FourCC in the ImageDescription names
-                // the decompressor, so no pixels land on the canvas
-                // here. With the `registry` feature the caller routes
-                // `image_description.codec` through oxideav-core's
-                // resolver (`registry::resolve_quicktime_codec`).
-                crate::quicktime::parse_compressed_quicktime(&data)
-                    .ok()
-                    .map(crate::quicktime::QuickTimePayload::Compressed)
+                // the decompressor. Round 461: ask the caller's
+                // QuickTime image decoder for the pixels and composite
+                // them through the shared `StdPix` path (matrix, matte,
+                // mask, mode). A compressor nobody decodes leaves the
+                // canvas alone and is recorded as `Unsupported`.
+                match crate::quicktime::parse_compressed_quicktime(&data) {
+                    Ok(c) => {
+                        let render = render_compressed_quicktime(canvas, state, &c, qt);
+                        (
+                            Some(crate::quicktime::QuickTimePayload::Compressed(c)),
+                            render,
+                        )
+                    }
+                    Err(_) => (None, QuickTimeRender::NotAttempted),
+                }
             } else {
                 // `$8201`: the wrapper embeds one ordinary `$98`–`$9B`
                 // pixel-data subopcode whose bytes sit wholly inside
-                // the `Size` window — re-enter the normal raster
-                // dispatch on it and blit the result.
-                crate::quicktime::parse_uncompressed_quicktime(&data)
-                    .ok()
-                    .and_then(|u| {
-                        let mut sub = Reader::new(&u.sub_data);
-                        let blitted = match u.subopcode {
-                            OP_PACK_BITS_RECT => decode_pack_bits_rect(&mut sub)
-                                .map(|(img, dst)| blit_subimage(canvas, state, &img, &dst)),
-                            OP_PACK_BITS_RGN => {
-                                decode_pack_bits_rgn(&mut sub).map(|(img, dst, rgn)| {
-                                    blit_subimage_with_rgn(canvas, state, &img, &dst, Some(&rgn))
-                                })
-                            }
-                            OP_DIRECT_BITS_RECT => decode_direct_bits_rect(&mut sub)
-                                .map(|(img, dst)| blit_subimage(canvas, state, &img, &dst)),
-                            OP_DIRECT_BITS_RGN => {
-                                decode_direct_bits_rgn(&mut sub).map(|(img, dst, rgn)| {
-                                    blit_subimage_with_rgn(canvas, state, &img, &dst, Some(&rgn))
-                                })
-                            }
-                            // parse_uncompressed_quicktime guarantees
-                            // the $98–$9B range.
-                            _ => unreachable!("subopcode range enforced by the parser"),
-                        };
-                        blitted
-                            .ok()
-                            .map(|()| crate::quicktime::QuickTimePayload::Uncompressed(u))
-                    })
+                // the `Size` window — decode it through the normal
+                // raster path, then composite through the *same*
+                // `StdPix` code as `$8200` so the wrapper's matrix and
+                // matte are honoured identically.
+                match crate::quicktime::parse_uncompressed_quicktime(&data) {
+                    Ok(u) => match render_uncompressed_quicktime(canvas, state, &u, qt) {
+                        Ok(render) => (
+                            Some(crate::quicktime::QuickTimePayload::Uncompressed(u)),
+                            render,
+                        ),
+                        // The embedded subopcode's pixel data failed
+                        // to decode: page 3-26 degradation — verbatim
+                        // capture only, canvas untouched.
+                        Err(_) => (None, QuickTimeRender::NotAttempted),
+                    },
+                    Err(_) => (None, QuickTimeRender::NotAttempted),
+                }
             };
             state.quicktime.push(crate::image::PictQuickTime {
                 compressed,
                 data,
                 image,
+                render,
             });
             Ok(true)
         }
@@ -1873,6 +1891,451 @@ fn blit_subimage_with_rgn(
     canvas.clip = prev_clip;
 }
 
+// ---------------------------------------------------------------------------
+// QuickTime picture opcodes — the shared `StdPix` compositor.
+//
+// Inside Macintosh: QuickTime, `StdPix` (book pages 3-137 – 3-139):
+// `StdPix(src, srcRect, matrix, mode, mask, matte, matteRect, flags)`.
+// The `$8200` opcode is that call serialised field for field (Table
+// 3-1), and `$8201` carries the same matrix + matte around an ordinary
+// pixel-data subopcode (Table 3-2). One compositor serves both:
+//
+//   * `matrix` — "specifies the mapping of the source rectangle to the
+//     destination … roughly corresponds to the `dstRect` parameter to
+//     QuickDraw's `StdBits` routine" (page 3-138). The image's
+//     placement rectangle (source space) is mapped through it into
+//     picture space; `RectMatrix` / `TransformRect` (pages 2-351 –
+//     2-352) make the effective destination `TransformRect(matrix,
+//     srcRect)`.
+//   * `mask` — "a clipping region in the destination coordinate
+//     system" (page 3-138): applied after the matrix, never
+//     transformed by it.
+//   * `matte` / `matteRect` — "the matte must be in the coordinate
+//     system of the source image"; `matteRect` "must be the same size
+//     as the rectangle specified by the srcRect parameter" (pages 3-81,
+//     3-139). Blended per Imaging With QuickDraw `CopyDeepMask` (book
+//     page 3-120), which the QuickTime book says routes through
+//     `StdPix`: "A black mask pixel value means that the copy operation
+//     is to take the source pixel; a white value means that the copy
+//     operation is to take the destination pixel. Intermediate values
+//     specify a weighted average, which is calculated on a color
+//     component basis … (1 – mask) × source + (mask) × destination".
+//   * `mode` — the QuickDraw transfer mode, resolved exactly like every
+//     other raster opcode (`SourceMode::from_mode_word`).
+//
+// Rounding of the fixed-point transform to integer pixels is not
+// specified by the books (`pict-quicktime-matrix.md` §9); this crate
+// samples destination pixel centres through the inverse matrix and
+// takes the source pixel they land in (nearest neighbour), which for
+// integer scale factors is exact.
+// ---------------------------------------------------------------------------
+
+use crate::qtimage::{QuickTimeImageDecoder, QuickTimeRender};
+use crate::quicktime::{
+    QuickTimeCompressed, QuickTimeMatrix, QuickTimeMatte, QuickTimeUncompressed,
+};
+
+/// Per-blit inputs of the shared compositor besides the pixels.
+struct QuickTimeComposite<'a> {
+    matrix: &'a QuickTimeMatrix,
+    /// The QuickDraw transfer-mode word.
+    mode: u16,
+    /// Mask region in destination (picture) space.
+    mask: Option<Region>,
+    /// `CopyDeepMask` weights aligned with the source image — RGBA
+    /// per source pixel, 0 = take source, 255 = keep destination,
+    /// applied per colour component.
+    matte: Option<Vec<u8>>,
+    /// Why the opcode's matte was not applied, if it carried one that
+    /// could not be decoded (reported, never fatal).
+    matte_skipped: Option<String>,
+}
+
+/// `$8200`: decode the image through `qt`, crop to `SrcRect`, decode
+/// the matte the same way, parse the mask region, and composite.
+fn render_compressed_quicktime(
+    canvas: &mut Canvas,
+    state: &PictState,
+    c: &QuickTimeCompressed,
+    qt: &mut dyn QuickTimeImageDecoder,
+) -> QuickTimeRender {
+    let codec = c.image_description.codec;
+    let decoded = match qt.decode_image(&c.image_description, &c.image_data) {
+        Ok(d) => d,
+        Err(e) => return crate::qtimage::render_outcome(codec, e),
+    };
+    // Page 3-78: srcRect "must lie within the boundary rectangle of
+    // the compressed image, which is defined by (0,0) and
+    // (desc.width, desc.height)"; the decoded pixels define that
+    // boundary. Crop the decoded image to srcRect ∩ boundary; the
+    // crop's own coordinates are the placement in source space.
+    let bounds = RectI32 {
+        top: 0,
+        left: 0,
+        bottom: decoded.height as i32,
+        right: decoded.width as i32,
+    };
+    let Some((rgba, w, h, placement)) = crop_rgba(&decoded.rgba, bounds, c.src_rect) else {
+        return QuickTimeRender::Failed(format!(
+            "srcRect {:?} does not overlap the {}×{} decoded image",
+            (
+                c.src_rect.top,
+                c.src_rect.left,
+                c.src_rect.bottom,
+                c.src_rect.right
+            ),
+            decoded.width,
+            decoded.height
+        ));
+    };
+    let (matte, matte_skipped) =
+        match decode_matte_weights(c.matte.as_ref(), c.matte_rect, w, h, qt) {
+            Ok(m) => (m, None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+    let mask = match c.mask_region.as_deref().map(parse_mask_region) {
+        None => None,
+        Some(Ok(rgn)) => Some(rgn),
+        Some(Err(e)) => return QuickTimeRender::Failed(format!("mask region: {e}")),
+    };
+    let comp = QuickTimeComposite {
+        matrix: &c.matrix,
+        mode: c.mode,
+        mask,
+        matte,
+        matte_skipped,
+    };
+    composite_quicktime(canvas, state, &rgba, w, h, placement, &comp)
+}
+
+/// `$8201`: decode the embedded `$98`–`$9B` subopcode through the
+/// normal raster path (its own `srcRect` / `dstRect` / `mode` /
+/// region), then composite the result with the wrapper's matrix and
+/// matte through the same code as `$8200`. `Err` means the subopcode
+/// pixel data itself failed to decode (page 3-26 degradation).
+fn render_uncompressed_quicktime(
+    canvas: &mut Canvas,
+    state: &PictState,
+    u: &QuickTimeUncompressed,
+    qt: &mut dyn QuickTimeImageDecoder,
+) -> Result<QuickTimeRender> {
+    let mut sub = Reader::new(&u.sub_data);
+    let (img, dst, rgn) = match u.subopcode {
+        OP_PACK_BITS_RECT => {
+            let (img, dst) = decode_pack_bits_rect(&mut sub)?;
+            (img, dst, None)
+        }
+        OP_PACK_BITS_RGN => {
+            let (img, dst, rgn) = decode_pack_bits_rgn(&mut sub)?;
+            (img, dst, Some(rgn))
+        }
+        OP_DIRECT_BITS_RECT => {
+            let (img, dst) = decode_direct_bits_rect(&mut sub)?;
+            (img, dst, None)
+        }
+        OP_DIRECT_BITS_RGN => {
+            let (img, dst, rgn) = decode_direct_bits_rgn(&mut sub)?;
+            (img, dst, Some(rgn))
+        }
+        // parse_uncompressed_quicktime guarantees the $98–$9B range.
+        _ => unreachable!("subopcode range enforced by the parser"),
+    };
+    // The subopcode's dstRect is where CopyBits would have put the
+    // pixels; the wrapper's matrix then maps that rectangle onward
+    // (identity for every emitter observed so far).
+    let (matte, matte_skipped) =
+        match decode_matte_weights(u.matte.as_ref(), u.matte_rect, img.width, img.height, qt) {
+            Ok(m) => (m, None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+    let comp = QuickTimeComposite {
+        matrix: &u.matrix,
+        mode: img.mode,
+        mask: rgn,
+        matte,
+        matte_skipped,
+    };
+    Ok(composite_quicktime(
+        canvas, state, &img.data, img.width, img.height, dst, &comp,
+    ))
+}
+
+/// Parse the raw mask-region bytes of a `$8200` opcode (a QuickDraw
+/// `Region`, `MaskSize` bytes, leading with its own `rgnSize`).
+fn parse_mask_region(bytes: &[u8]) -> Result<Region> {
+    let mut r = Reader::new(bytes);
+    parse_region(&mut r)
+}
+
+/// Decode a QuickTime matte through `qt`, crop it to `matte_rect`
+/// (source-image coordinates), and resample it to the `w × h` source
+/// crop it blends — `matteRect` "must be the same size as the
+/// rectangle specified by the srcRect parameter" (page 3-81), so the
+/// resample is the identity for a conforming file and a lenient
+/// nearest-neighbour fit otherwise. Returns RGBA weights aligned with
+/// the source pixels.
+fn decode_matte_weights(
+    matte: Option<&QuickTimeMatte>,
+    matte_rect: RectI32,
+    w: u32,
+    h: u32,
+    qt: &mut dyn QuickTimeImageDecoder,
+) -> Result<Option<Vec<u8>>> {
+    let Some(m) = matte else {
+        return Ok(None);
+    };
+    let decoded = qt.decode_image(&m.description, &m.data)?;
+    let bounds = RectI32 {
+        top: 0,
+        left: 0,
+        bottom: decoded.height as i32,
+        right: decoded.width as i32,
+    };
+    // An empty / absent matteRect means "use the entire matte"
+    // (page 3-139: "nil if there is no matte or if the entire matte is
+    // to be used").
+    let rect = if matte_rect.right > matte_rect.left && matte_rect.bottom > matte_rect.top {
+        matte_rect
+    } else {
+        bounds
+    };
+    let (rgba, mw, mh, _) = crop_rgba(&decoded.rgba, bounds, rect)
+        .ok_or_else(|| PictError::invalid("matteRect does not overlap the matte"))?;
+    if mw == w && mh == h {
+        return Ok(Some(rgba));
+    }
+    let mut out = vec![0u8; (w as usize) * (h as usize) * 4];
+    for y in 0..h as usize {
+        let sy = y * mh as usize / h as usize;
+        for x in 0..w as usize {
+            let sx = x * mw as usize / w as usize;
+            let s = (sy * mw as usize + sx) * 4;
+            let d = (y * w as usize + x) * 4;
+            out[d..d + 4].copy_from_slice(&rgba[s..s + 4]);
+        }
+    }
+    Ok(Some(out))
+}
+
+/// Crop a `bounds`-sized RGBA buffer to `rect ∩ bounds`. Returns the
+/// cropped pixels, their size, and the intersection rectangle (the
+/// crop's placement in the buffer's coordinate space), or `None` for
+/// an empty intersection.
+fn crop_rgba(data: &[u8], bounds: RectI32, rect: RectI32) -> Option<(Vec<u8>, u32, u32, RectI32)> {
+    let bw = (bounds.right - bounds.left).max(0) as usize;
+    let top = rect.top.max(bounds.top);
+    let left = rect.left.max(bounds.left);
+    let bottom = rect.bottom.min(bounds.bottom);
+    let right = rect.right.min(bounds.right);
+    if right <= left || bottom <= top {
+        return None;
+    }
+    let cw = (right - left) as usize;
+    let ch = (bottom - top) as usize;
+    let placement = RectI32 {
+        top,
+        left,
+        bottom,
+        right,
+    };
+    if left == bounds.left && top == bounds.top && cw == bw && bottom == bounds.bottom {
+        return Some((data.to_vec(), cw as u32, ch as u32, placement));
+    }
+    let ox = (left - bounds.left) as usize;
+    let oy = (top - bounds.top) as usize;
+    let mut out = vec![0u8; cw * ch * 4];
+    for y in 0..ch {
+        let s = ((oy + y) * bw + ox) * 4;
+        let d = y * cw * 4;
+        out[d..d + cw * 4].copy_from_slice(&data[s..s + cw * 4]);
+    }
+    Some((out, cw as u32, ch as u32, placement))
+}
+
+/// The shared `StdPix` compositor: `rgba` (`w × h`) sits at
+/// `placement` in source space; map it through `comp.matrix` into
+/// picture space, clip by the canvas, the active clip region and the
+/// opcode's mask, apply the transfer mode, and blend by the matte.
+fn composite_quicktime(
+    canvas: &mut Canvas,
+    state: &PictState,
+    rgba: &[u8],
+    w: u32,
+    h: u32,
+    placement: RectI32,
+    comp: &QuickTimeComposite<'_>,
+) -> QuickTimeRender {
+    if w == 0 || h == 0 || placement.right <= placement.left || placement.bottom <= placement.top {
+        return QuickTimeRender::Failed("empty source rectangle".into());
+    }
+    let identity = comp.matrix.is_identity();
+    if !identity {
+        // A matrix whose linear part is singular collapses the source
+        // rectangle to a line or point: nothing to draw, and
+        // `inverse_map` has no answer for it.
+        let m = comp.matrix.to_f64();
+        let det = m[0][0] * m[1][1] - m[0][1] * m[1][0];
+        if !det.is_finite() || det.abs() < 1e-12 {
+            return QuickTimeRender::Failed(
+                "singular matrix collapses the source rectangle".into(),
+            );
+        }
+    }
+    // Destination bounding box in picture coordinates — the exact
+    // TransformRect for a scale/translate matrix, the corner bounding
+    // box otherwise (pages 2-348 – 2-349).
+    let dst = if identity {
+        placement
+    } else if comp.matrix.is_scale_translate() {
+        comp.matrix.transform_rect(placement)
+    } else {
+        match comp.matrix.transform_rect_f64(placement) {
+            Some(r) => r,
+            None => {
+                return QuickTimeRender::Failed("matrix projects the image behind the plane".into())
+            }
+        }
+    };
+
+    // Only the part of the destination that can reach the canvas is
+    // ever materialised: a hostile matrix cannot make us allocate or
+    // iterate beyond the picture frame.
+    let canvas_rect = RectI32 {
+        top: state.origin.1,
+        left: state.origin.0,
+        bottom: state.origin.1.saturating_add(canvas.height as i32),
+        right: state.origin.0.saturating_add(canvas.width as i32),
+    };
+    let vis = RectI32 {
+        top: dst.top.max(canvas_rect.top),
+        left: dst.left.max(canvas_rect.left),
+        bottom: dst.bottom.min(canvas_rect.bottom),
+        right: dst.right.min(canvas_rect.right),
+    };
+    if vis.right <= vis.left || vis.bottom <= vis.top {
+        // Entirely off-canvas: drawn, just not visible.
+        return QuickTimeRender::Rendered {
+            dst,
+            matte_skipped: comp.matte_skipped.clone(),
+        };
+    }
+    let vw = (vis.right - vis.left) as usize;
+    let vh = (vis.bottom - vis.top) as usize;
+
+    // Resolve every visible destination pixel to a source pixel.
+    let mut buf = vec![0u8; vw * vh * 4];
+    let mut weights = comp.matte.as_ref().map(|_| vec![0u8; vw * vh * 4]);
+    let mut coverage = vec![false; vw * vh];
+    let pw = f64::from(placement.right - placement.left);
+    let ph = f64::from(placement.bottom - placement.top);
+    let (fw, fh) = (f64::from(w), f64::from(h));
+    for dy in 0..vh {
+        for dx in 0..vw {
+            let px = vis.left + dx as i32;
+            let py = vis.top + dy as i32;
+            let (ix, iy) = if identity {
+                (px - placement.left, py - placement.top)
+            } else {
+                // Destination pixel centre → source space → image
+                // pixel (nearest neighbour).
+                let Some((sx, sy)) = comp
+                    .matrix
+                    .inverse_map(f64::from(px) + 0.5, f64::from(py) + 0.5)
+                else {
+                    continue;
+                };
+                let ix = ((sx - f64::from(placement.left)) * fw / pw).floor();
+                let iy = ((sy - f64::from(placement.top)) * fh / ph).floor();
+                if !(ix.is_finite() && iy.is_finite()) {
+                    continue;
+                }
+                if ix < 0.0 || iy < 0.0 || ix >= fw || iy >= fh {
+                    continue;
+                }
+                (ix as i32, iy as i32)
+            };
+            if ix < 0 || iy < 0 || ix >= w as i32 || iy >= h as i32 {
+                continue;
+            }
+            let s = ((iy as usize) * (w as usize) + ix as usize) * 4;
+            let d = (dy * vw + dx) * 4;
+            buf[d..d + 4].copy_from_slice(&rgba[s..s + 4]);
+            if let (Some(wt), Some(m)) = (weights.as_mut(), comp.matte.as_ref()) {
+                wt[d..d + 4].copy_from_slice(&m[s..s + 4]);
+            }
+            coverage[dy * vw + dx] = true;
+        }
+    }
+
+    // Transient clip: existing clip ∧ mask region (destination space)
+    // ∧ coverage of the transformed image.
+    let prev_clip = canvas.clip.take();
+    let cw = canvas.width as usize;
+    let ch = canvas.height as usize;
+    let mut transient = vec![false; cw * ch];
+    for y in 0..vh {
+        for x in 0..vw {
+            if !coverage[y * vw + x] {
+                continue;
+            }
+            let pic_x = vis.left + x as i32;
+            let pic_y = vis.top + y as i32;
+            let (cx, cy) = to_canvas(state, pic_x, pic_y);
+            if cx < 0 || cy < 0 || cx as usize >= cw || cy as usize >= ch {
+                continue;
+            }
+            let idx = cy as usize * cw + cx as usize;
+            let inside_prev = prev_clip.as_ref().map_or(true, |m| m[idx]);
+            let inside_mask = comp
+                .mask
+                .as_ref()
+                .map_or(true, |r| r.contains(pic_x, pic_y));
+            transient[idx] = inside_prev && inside_mask;
+        }
+    }
+    let before = comp.matte.as_ref().map(|_| canvas.data.clone());
+    canvas.clip = Some(transient);
+    let sub = RasterSub {
+        width: vw as u32,
+        height: vh as u32,
+        data: buf,
+        mode: comp.mode,
+    };
+    blit_subimage(canvas, state, &sub, &vis);
+    let transient = canvas.clip.take();
+    canvas.clip = prev_clip;
+
+    // CopyDeepMask blend: (1 − mask) × source + mask × destination,
+    // per colour component, over the pixels the blit was allowed to
+    // touch.
+    if let (Some(before), Some(weights), Some(transient)) = (before, weights, transient) {
+        for y in 0..vh {
+            for x in 0..vw {
+                let (cx, cy) = to_canvas(state, vis.left + x as i32, vis.top + y as i32);
+                if cx < 0 || cy < 0 || cx as usize >= cw || cy as usize >= ch {
+                    continue;
+                }
+                let idx = cy as usize * cw + cx as usize;
+                if !transient[idx] {
+                    continue;
+                }
+                let wo = (y * vw + x) * 4;
+                let co = idx * 4;
+                for c in 0..3 {
+                    let m = u32::from(weights[wo + c]);
+                    let src = u32::from(canvas.data[co + c]);
+                    let dst = u32::from(before[co + c]);
+                    canvas.data[co + c] = (((255 - m) * src + m * dst + 127) / 255) as u8;
+                }
+            }
+        }
+    }
+    QuickTimeRender::Rendered {
+        dst,
+        matte_skipped: comp.matte_skipped.clone(),
+    }
+}
+
 /// Crop a decoded `bounds`-sized RGBA source buffer down to the
 /// `srcRect` sub-rectangle before it is blitted to `dstRect`.
 ///
@@ -2316,7 +2779,14 @@ fn decode_indexed_pixmap_payload(
     ))
 }
 
+/// `ctFlags` bit 15 — "high bit: 0 = PixMap; 1 = device" (Imaging With
+/// QuickDraw, book pages 4-104 / 4-120): an indexed-device colour table.
 const COLOR_TABLE_DEVICE_FLAG: u16 = 0x8000;
+/// `ctFlags` bit 14 (`$4000`) — a colour table whose `value` fields are
+/// Palette Manager entry numbers rather than pixel values (Apple
+/// *develop* Issue 1, "All About the Palette Manager", *Drawing With
+/// Palette Colors*, page 29).
+const COLOR_TABLE_PALETTE_INDEX_FLAG: u16 = 0x4000;
 
 /// Read a `ColorTable` record (already past the PixMap header) and
 /// return a **value-keyed** palette: a 256-entry `Vec<Rgba>` where slot
@@ -2342,10 +2812,23 @@ const COLOR_TABLE_DEVICE_FLAG: u16 = 0x8000;
 /// Inside Macintosh: Imaging With QuickDraw identifies `$0000` as a
 /// pixel-map color table and `$8000` as an indexed-device color table
 /// (§4, book page 4-104; the structure summary repeats "high bit: 0 =
-/// PixMap; 1 = device" on page 4-120). Apple's *develop* Issue 1,
-/// "Palette Manager", makes the indexing rule explicit: device tables
-/// are sequential, so `ColorSpec` array position supplies the pixel
-/// value. Other tables use the explicit `ColorSpec.value` mapping.
+/// PixMap; 1 = device" on page 4-120). Apple's *develop* Issue 1
+/// (January 1990), "All About the Palette Manager", section *Drawing
+/// With Palette Colors* (page 29), states the indexing rule for both
+/// flag bits — verbatim: *"a pixMap or pixPat color table may be
+/// specified to point to palette entries. To do this, set bit 14 in
+/// the ctFlags field of the color table … Then set the desired palette
+/// entry numbers in the value field of each colorSpec. The color table
+/// is then assumed to be sequential, as device tables are (colorSpec 0
+/// refers to pixel value 0 in the pixMap or pixPat; color value 1
+/// refers to pixel value 1, and so on)."* So with bit 15 (device
+/// table) **or** bit 14 (palette-index table) set, `ColorSpec` array
+/// position supplies the pixel value and the `value` field is not a
+/// pixel index at all (device-private data, or a palette entry number
+/// that only a live Palette Manager could resolve — a PICT reader
+/// keeps the entry's own RGB, which is what the desktop-pattern
+/// example in the article starts from). Plain pixel-map tables
+/// (neither bit) use the explicit `ColorSpec.value` mapping.
 fn read_color_table_value_keyed(r: &mut Reader<'_>, context: &str) -> Result<Vec<Rgba>> {
     let _ct_seed = r.read_u32()?;
     let ct_flags = r.read_u16()?;
@@ -2359,7 +2842,7 @@ fn read_color_table_value_keyed(r: &mut Reader<'_>, context: &str) -> Result<Vec
     let mut palette = vec![Rgba::BLACK; 256];
     for index in 0..n_entries {
         let value = r.read_u16()?;
-        let value = if ct_flags & COLOR_TABLE_DEVICE_FLAG != 0 {
+        let value = if ct_flags & (COLOR_TABLE_DEVICE_FLAG | COLOR_TABLE_PALETTE_INDEX_FLAG) != 0 {
             index as u16
         } else {
             value

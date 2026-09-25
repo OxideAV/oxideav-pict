@@ -31,11 +31,15 @@
 //! to the verbatim capture rather than failing the whole picture.
 //!
 //! The compressed image data itself is **not** decoded here: the codec
-//! named by [`ImageDescription::codec`] is a CODEC-tag boundary. With
-//! the `registry` feature on, [`crate::registry::resolve_quicktime_codec`]
-//! routes the FourCC through `oxideav-core`'s resolver so a framework
-//! consumer can construct the matching decoder; without a matching
-//! workspace codec the payload stays available as typed bytes.
+//! named by [`ImageDescription::codec`] is a CODEC-tag boundary. The
+//! decoder hands it to a [`crate::qtimage::QuickTimeImageDecoder`]
+//! (`'raw '` built in, `'jpeg'` through `oxideav-mjpeg` with the
+//! `registry` feature, anything else through a caller-supplied
+//! decoder or `oxideav-core` registry) and composites the pixels with
+//! the [`QuickTimeMatrix`] / matte / mask / mode carried by the
+//! wrapper; a compressor nobody decodes leaves the payload available
+//! as typed bytes and is reported on
+//! [`PictQuickTime::render`](crate::PictQuickTime::render).
 
 use crate::error::{PictError, Result};
 use crate::header::Fixed;
@@ -46,11 +50,21 @@ use crate::state::RectI32;
 /// opcodes (Inside Macintosh: QuickTime, Table 3-1 / 3-2: "3 by 3
 /// fixed transformation matrix", 36 bytes).
 ///
-/// Stored row-major as nine [`Fixed`] (16.16) values, exactly as read
-/// off disk. The book documents the field only as "fixed"; QuickTime's
-/// matrix convention elsewhere stores the third *column* as 2.30
-/// `Fract` values, so [`is_identity`](Self::is_identity) accepts both
-/// the all-16.16 identity and the third-column-`Fract` identity.
+/// Stored row-major as nine 32-bit values exactly as read off disk, in
+/// the serialised order `a, b, u, c, d, v, tx, ty, w` (Inside
+/// Macintosh: QuickTime Figure 2-19, book page 2-26). The first two
+/// columns (`a b / c d / tx ty`) are [`Fixed`] 16.16; the third column
+/// (`u v w`, longs 2 / 5 / 8) is `Fract` 2.30 (book page 2-28: "All of
+/// the elements in the first two columns of a matrix are represented
+/// by `Fixed` values. Values in the third column are represented as
+/// `Fract` values"), so the emitter-written identity ends in
+/// `0x40000000`. [`is_identity`](Self::is_identity) also accepts the
+/// all-16.16 identity that pre-dates that reading.
+///
+/// Coordinates are **row vectors** multiplied on the left (Figure
+/// 2-19): `x' = a·x + c·y + tx`, `y' = b·x + d·y + ty`, translation in
+/// the bottom row. See [`transform_point`](Self::transform_point) and
+/// [`transform_rect`](Self::transform_rect).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuickTimeMatrix(pub [Fixed; 9]);
 
@@ -73,9 +87,240 @@ impl QuickTimeMatrix {
         Fixed(Self::ONE_16_16),
     ]);
 
+    /// The identity matrix as QuickTime writes it: `a = d = 1.0` in
+    /// 16.16 and `w = 1.0` in `Fract` 2.30 (`0x40000000`) — the
+    /// byte-exact form observed in emitter-written `$8200` opcodes.
+    pub const IDENTITY_FRACT: Self = Self([
+        Fixed(Self::ONE_16_16),
+        Fixed(0),
+        Fixed(0),
+        Fixed(0),
+        Fixed(Self::ONE_16_16),
+        Fixed(0),
+        Fixed(0),
+        Fixed(0),
+        Fixed(Self::ONE_2_30),
+    ]);
+
     /// Matrix element at `row`, `col` (0-based, row-major).
     pub fn at(&self, row: usize, col: usize) -> Fixed {
         self.0[row * 3 + col]
+    }
+
+    /// A translate-and-scale matrix: `a = sx`, `d = sy`, `tx`, `ty`
+    /// (Figures 2-21 / 2-22), with the identity third column. This is
+    /// the shape `RectMatrix` (book page 2-351) produces to map one
+    /// rectangle onto another.
+    pub fn scale_translate(sx: Fixed, sy: Fixed, tx: Fixed, ty: Fixed) -> Self {
+        Self([
+            sx,
+            Fixed(0),
+            Fixed(0),
+            Fixed(0),
+            sy,
+            Fixed(0),
+            tx,
+            ty,
+            Fixed(Self::ONE_2_30),
+        ])
+    }
+
+    /// The `RectMatrix` relationship (book page 2-351): the matrix that
+    /// maps `src` onto `dst` by translating and scaling, so that
+    /// [`transform_rect`](Self::transform_rect)`(src) == dst` (page
+    /// 2-352). Returns `None` when `src` has a zero side.
+    pub fn rect_matrix(src: RectI32, dst: RectI32) -> Option<Self> {
+        let sw = i64::from(src.right) - i64::from(src.left);
+        let sh = i64::from(src.bottom) - i64::from(src.top);
+        if sw == 0 || sh == 0 {
+            return None;
+        }
+        let dw = i64::from(dst.right) - i64::from(dst.left);
+        let dh = i64::from(dst.bottom) - i64::from(dst.top);
+        let sx = (dw << 16) / sw;
+        let sy = (dh << 16) / sh;
+        // tx = dst.left − src.left·sx (all 16.16), likewise ty.
+        let tx = (i64::from(dst.left) << 16) - i64::from(src.left) * sx;
+        let ty = (i64::from(dst.top) << 16) - i64::from(src.top) * sy;
+        let fits = |v: i64| i32::try_from(v).ok().map(Fixed);
+        Some(Self::scale_translate(
+            fits(sx)?,
+            fits(sy)?,
+            fits(tx)?,
+            fits(ty)?,
+        ))
+    }
+
+    /// The third-column (`Fract` 2.30) value of `w`, tolerating the
+    /// legacy all-16.16 encoding of 1.0.
+    fn w_as_f64(&self) -> f64 {
+        let w = self.0[8].0;
+        if w == Self::ONE_16_16 {
+            1.0
+        } else {
+            f64::from(w) / f64::from(Self::ONE_2_30)
+        }
+    }
+
+    /// `true` when the third column is the documented `u = v = 0`,
+    /// `w = 1` (book page 2-26: "QuickTime assumes that the values of
+    /// the matrix elements u and v are always 0.0, and the value of
+    /// matrix element w is always 1.0"), i.e. the matrix is affine.
+    pub fn is_affine(&self) -> bool {
+        self.0[2].0 == 0
+            && self.0[5].0 == 0
+            && (self.0[8].0 == Self::ONE_2_30 || self.0[8].0 == Self::ONE_16_16)
+    }
+
+    /// `true` when the matrix only translates and/or scales (`b = c =
+    /// 0`, affine third column) — the `identityMatrixType` /
+    /// `translateMatrixType` / `scaleMatrixType` /
+    /// `scaleTranslateMatrixType` classes of `GetMatrixType` (book
+    /// page 2-342). For these, [`transform_rect`](Self::transform_rect)
+    /// is exact and the blit is a plain rectangle-to-rectangle copy.
+    pub fn is_scale_translate(&self) -> bool {
+        self.is_affine() && self.0[1].0 == 0 && self.0[3].0 == 0
+    }
+
+    /// The matrix as `f64` cells in row-major `[[a, b, u], [c, d, v],
+    /// [tx, ty, w]]` order, each converted from its own fixed-point
+    /// format (16.16 for the first two columns, 2.30 for the third).
+    pub fn to_f64(&self) -> [[f64; 3]; 3] {
+        let fx = |i: usize| f64::from(self.0[i].0) / 65536.0;
+        let fr = |i: usize| f64::from(self.0[i].0) / f64::from(Self::ONE_2_30);
+        [
+            [fx(0), fx(1), fr(2)],
+            [fx(3), fx(4), fr(5)],
+            [fx(6), fx(7), self.w_as_f64()],
+        ]
+    }
+
+    /// Map a point through the affine part of the matrix with the
+    /// published equations (book page 2-26) `x' = a·x + c·y + tx`,
+    /// `y' = b·x + d·y + ty`, in 16.16 arithmetic, rounding the result
+    /// half-up to integer QuickDraw coordinates. (`TransformPoints`,
+    /// page 2-347, leaves the integer reduction unspecified; half-up is
+    /// this crate's choice and is stated in the README.)
+    pub fn transform_point(&self, x: i32, y: i32) -> (i32, i32) {
+        let m = |i: usize| i64::from(self.0[i].0);
+        let (x, y) = (i64::from(x), i64::from(y));
+        let xp = m(0) * x + m(3) * y + m(6);
+        let yp = m(1) * x + m(4) * y + m(7);
+        let round =
+            |v: i64| ((v + 0x8000) >> 16).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        (round(xp), round(yp))
+    }
+
+    /// `TransformRect` (book pages 2-348 – 2-349): map the rectangle's
+    /// corners through the matrix and return their bounding box. For a
+    /// scale/translate matrix this is the exact destination rectangle;
+    /// for rotations / skews it is the bounding rectangle the book
+    /// describes. The result is normalised (`left <= right`, `top <=
+    /// bottom`) so a negative scale factor — "by making the x factor
+    /// negative, you can flip the image" (page 2-27) — yields the same
+    /// rectangle with the flip recorded by the matrix itself.
+    pub fn transform_rect(&self, r: RectI32) -> RectI32 {
+        let corners = [
+            self.transform_point(r.left, r.top),
+            self.transform_point(r.right, r.top),
+            self.transform_point(r.left, r.bottom),
+            self.transform_point(r.right, r.bottom),
+        ];
+        let left = corners.iter().map(|c| c.0).min().unwrap_or(0);
+        let right = corners.iter().map(|c| c.0).max().unwrap_or(0);
+        let top = corners.iter().map(|c| c.1).min().unwrap_or(0);
+        let bottom = corners.iter().map(|c| c.1).max().unwrap_or(0);
+        RectI32 {
+            top,
+            left,
+            bottom,
+            right,
+        }
+    }
+
+    /// Map a destination-space point back to source space by inverting
+    /// the full 3×3 (row-vector convention: `[x y 1] = [x' y' 1] · M⁻¹`,
+    /// then the homogeneous divide). Returns `None` for a singular
+    /// matrix, or when the point maps behind the projection plane
+    /// (`w' <= 0`). The homogeneous divide for a non-affine third
+    /// column is the standard projective reading of the `Fract` column
+    /// (see `docs/image/quickdraw/pict-quicktime-matrix.md` §4 — an
+    /// inference, not a quotation); for the documented affine case it
+    /// reduces exactly to the inverse of the published equations.
+    pub fn inverse_map(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let m = self.to_f64();
+        let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        if !det.is_finite() || det.abs() < 1e-12 {
+            return None;
+        }
+        // Adjugate / det.
+        let inv = [
+            [
+                (m[1][1] * m[2][2] - m[1][2] * m[2][1]) / det,
+                (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / det,
+                (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / det,
+            ],
+            [
+                (m[1][2] * m[2][0] - m[1][0] * m[2][2]) / det,
+                (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / det,
+                (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / det,
+            ],
+            [
+                (m[1][0] * m[2][1] - m[1][1] * m[2][0]) / det,
+                (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / det,
+                (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / det,
+            ],
+        ];
+        // Row vector [x' y' 1] × inv.
+        let sx = x * inv[0][0] + y * inv[1][0] + inv[2][0];
+        let sy = x * inv[0][1] + y * inv[1][1] + inv[2][1];
+        let sw = x * inv[0][2] + y * inv[1][2] + inv[2][2];
+        if sw.is_nan() || sw <= 1e-12 {
+            return None;
+        }
+        Some((sx / sw, sy / sw))
+    }
+
+    /// Bounding box of `r` mapped through the full matrix in `f64`
+    /// (including any perspective divide), rounded outward to integer
+    /// pixels. `None` when a corner projects behind the plane or the
+    /// result is not finite.
+    pub fn transform_rect_f64(&self, r: RectI32) -> Option<RectI32> {
+        let m = self.to_f64();
+        let mut left = f64::INFINITY;
+        let mut right = f64::NEG_INFINITY;
+        let mut top = f64::INFINITY;
+        let mut bottom = f64::NEG_INFINITY;
+        for (x, y) in [
+            (r.left, r.top),
+            (r.right, r.top),
+            (r.left, r.bottom),
+            (r.right, r.bottom),
+        ] {
+            let (x, y) = (f64::from(x), f64::from(y));
+            let w = x * m[0][2] + y * m[1][2] + m[2][2];
+            if w.is_nan() || w <= 1e-12 {
+                return None;
+            }
+            let xp = (x * m[0][0] + y * m[1][0] + m[2][0]) / w;
+            let yp = (x * m[0][1] + y * m[1][1] + m[2][1]) / w;
+            if !xp.is_finite() || !yp.is_finite() {
+                return None;
+            }
+            left = left.min(xp);
+            right = right.max(xp);
+            top = top.min(yp);
+            bottom = bottom.max(yp);
+        }
+        let clamp = |v: f64| v.clamp(f64::from(i32::MIN / 2), f64::from(i32::MAX / 2)) as i32;
+        Some(RectI32 {
+            top: clamp(top.floor()),
+            left: clamp(left.floor()),
+            bottom: clamp(bottom.ceil()),
+            right: clamp(right.ceil()),
+        })
     }
 
     /// `true` when the matrix maps coordinates unchanged.
@@ -924,6 +1169,64 @@ mod tests {
         m.0[8] = Fixed(0x0001_0000);
         m.0[1] = Fixed(1);
         assert!(!m.is_identity());
+    }
+
+    #[test]
+    fn matrix_transform_point_uses_row_vector_equations() {
+        // x' = a·x + c·y + tx ; y' = b·x + d·y + ty (book page 2-26).
+        let mut m = QuickTimeMatrix::IDENTITY_FRACT;
+        m.0[0] = Fixed(0x0002_0000); // a = 2
+        m.0[1] = Fixed(0x0000_8000); // b = 0.5
+        m.0[3] = Fixed(0x0001_0000); // c = 1
+        m.0[4] = Fixed(0x0003_0000); // d = 3
+        m.0[6] = Fixed(0x000A_0000); // tx = 10
+        m.0[7] = Fixed(-0x0001_0000); // ty = −1
+        assert_eq!(m.transform_point(4, 2), (2 * 4 + 2 + 10, 2 + 6 - 1));
+        assert!(!m.is_scale_translate());
+        assert!(m.is_affine());
+        // Half-up rounding of the 16.16 result: 0.5·3 = 1.5 → 2.
+        let mut h = QuickTimeMatrix::IDENTITY_FRACT;
+        h.0[0] = Fixed(0x0000_8000);
+        assert_eq!(h.transform_point(3, 0), (2, 0));
+        assert_eq!(h.transform_point(-3, 0), (-1, 0));
+    }
+
+    #[test]
+    fn rect_matrix_round_trips_through_transform_rect() {
+        let src = RectI32::from_be(0, 0, 48, 64);
+        let dst = RectI32::from_be(10, 20, 106, 148);
+        let m = QuickTimeMatrix::rect_matrix(src, dst).unwrap();
+        assert!(m.is_scale_translate());
+        assert_eq!(m.transform_rect(src), dst);
+        assert_eq!(m.transform_rect_f64(src), Some(dst));
+        // Inverse map of a destination pixel centre lands inside src.
+        let (sx, sy) = m.inverse_map(20.5, 10.5).unwrap();
+        assert!(
+            (0.0..1.0).contains(&sx) && (0.0..1.0).contains(&sy),
+            "{sx},{sy}"
+        );
+        assert!(QuickTimeMatrix::rect_matrix(RectI32::default(), dst).is_none());
+    }
+
+    #[test]
+    fn negative_scale_normalises_and_perspective_is_not_affine() {
+        let flip = QuickTimeMatrix::scale_translate(
+            Fixed(-0x0001_0000),
+            Fixed(0x0001_0000),
+            Fixed(0x0008_0000),
+            Fixed(0),
+        );
+        let r = flip.transform_rect(RectI32::from_be(0, 0, 4, 8));
+        assert_eq!(r, RectI32::from_be(0, 0, 4, 8));
+        let mut p = QuickTimeMatrix::IDENTITY_FRACT;
+        p.0[2] = Fixed(1 << 20); // u ≠ 0
+        assert!(!p.is_affine());
+        assert!(p.inverse_map(1.0, 1.0).is_some());
+        let mut singular = QuickTimeMatrix::IDENTITY_FRACT;
+        singular.0[0] = Fixed(0);
+        assert!(singular.inverse_map(1.0, 1.0).is_none());
+        assert_eq!(QuickTimeMatrix::IDENTITY_FRACT.to_f64()[2][2], 1.0);
+        assert_eq!(QuickTimeMatrix::IDENTITY.to_f64()[2][2], 1.0);
     }
 
     #[test]
