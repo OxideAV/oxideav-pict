@@ -32,7 +32,7 @@ returned as a `PictImage`.
 | `DirectBitsRect` / `DirectBitsRgn` | 16-bit A1R5G5B5 / 32-bit XRGB\|ARGB → RGBA; `packType` 1 (raw), 2 (drop-pad), 3 (16-bit RLE), 4 (component RLE), and 0 → §A-3 page A-16 default packing (3 for 16-bit / 4 for 32-bit when `rowBytes ≥ 8`, else raw) |
 | `ShortComment` / `LongComment` | captured as structured [`PictComment`] |
 | Text-glyph opcodes (`LongText` / `DH/DV/DHDVText`) | **rasterised** — glyph bytes drawn through a built-in clean-room ASCII bitmap face at the baseline pen, scaled by `txSize` **and the `TxRatio` (`$0010`) horizontal / vertical `numer/denom` factors** (book page 12-13), inked in `fgColor`, advancing the pen by each glyph + `chExtra` / `spExtra` + the `lineJustify` (`$002D`) intercharacter spacing (§A-3 footnote `†`); honours the `srcOr` / `srcXor` / `srcBic` text source modes plus `grayishTextOr = 49` (Inside Macintosh Vol VI page 17-17), and **synthesises the full `txFace` style set** — bold / italic / underline / outline / shadow / condense / extend — per Vol I pages I-151/I-152 with the page I-226 characterization-table amounts |
-| CompressedQuickTime / UncompressedQuickTime | payload captured verbatim into `PictImage::quicktime` **and parsed into a typed [`QuickTimePayload`]** per Inside Macintosh: QuickTime (1993) Tables 3-1 / 3-2 — `$8200` surfaces the wrapper (display matrix, matte, mask region, mode, srcRect, accuracy) plus the embedded `ImageDescription` (compressor FourCC, dimensions, depth, name) and compressed image bytes; `$8201`'s embedded `$98`–`$9B` pixel-data subopcode **is rasterised** through the normal raster dispatch |
+| CompressedQuickTime / UncompressedQuickTime | payload captured verbatim into `PictImage::quicktime`, parsed into a typed [`QuickTimePayload`] per Inside Macintosh: QuickTime (1993) Tables 3-1 / 3-2, **and rendered**: `$8200`'s image data goes to a [`QuickTimeImageDecoder`] (`'raw '` built in, `'jpeg'` through `oxideav-mjpeg`, anything else through a caller decoder / `oxideav-core` registry) and both opcodes composite through one `StdPix` path — 3×3 matrix, `srcRect`, mask region, `CopyDeepMask` matte, transfer mode; outcome on `PictQuickTime::render` |
 | Reserved-for-Apple opcodes | walked past per published payload size |
 | OpEndPic | terminate |
 
@@ -161,39 +161,85 @@ Imaging With QuickDraw §A-3 declares the `$8200` / `$8201` payloads
 "private to QuickTime"; the layout is published in **Inside Macintosh:
 QuickTime** (1993), Chapter 3 "Image Compression Manager" (Tables
 3-1 / 3-2, pages 3-25 – 3-27; `ImageDescription` pages 3-49 – 3-51),
-which this crate implements in the `quicktime` module:
+which the `quicktime` module parses, and the `$8200` opcode is the
+`StdPix` call (pages 3-137 – 3-139) serialised field for field — which
+is what the decoder replays.
 
-* **`$8200` (CompressedQuickTime)** — fully parsed:
-  version, 3×3 `Fixed` display matrix, matte (`ImageDescription` +
-  data), mask-region bytes, transfer mode, source rect, accuracy, the
-  main `ImageDescription` and the compressed image bytes (honouring
-  the "`dataSize` may be 0 if the size is unknown" rule via the
-  `Size`-bounded remainder). The compressed data itself is a
-  **CODEC-tag boundary**: the FourCC in `cType` names the
-  decompressor, so — like a container — the crate surfaces
-  `QuickTimeCompressed::image_data` + codec and never decodes it
-  in-crate. With the `registry` feature,
-  `registry::resolve_quicktime_codec` routes the FourCC through
-  `oxideav-core`'s `CodecResolver` and
-  `registry::quicktime_codec_parameters` builds the ready-to-decode
-  `CodecParameters` (dimensions + preserved on-wire tag) for
-  `CodecRegistry::first_decoder`; a FourCC with no workspace
-  implementation resolves to `None` and stays available as typed
-  bytes.
-* **`$8201` (UncompressedQuickTime)** — the wrapper embeds one
-  ordinary `$98`–`$9B` pixel-data subopcode wholly inside its `Size`
-  window; the decoder re-enters its normal raster dispatch on it, so
-  `$8201` images **do** land on the canvas.
-* **Degradation** (page 3-26: the `Size` field must be honoured even
-  by a reader that cannot decode the payload): a payload interior
-  that doesn't match the published layout keeps the verbatim
-  `PictQuickTime::data` capture with `image = None` and never fails
-  the picture.
+* **Codec boundary.** The image data's compressor is named by the
+  `ImageDescription` `cType` FourCC (page 3-50), so `oxideav-pict`
+  never implements a compressor: `parse_pict` hands the description +
+  bytes to a [`QuickTimeImageDecoder`] and composites the RGBA it
+  returns. The default chain ([`DefaultQuickTimeDecoder`]) covers
+  `'raw '` (Table 3-3's compressor that "does not compress": the data
+  is the pixel map at the description's `depth` — 32 / 24 / 16-bit)
+  and, with the `registry` feature, `'jpeg'` ("Photo - JPEG") through
+  the sibling `oxideav-mjpeg` decoder — the compressor every
+  QuickTime-emitted `$8200` found in the wild carries.
+  `registry::RegistryQuickTimeDecoder` resolves the FourCC through a
+  caller's `oxideav_core::CodecRegistry` first (`'cvid'` → Cinepak,
+  …) and folds the decoded frame to RGBA; `parse_pict_with` takes any
+  decoder of your own. A compressor nobody decodes leaves the canvas
+  alone, keeps the wrapper typed, and is reported as
+  `QuickTimeRender::Unsupported { codec, .. }` — the page 3-26 posture
+  of honouring `Size` and carrying on.
+* **Matrix** (`pict-quicktime-matrix.md`): row-vector convention of
+  Figure 2-19 (book page 2-26) — `x' = a·x + c·y + tx`,
+  `y' = b·x + d·y + ty`, serialised `a b u / c d v / tx ty w` with the
+  third column `Fract` 2.30 (page 2-28), so the emitter identity ends
+  in `0x40000000`. The matrix "specifies the mapping of the source
+  rectangle to the destination" (page 3-138): the effective
+  destination is `TransformRect(matrix, srcRect)` (pages 2-348 –
+  2-352), exact for scale / translate; rotation, skew and the
+  (inferred) perspective divide use the corner bounding box with each
+  destination pixel centre inverse-mapped to its nearest source
+  pixel. The books leave the fixed-point → integer rounding open
+  (matrix note §9); this crate rounds `TransformRect` half-up and
+  samples pixel centres, which is exact for integer scale factors.
+* **`srcRect`** crops in source space (`(0,0)–(desc.width,
+  desc.height)`, page 3-78); the **mask region** clips in destination
+  space (page 3-138) and is never transformed; the **matte** lives in
+  source space with `matteRect` cropping it (pages 3-81 / 3-139) and
+  blends per Imaging With QuickDraw `CopyDeepMask` (book page 3-120,
+  which the QuickTime book routes through `StdPix`): "A black mask
+  pixel value means … take the source pixel; a white value means …
+  take the destination pixel. Intermediate values specify a weighted
+  average … `(1 – mask) × source + (mask) × destination`", per colour
+  component. A matte that cannot be decoded is skipped and reported
+  (`Rendered { matte_skipped: Some(..) }`) rather than blocking the
+  image. **`Mode`** resolves like every other raster opcode.
+* **`$8201` (UncompressedQuickTime)** wraps one ordinary `$98`–`$9B`
+  pixel-data subopcode inside its `Size` window; it is decoded through
+  the normal raster path and then composited through the *same* code
+  as `$8200`, so the wrapper's matrix and matte apply to it too.
+* **Default warning placeholder.** `StdPix` appends "default picture
+  opcodes (for displaying a warning when QuickTime is not installed)"
+  after the `$8200` (page 3-139) — the "QuickTime™ and a *name*
+  decompressor are needed to see this picture" `LongText` lines every
+  emitter-written file carries. Once the image has drawn, the decoder
+  skips that run (pen / text-state and text-drawing opcodes only,
+  ending at the emitter's `NOP`) and reports the count on
+  `Rendered { placeholder_skipped }`; an unsupported compressor still
+  shows the warning. The books do not state the suppression mechanism
+  — the lookahead is this crate's reading.
+* **Validation.** Hand-built `'raw '` fixtures pin identity / crop /
+  scale / rotation / mask / matte / mode pixel-exact
+  (`tests/synth_v2_round461_quicktime.rs`). The genuine QuickTime
+  emitter sample `JDSnowyBlog.pct` (500×281 "Photo - JPEG", SHA-256 and
+  structure in `docs/image/quickdraw/pict-8200-real-world-fixtures.md`;
+  not vendored) renders within 45.6 dB PSNR of an ImageMagick
+  black-box render, 18 of 140 500 pixels beyond 3 %, peak 24/255 —
+  JPEG-decoder-level agreement — with the three warning lines
+  suppressed.
+* **Degradation** (page 3-26): a payload interior that doesn't match
+  the published layout keeps the verbatim `PictQuickTime::data`
+  capture with `image = None` / `render = NotAttempted` and never
+  fails the picture.
 * **Emit**: `QuickTimeCompressed::still` /
   `QuickTimeUncompressed::wrapping` +
   `PictBuilder::compressed_quicktime_image` /
   `uncompressed_quicktime_image` compose conforming opcodes (e.g. for
-  embedding a JPEG in a PICT); emit → parse round-trips compare equal
+  embedding a JPEG in a PICT); `QuickTimeMatrix::rect_matrix` builds
+  the `RectMatrix` placement; emit → parse round-trips compare equal
   at the typed level.
 
 ## Probe (read-only introspection)
@@ -261,21 +307,19 @@ oxideav-pict = { version = "0.0", default-features = false } # standalone
   crate fixes `8` as a `>>4` slope, one pixel per two rows — and the
   bold smear count for "an appropriate number of times", which the
   screen table sets to 1.)
-* **`$8200` pixels on the canvas.** The `CompressedQuickTime` payload
-  is fully parsed (wrapper + `ImageDescription` + image bytes — see
-  "Embedded QuickTime images"), but its compressed data is a
-  CODEC-tag boundary: drawing it means routing the FourCC to the
-  matching framework decoder (`registry::resolve_quicktime_codec`)
-  and compositing the result, which is pipeline work, not PICT
-  parsing. The `$8200` `Mode` / matrix / matte are surfaced typed for
-  that consumer; the in-crate canvas is left untouched.
-* **Display-matrix application.** Both QuickTime opcodes carry a 3×3
-  transformation matrix (surfaced typed, with an
-  `is_identity()` check); a non-identity matrix is *not* applied to
-  the `$8201` blit — the embedded subopcode's own `srcRect`/`dstRect`
-  govern, matching the wrapper's common identity-matrix case. Inside
-  Macintosh: QuickTime documents the field's shape but not a
-  blit-time composition rule for the picture opcode.
+* **QuickTime compressors without a decoder.** `$8200` renders for
+  `'raw '` (16 / 24 / 32-bit) and `'jpeg'`; `'rle '`, `'rpza'`,
+  `'smc '` and friends have no workspace decoder yet and are reported
+  `Unsupported` (a caller `CodecRegistry` that carries one is used
+  automatically). Indexed / grayscale `'raw '` depths (1–8, 34 / 36 /
+  40) need the colour table named by `clutID` — a system `'clut'` or
+  a custom table in the description's extension bytes, whose on-disk
+  layout is not in the staged books — and are `Unsupported` too.
+* **Placeholder suppression is structural.** The default warning
+  run after a rendered `$8200` is recognised by shape (state + text
+  opcodes ending at a `NOP`), not by a documented marker; a picture
+  that draws a caption and a `NOP` right after a `$8200` would lose
+  the caption. `Rendered { placeholder_skipped }` says when it fired.
 * **Multi-image PICTs.** Each raster blits onto the same canvas — no
   separate per-image surfaces.
 
