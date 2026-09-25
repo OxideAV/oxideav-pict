@@ -45,6 +45,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `transform_point`, `transform_rect`, `transform_rect_f64` and
   `inverse_map`. A hostile matrix (huge translation / scale) only ever
   materialises the canvas-visible part of the destination.
+- round 461: **Palette Manager rule re-verified against the primary
+  source and extended to bit 14.** Apple *develop* Issue 1 (January
+  1990), "All About the Palette Manager", *Drawing With Palette Colors*
+  (page 29), states that a colour table with `ctFlags` bit 14 set
+  carries palette entry numbers in `value` and "is then assumed to be
+  sequential, as device tables are (colorSpec 0 refers to pixel value
+  0 …)". That confirms the 2026-09 device-table (bit 15) change and
+  shows bit-14 tables were still being read value-keyed — with entry
+  numbers standing in for pixel indices. Both bits now index
+  sequentially; a bit-14 fixture pins it and the README quotes the
+  paragraph.
 - round 461: **the emitter's default warning placeholder is suppressed
   once the `$8200` image draws.** Inside Macintosh: QuickTime page
   3-139: `StdPix` appends "default picture opcodes (for displaying a

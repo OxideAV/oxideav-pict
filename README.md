@@ -28,7 +28,7 @@ returned as a `PictImage`.
 | Frame / Paint / Erase / Invert / Fill Rgn | rasterised (bbox + per-row inversion mask); `Frame` honours the pen size + pen pattern / mode (book page 3-13, pen hangs below+right) |
 | `BkPat` / `PnPat` / `FillPat` | 8-byte monochrome patterns |
 | `BkPixPat` / `PnPixPat` / `FillPixPat` | colour pixel patterns (`patType=1` colour-pixmap, `patType=2` ditherPat) |
-| `BitsRect` / `BitsRgn` / `PackBitsRect` / `PackBitsRgn` | 1-bpp BitMap or indexed 1/2/4/8-bit PixMap → RGBA; the embedded `ColorTable` is resolved by each `ColorSpec`'s `value` field (book page 4-55), not by array position |
+| `BitsRect` / `BitsRgn` / `PackBitsRect` / `PackBitsRgn` | 1-bpp BitMap or indexed 1/2/4/8-bit PixMap → RGBA; the embedded `ColorTable` is resolved by each `ColorSpec`'s `value` field (book page 4-55) for a plain pixel-map table, and **sequentially** (entry *n* ↔ pixel value *n*) for a table flagged device (`ctFlags` bit 15) or palette-index (bit 14) — see "Colour tables" below |
 | `DirectBitsRect` / `DirectBitsRgn` | 16-bit A1R5G5B5 / 32-bit XRGB\|ARGB → RGBA; `packType` 1 (raw), 2 (drop-pad), 3 (16-bit RLE), 4 (component RLE), and 0 → §A-3 page A-16 default packing (3 for 16-bit / 4 for 32-bit when `rowBytes ≥ 8`, else raw) |
 | `ShortComment` / `LongComment` | captured as structured [`PictComment`] |
 | Text-glyph opcodes (`LongText` / `DH/DV/DHDVText`) | **rasterised** — glyph bytes drawn through a built-in clean-room ASCII bitmap face at the baseline pen, scaled by `txSize` **and the `TxRatio` (`$0010`) horizontal / vertical `numer/denom` factors** (book page 12-13), inked in `fgColor`, advancing the pen by each glyph + `chExtra` / `spExtra` + the `lineJustify` (`$002D`) intercharacter spacing (§A-3 footnote `†`); honours the `srcOr` / `srcXor` / `srcBic` text source modes plus `grayishTextOr = 49` (Inside Macintosh Vol VI page 17-17), and **synthesises the full `txFace` style set** — bold / italic / underline / outline / shadow / condense / extend — per Vol I pages I-151/I-152 with the page I-226 characterization-table amounts |
@@ -50,6 +50,37 @@ recognised, and the 24-byte `headerOp` is parsed into a structured
 shapes). The optional 512-byte launch-stub prefix is auto-detected.
 PackBits (§A-5) is implemented at both byte and u16 unit sizes plus
 per-channel for packType 4.
+
+### Colour tables and the Palette Manager rule
+
+An indexed PixMap's `ColorTable` is normally keyed by value: *Imaging
+With QuickDraw* (book page 4-55) makes each `ColorSpec.value` the pixel
+value its RGB belongs to, and the decoder builds the palette from that
+field. Two `ctFlags` bits change the rule. Bit 15 marks a device
+colour table (book pages 4-104 / 4-120: "high bit: 0 = PixMap; 1 =
+device"); bit 14 marks a table whose `value`s are Palette Manager entry
+numbers. Apple's *develop* Issue 1 (January 1990), "All About the
+Palette Manager", section *Drawing With Palette Colors* (page 29),
+states what both mean for indexing — verbatim:
+
+> "a pixMap or pixPat color table may be specified to point to palette
+> entries. To do this, set bit 14 in the ctFlags field of the color
+> table (ctFlags is called transindex in older equate files). Then set
+> the desired palette entry numbers in the value field of each
+> colorSpec. The color table is then assumed to be sequential, as
+> device tables are (colorSpec 0 refers to pixel value 0 in the pixMap
+> or pixPat; color value 1 refers to pixel value 1, and so on)."
+
+So with either bit set the `value` field is **not** a pixel index —
+device-private data for a device table, a palette entry number for a
+palette-index table — and array position supplies the pixel value. The
+decoder applies the sequential rule to both (round 461 re-verified the
+bit-15 change of 2026-09 against the article and extended it to bit 14;
+`tests/synth_v2_round372_colortable.rs` pins each). For a palette-index
+table a PICT reader has no live Palette Manager to resolve the entry
+numbers against, so the entry's own RGB is used — the colours the
+article's desktop-pattern example starts from before `AnimatePalette`
+would replace them.
 
 ### Patterns
 

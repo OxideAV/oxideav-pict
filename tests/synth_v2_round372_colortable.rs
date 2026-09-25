@@ -108,6 +108,36 @@ fn put_device_color_table(out: &mut Vec<u8>) {
     }
 }
 
+/// `ctFlags` bit 14 (`$4000`): a colour table whose `value` fields are
+/// Palette Manager entry numbers. Apple *develop* Issue 1 (January
+/// 1990), "All About the Palette Manager", *Drawing With Palette
+/// Colors* (page 29): "set bit 14 in the ctFlags field of the color
+/// table … Then set the desired palette entry numbers in the value
+/// field of each colorSpec. The color table is then assumed to be
+/// sequential, as device tables are (colorSpec 0 refers to pixel value
+/// 0 in the pixMap or pixPat; color value 1 refers to pixel value 1,
+/// and so on)." The `value`s below are deliberately *not* the pixel
+/// indices, so a value-keyed read would scramble the palette.
+const COLOR_TABLE_PALETTE_INDEX_FLAG: u16 = 0x4000;
+
+fn put_palette_index_color_table(out: &mut Vec<u8>) {
+    let colors: [(u16, u16, u16); 4] = [
+        (0x0000, 0x0000, 0x0000),
+        (0xFFFF, 0x0000, 0x0000),
+        (0x0000, 0xFFFF, 0x0000),
+        (0x0000, 0x0000, 0xFFFF),
+    ];
+    put_u32(out, 0); // ctSeed
+    put_u16(out, COLOR_TABLE_PALETTE_INDEX_FLAG); // ctFlags (palette-index table)
+    put_i16(out, 3); // ctSize
+    for (i, (r, g, b)) in colors.iter().enumerate() {
+        put_u16(out, [7, 3, 9, 1][i]); // palette entry number; not the pixel index
+        put_u16(out, *r);
+        put_u16(out, *g);
+        put_u16(out, *b);
+    }
+}
+
 fn pack_4bpp(indices: &[u8], row_bytes: usize) -> Vec<u8> {
     let mut out = vec![0u8; row_bytes];
     for (x, idx) in indices.iter().enumerate() {
@@ -228,6 +258,41 @@ fn device_color_table_resolves_by_position_not_value() {
     put_u16(&mut bytes, 0x00FF);
 
     let img = parse_pict(&bytes).expect("decode device-table indexed PackBitsRect");
+    let p = |x: u32| {
+        let off = (x * 4) as usize;
+        [img.data[off], img.data[off + 1], img.data[off + 2]]
+    };
+    assert_eq!(p(0), [0x00, 0x00, 0x00], "position 0 → black");
+    assert_eq!(p(1), [0xFF, 0x00, 0x00], "position 1 → red");
+    assert_eq!(p(2), [0x00, 0xFF, 0x00], "position 2 → green");
+    assert_eq!(p(3), [0x00, 0x00, 0xFF], "position 3 → blue");
+}
+
+#[test]
+fn palette_index_color_table_is_sequential_like_a_device_table() {
+    let width: i16 = 4;
+    let height: i16 = 1;
+    let row_bytes: u16 = 2;
+
+    let mut bytes: Vec<u8> = Vec::new();
+    put_pict_v2_prefix(&mut bytes, width, height);
+    put_u16(&mut bytes, 0x0098); // PackBitsRect
+    put_indexed_pixmap_header(&mut bytes, row_bytes, width, height, 4);
+    put_palette_index_color_table(&mut bytes);
+    for _ in 0..2 {
+        put_i16(&mut bytes, 0);
+        put_i16(&mut bytes, 0);
+        put_i16(&mut bytes, height);
+        put_i16(&mut bytes, width);
+    }
+    put_u16(&mut bytes, 0); // mode
+    bytes.extend_from_slice(&pack_4bpp(&[0, 1, 2, 3], row_bytes as usize));
+    if bytes.len() % 2 != 0 {
+        bytes.push(0);
+    }
+    put_u16(&mut bytes, 0x00FF);
+
+    let img = parse_pict(&bytes).expect("decode palette-index-table indexed PackBitsRect");
     let p = |x: u32| {
         let off = (x * 4) as usize;
         [img.data[off], img.data[off + 1], img.data[off + 2]]
