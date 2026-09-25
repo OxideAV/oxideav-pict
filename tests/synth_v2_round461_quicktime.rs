@@ -96,6 +96,7 @@ fn raw_still_renders_pixel_exact_at_identity() {
         QuickTimeRender::Rendered {
             dst: RectI32::from_be(0, 0, 2, 2),
             matte_skipped: None,
+            placeholder_skipped: 0,
         }
     );
     assert!(img.quicktime[0].render.is_rendered());
@@ -305,6 +306,7 @@ fn matte_blends_per_copy_deep_mask() {
         QuickTimeRender::Rendered {
             dst: RectI32::from_be(0, 0, 1, 3),
             matte_skipped: None,
+            placeholder_skipped: 0,
         }
     );
 }
@@ -450,6 +452,7 @@ fn uncompressed_quicktime_honours_wrapper_matrix_and_matte() {
         QuickTimeRender::Rendered {
             dst: RectI32::from_be(1, 4, 3, 6),
             matte_skipped: None,
+            placeholder_skipped: 0,
         }
     );
 }
@@ -544,4 +547,73 @@ fn registry_decoder_falls_back_to_the_default_chain() {
         panic!("video frame expected");
     };
     assert_eq!(&v.planes[0].data[12..16], &[0, 0, 255, 255]);
+}
+
+// ---------------------------------------------------------------------------
+// Default warning placeholder after a rendered $8200 (book page 3-139).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rendered_image_suppresses_the_default_warning_placeholder() {
+    use oxideav_pict::{build_long_text, build_pn_size, build_tx_font, build_tx_size};
+    let pixels = [[255, 0, 0]; 64];
+    let qt = raw_still(8, 8, &pixels);
+    let placeholder = |terminated: bool| {
+        let mut b = PictBuilder::new(0, 0, 8, 8);
+        b.compressed_quicktime_image(&qt).unwrap();
+        // The emitter's shape: PnSize, PnSize, TxFont, TxSize, text
+        // lines, NOP (§2.3 of the real-world fixtures note).
+        b.push(&build_pn_size(174, 124));
+        b.push(&build_pn_size(1, 1));
+        b.push(&build_tx_font(3));
+        b.push(&build_tx_size(12));
+        b.push(&build_long_text(0, 7, b"QuickTime and a").unwrap());
+        b.push(&build_long_text(0, 7, b"None decompressor").unwrap());
+        if terminated {
+            b.push(&[0, 0]); // NOP
+        }
+        b.finish()
+    };
+
+    let img = parse_pict(&placeholder(true)).unwrap();
+    assert!(
+        img.data.chunks_exact(4).all(|p| p == RED),
+        "warning text must not be drawn"
+    );
+    assert!(matches!(
+        img.quicktime[0].render,
+        QuickTimeRender::Rendered {
+            placeholder_skipped: 2,
+            ..
+        }
+    ));
+
+    // Without the terminating NOP the run is ordinary picture content
+    // and the text is drawn.
+    let img = parse_pict(&placeholder(false)).unwrap();
+    assert!(
+        img.data.chunks_exact(4).any(|p| p != RED),
+        "text expected on the canvas"
+    );
+    assert!(matches!(
+        img.quicktime[0].render,
+        QuickTimeRender::Rendered {
+            placeholder_skipped: 0,
+            ..
+        }
+    ));
+
+    // An unsupported compressor is the no-QuickTime case: the warning
+    // is exactly what should show.
+    let mut b = PictBuilder::new(0, 0, 8, 8);
+    b.compressed_quicktime_image(&QuickTimeCompressed::still(
+        desc(*b"rpza", 8, 8, 16),
+        vec![0; 128],
+    ))
+    .unwrap();
+    b.push(&build_tx_size(12));
+    b.push(&build_long_text(0, 7, b"QuickTime and a").unwrap());
+    b.push(&[0, 0]);
+    let img = parse_pict(&b.finish()).unwrap();
+    assert!(img.data.chunks_exact(4).any(|p| p != WHITE));
 }

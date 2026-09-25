@@ -45,6 +45,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `transform_point`, `transform_rect`, `transform_rect_f64` and
   `inverse_map`. A hostile matrix (huge translation / scale) only ever
   materialises the canvas-visible part of the destination.
+- round 461: **the emitter's default warning placeholder is suppressed
+  once the `$8200` image draws.** Inside Macintosh: QuickTime page
+  3-139: `StdPix` appends "default picture opcodes (for displaying a
+  warning when QuickTime is not installed)" — the "QuickTime™ and a
+  <name> decompressor are needed to see this picture" `LongText` lines
+  that real files carry (fixtures note §2.3 / §2.6). A reader that
+  decoded the image is the QuickTime-installed case, so after a
+  `Rendered` `$8200` the decoder skips a run made only of pen /
+  text-state and text-drawing opcodes that ends at the `NOP` the
+  emitter leaves before `OpEndPic` (anything else in the run, or no
+  `NOP`, and the opcodes are ordinary content and draw as before); the
+  count lands on `QuickTimeRender::Rendered::placeholder_skipped`. An
+  unsupported compressor still shows the warning — that is what it is
+  for. The books do not state the suppression mechanism; the lookahead
+  is this crate's reading and is documented as such.
 
 - round 435: **QuickTime picture-opcode payload internals are typed.**
   The staged Inside Macintosh: QuickTime (1993) volume — Chapter 3

@@ -115,6 +115,20 @@ pub enum QuickTimeRender {
         /// of drawing what can be drawn — and the reason is kept here.
         /// `None` when there was no matte or it was applied.
         matte_skipped: Option<String>,
+        /// How many text-drawing opcodes of the emitter's *default
+        /// warning placeholder* were skipped after this image drew.
+        /// Inside Macintosh: QuickTime page 3-139: `StdPix` appends
+        /// "default picture opcodes (for displaying a warning when
+        /// QuickTime is not installed)" — the "QuickTime™ and a
+        /// <name> decompressor are needed to see this picture" text
+        /// — after the `$8200`; a reader that *did* decode the image
+        /// is the QuickTime-installed case and must not draw them.
+        /// The books do not state the suppression mechanism, so the
+        /// decoder skips a run consisting solely of pen / text-state
+        /// and text-drawing opcodes that ends at the `NOP` the
+        /// emitter leaves before `OpEndPic`, and reports the count
+        /// here (`0` = nothing skipped).
+        placeholder_skipped: u32,
     },
     /// No decoder for the compressor named by the image description
     /// (or a depth / layout the `'raw '` path does not cover). The

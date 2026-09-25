@@ -979,7 +979,14 @@ fn dispatch_v2_opcode(
                 // canvas alone and is recorded as `Unsupported`.
                 match crate::quicktime::parse_compressed_quicktime(&data) {
                     Ok(c) => {
-                        let render = render_compressed_quicktime(canvas, state, &c, qt);
+                        let mut render = render_compressed_quicktime(canvas, state, &c, qt);
+                        if let QuickTimeRender::Rendered {
+                            placeholder_skipped,
+                            ..
+                        } = &mut render
+                        {
+                            *placeholder_skipped = skip_quicktime_placeholder(r);
+                        }
                         (
                             Some(crate::quicktime::QuickTimePayload::Compressed(c)),
                             render,
@@ -2217,6 +2224,7 @@ fn composite_quicktime(
         return QuickTimeRender::Rendered {
             dst,
             matte_skipped: comp.matte_skipped.clone(),
+            placeholder_skipped: 0,
         };
     }
     let vw = (vis.right - vis.left) as usize;
@@ -2333,7 +2341,75 @@ fn composite_quicktime(
     QuickTimeRender::Rendered {
         dst,
         matte_skipped: comp.matte_skipped.clone(),
+        placeholder_skipped: 0,
     }
+}
+
+/// Skip the default warning placeholder an emitter appends after a
+/// `$8200` opcode, if one follows.
+///
+/// Inside Macintosh: QuickTime, `StdPix` flags (book page 3-139): unless
+/// `noDefaultOpcodes` is set, "the default picture opcodes (for
+/// displaying a warning when QuickTime is not installed)" are added to
+/// the output picture. Emitter-written files (see
+/// `docs/image/quickdraw/pict-8200-real-world-fixtures.md` §2.3 / §2.6)
+/// show what they are: pen / text-state opcodes (`PnSize`, `TxFont`,
+/// `TxFace`, `TxSize`, `TxRatio`) followed by `LongText` lines
+/// spelling "QuickTime™ and a <compressor name> decompressor are
+/// needed to see this picture.", then a `NOP` before `OpEndPic`. Those
+/// opcodes are meant for a reader that could *not* decode the image;
+/// one that just drew it is the QuickTime-installed case and must not
+/// paint the warning over the photo.
+///
+/// The books do not say how a QuickTime-equipped player suppresses
+/// the run, so this is a structural lookahead: the opcodes after the
+/// `$8200` are walked while they stay within the pen / text-state /
+/// text-drawing set; if that run contains at least one text-drawing
+/// opcode and ends at a `NOP`, the whole run (NOP included) is
+/// consumed and the number of text-drawing opcodes returned. Any other
+/// opcode before a `NOP` — a raster, a drawing verb, a clip, a comment,
+/// `OpEndPic` — means it is not the placeholder: the reader is restored
+/// and `0` returned.
+fn skip_quicktime_placeholder(r: &mut Reader<'_>) -> u32 {
+    let start = r.pos;
+    let mut text_ops = 0u32;
+    loop {
+        if r.align_word().is_err() {
+            break;
+        }
+        let Ok(opcode) = r.read_u16() else {
+            break;
+        };
+        let skipped = match opcode {
+            OP_NOP => {
+                if text_ops > 0 {
+                    return text_ops;
+                }
+                break;
+            }
+            OP_TX_FACE => r.skip(1),
+            OP_TX_FONT | OP_TX_MODE | OP_PN_MODE | OP_TX_SIZE | OP_CH_EXTRA => r.skip(2),
+            OP_PN_SIZE | OP_SP_EXTRA => r.skip(4),
+            OP_TX_RATIO => r.skip(8),
+            OP_LONG_TEXT | OP_DH_TEXT | OP_DV_TEXT | OP_DHDV_TEXT => {
+                let prefix = match opcode {
+                    OP_LONG_TEXT => 4,
+                    OP_DHDV_TEXT => 2,
+                    _ => 1,
+                };
+                text_ops += 1;
+                r.skip(prefix)
+                    .and_then(|()| r.read_u8())
+                    .and_then(|n| r.skip(n as usize))
+            }
+            _ => break,
+        };
+        if skipped.is_err() {
+            break;
+        }
+    }
+    r.pos = start;
+    0
 }
 
 /// Crop a decoded `bounds`-sized RGBA source buffer down to the
