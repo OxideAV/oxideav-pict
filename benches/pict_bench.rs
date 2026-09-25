@@ -14,7 +14,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{
     build_direct_bits_rect_op, encode_pict_v2, parse_pict, probe_pict, Fixed, ImageDescription,
-    PackType, QuickTimeCompressed, QuickTimeUncompressed, Verb,
+    PackType, QuickTimeCompressed, QuickTimeMatrix, QuickTimeUncompressed, Verb,
 };
 
 /// 256 × 256 synthetic RGBA gradient (compressible but not trivial).
@@ -147,6 +147,64 @@ fn bench_quicktime(c: &mut Criterion) {
     // stay measurable against the decode above.
     c.bench_function("quicktime_probe", |b| {
         b.iter(|| probe_pict(black_box(&stream)).unwrap())
+    });
+
+    // Round 461 — the $8200 compositor with the built-in 'raw '
+    // decoder: a 256 × 256 32-bit pixel map rendered 1:1 (identity
+    // matrix fast path) and through a 90° rotation matrix (inverse
+    // mapping of every destination pixel).
+    let raw_frame = |matrix: QuickTimeMatrix| {
+        let mut name_raw = [0u8; 32];
+        name_raw[0] = 4;
+        name_raw[1..5].copy_from_slice(b"None");
+        let desc = ImageDescription {
+            id_size: 86,
+            codec: *b"raw ",
+            version: 1,
+            revision_level: 1,
+            vendor: *b"appl",
+            temporal_quality: 0,
+            spatial_quality: 0x0300,
+            width: 256,
+            height: 256,
+            h_res: Fixed::SEVENTY_TWO_DPI,
+            v_res: Fixed::SEVENTY_TWO_DPI,
+            data_size: 0,
+            frame_count: 1,
+            name_raw,
+            depth: 32,
+            clut_id: -1,
+            extension: Vec::new(),
+        };
+        // 'raw ' 32-bit: pad, R, G, B per pixel.
+        let pixels: Vec<u8> = gradient_rgba(256, 256)
+            .chunks_exact(4)
+            .flat_map(|p| [0xFF, p[0], p[1], p[2]])
+            .collect();
+        let mut qt = QuickTimeCompressed::still(desc, pixels);
+        qt.matrix = matrix;
+        let mut b = PictBuilder::new(0, 0, 256, 256);
+        b.compressed_quicktime_image(&qt).unwrap();
+        b.finish()
+    };
+    let identity = raw_frame(QuickTimeMatrix::IDENTITY_FRACT);
+    c.bench_function("quicktime_raw_8200_identity", |b| {
+        b.iter(|| parse_pict(black_box(&identity)).unwrap())
+    });
+    // 90° (Figure 2-23) with tx = 256 so the result stays in frame.
+    let rotated = raw_frame(QuickTimeMatrix([
+        Fixed(0),
+        Fixed(0x0001_0000),
+        Fixed(0),
+        Fixed(-0x0001_0000),
+        Fixed(0),
+        Fixed(0),
+        Fixed(0x0100_0000),
+        Fixed(0),
+        Fixed(0x4000_0000),
+    ]));
+    c.bench_function("quicktime_raw_8200_rotate", |b| {
+        b.iter(|| parse_pict(black_box(&rotated)).unwrap())
     });
 }
 

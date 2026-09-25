@@ -46,4 +46,23 @@ Stream: one `$8200` CompressedQuickTime (64 KiB image blob behind a
 
 The probe skim stays ~9.5× cheaper than the decode even though both
 walk the same typed wrapper parse — the gap is the payload
-materialisation + sub-blit the probe avoids.
+materialisation + sub-blit the probe avoids. (Round 461: the same
+stream measures ~21.5 µs, because the `jpeg`-tagged blob now really
+goes to the JPEG decoder and is rejected — the `Failed` path costs a
+marker scan.)
+
+## `$8200` compositor (round 461)
+
+Stream: one `$8200` CompressedQuickTime carrying a 256 × 256 32-bit
+`'raw '` pixel map (the built-in no-compressor path), rendered into a
+256 × 256 picture frame.
+
+| Matrix | time |
+| ------ | ---- |
+| identity (1:1 placement) | ~234 µs |
+| 90° rotation (every destination pixel inverse-mapped) | ~649 µs |
+
+≈ 0.28 Gpixel/s at identity — the `'raw '` unpack, the per-pixel
+destination resolve, the transient clip mask and the mode blit each
+touch every pixel once; the rotation adds a 3×3 `f64` inverse map per
+destination pixel (~6 ns each).

@@ -66,6 +66,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   across the component planes (now decoded as one stream, which also
   covers emitters that restart packets per plane). The probe's walker
   shares the count rule. Fixture: a tool-generated 64×48 gradient.
+- round 461: `tests/realworld_round461_quicktime.rs` — the genuine
+  QuickTime-emitted `$8200` sample from the fixtures note
+  (`JDSnowyBlog.pct`, not vendored; runs when `OXIDEAV_PICT_SAMPLES`
+  names its directory): every §2.4 / §2.5 field, the render outcome
+  (`Rendered`, full frame, three placeholder lines skipped) and the
+  canvas mean against ImageMagick's render (0.375545 vs 0.375555;
+  45.6 dB PSNR, 18 of 140 500 pixels beyond 3 %). Bench:
+  `quicktime_raw_8200_identity` / `_rotate` (256 × 256 `'raw '`:
+  ~234 µs / ~649 µs).
 - round 461: `fuzz/` — three `cargo fuzz` targets: `parse_pict`,
   `probe_pict` (+ the typed QuickTime payload parsers) and
   `quicktime_8200`, which wraps the fuzzer's bytes as the interior of
