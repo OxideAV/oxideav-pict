@@ -19,6 +19,11 @@
 //!
 //! The expected canvas follows the §4 per-channel formulas verbatim.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{blend_arith, parse_pict, ArithMode, PatternMode, PictImage, Rgba};
 
@@ -54,7 +59,7 @@ fn build_arith_paint(
 /// Read pixel `(x, y)` as `(r, g, b)`.
 fn pix(img: &PictImage, x: u32, y: u32) -> (u8, u8, u8) {
     let off = ((y * img.width + x) * 4) as usize;
-    (img.data[off], img.data[off + 1], img.data[off + 2])
+    (img.data()[off], img.data()[off + 1], img.data()[off + 2])
 }
 
 #[test]

@@ -23,6 +23,11 @@
 //! page A-13) and the page A-5 Note ("opcode `$nnXX` carries
 //! `2 × nn` bytes of data"). No external implementation consulted.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{parse_pict, probe_pict, ProbeTermination};
 
 // ---------------------------------------------------------------------------

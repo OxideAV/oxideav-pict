@@ -9,6 +9,11 @@
 //! * v1 raster opcode (`PackBitsRect 0x98`) decoding.
 //! * Encoder round-trip via `encode_pict` -> `parse_pict`.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{encode_pict, parse_pict, PictPixelFormat};
 
 /// Build a v2 PICT body containing exactly the supplied opcode bytes
@@ -46,19 +51,22 @@ fn paintrect_rasterises() {
     let img = parse_pict(&pict).expect("decode failed");
     assert_eq!(img.width, 10);
     assert_eq!(img.height, 10);
-    assert_eq!(img.pixel_format, PictPixelFormat::Rgba);
+    assert_eq!(img.format, PictPixelFormat::Rgba);
     // Outside the rect: white paper.
     let off_outside = 0_usize;
     assert_eq!(
-        &img.data[off_outside..off_outside + 4],
+        &img.data()[off_outside..off_outside + 4],
         &[255, 255, 255, 255]
     );
     // Inside the rect: black ink.
     let off_inside = (5 * 10 + 5) * 4;
-    assert_eq!(&img.data[off_inside..off_inside + 4], &[0, 0, 0, 255]);
+    assert_eq!(&img.data()[off_inside..off_inside + 4], &[0, 0, 0, 255]);
     // Corner of canvas: white.
     let off_corner = (9 * 10 + 9) * 4;
-    assert_eq!(&img.data[off_corner..off_corner + 4], &[255, 255, 255, 255]);
+    assert_eq!(
+        &img.data()[off_corner..off_corner + 4],
+        &[255, 255, 255, 255]
+    );
 }
 
 #[test]
@@ -77,7 +85,7 @@ fn rgb_fg_then_paintrect() {
     let pict = build_v2_with_opcodes(8, 8, &ops);
     let img = parse_pict(&pict).expect("decode failed");
     let off = (3 * 8 + 3) * 4;
-    assert_eq!(&img.data[off..off + 4], &[255, 0, 0, 255]);
+    assert_eq!(&img.data()[off..off + 4], &[255, 0, 0, 255]);
 }
 
 #[test]
@@ -99,7 +107,7 @@ fn line_rasterises() {
     for i in 0..8 {
         let off = (i * 8 + i) * 4;
         assert_eq!(
-            &img.data[off..off + 4],
+            &img.data()[off..off + 4],
             &[0, 0, 255, 255],
             "diagonal pixel ({i},{i}) not blue"
         );
@@ -128,10 +136,13 @@ fn fillpoly_rasterises_triangle() {
     let img = parse_pict(&pict).expect("decode failed");
     // Centre of triangle.
     let off = (5 * 10 + 5) * 4;
-    assert_eq!(&img.data[off..off + 4], &[0, 0, 0, 255]);
+    assert_eq!(&img.data()[off..off + 4], &[0, 0, 0, 255]);
     // Outside the triangle (top corners).
     let off_corner = 0_usize;
-    assert_eq!(&img.data[off_corner..off_corner + 4], &[255, 255, 255, 255]);
+    assert_eq!(
+        &img.data()[off_corner..off_corner + 4],
+        &[255, 255, 255, 255]
+    );
 }
 
 #[test]
@@ -148,10 +159,10 @@ fn paintrgn_rectangular_region() {
     let img = parse_pict(&pict).expect("decode failed");
     // (3, 3) inside region.
     let off = (3 * 8 + 3) * 4;
-    assert_eq!(&img.data[off..off + 4], &[0, 0, 0, 255]);
+    assert_eq!(&img.data()[off..off + 4], &[0, 0, 0, 255]);
     // (1, 1) outside.
     let off_out = (8 + 1) * 4;
-    assert_eq!(&img.data[off_out..off_out + 4], &[255, 255, 255, 255]);
+    assert_eq!(&img.data()[off_out..off_out + 4], &[255, 255, 255, 255]);
 }
 
 #[test]
@@ -197,7 +208,7 @@ fn directbits_packtype2_24bpp() {
     let img = parse_pict(&pict).expect("decode failed");
     assert_eq!(img.width, width as u32);
     let off = 0;
-    assert_eq!(&img.data[off..off + 4], &[0xFF, 0x80, 0x40, 0xFF]);
+    assert_eq!(&img.data()[off..off + 4], &[0xFF, 0x80, 0x40, 0xFF]);
 }
 
 #[test]
@@ -247,9 +258,9 @@ fn directbits_packtype3_16bpp_packbits() {
     // All 4 pixels should decode to red (R5=31 -> 0xFF).
     for x in 0..4 {
         let off = x * 4;
-        assert_eq!(img.data[off], 0xFF, "pixel {x} R");
-        assert_eq!(img.data[off + 1], 0, "pixel {x} G");
-        assert_eq!(img.data[off + 2], 0, "pixel {x} B");
+        assert_eq!(img.data()[off], 0xFF, "pixel {x} R");
+        assert_eq!(img.data()[off + 1], 0, "pixel {x} G");
+        assert_eq!(img.data()[off + 2], 0, "pixel {x} B");
     }
 }
 
@@ -306,10 +317,10 @@ fn directbits_packtype4_planar_packbits() {
     let img = parse_pict(&pict).expect("decode failed");
     for x in 0..4 {
         let off = x * 4;
-        assert_eq!(img.data[off], 0xFF, "pixel {x} R");
-        assert_eq!(img.data[off + 1], 0x80, "pixel {x} G");
-        assert_eq!(img.data[off + 2], 0x40, "pixel {x} B");
-        assert_eq!(img.data[off + 3], 0xFF, "pixel {x} A");
+        assert_eq!(img.data()[off], 0xFF, "pixel {x} R");
+        assert_eq!(img.data()[off + 1], 0x80, "pixel {x} G");
+        assert_eq!(img.data()[off + 2], 0x40, "pixel {x} B");
+        assert_eq!(img.data()[off + 3], 0xFF, "pixel {x} A");
     }
 }
 
@@ -333,7 +344,7 @@ fn compressed_quicktime_skipped_then_paintrect() {
     let pict = build_v2_with_opcodes(8, 8, &ops);
     let img = parse_pict(&pict).expect("decode failed");
     let off = (3 * 8 + 3) * 4;
-    assert_eq!(&img.data[off..off + 4], &[0, 0, 0, 255]);
+    assert_eq!(&img.data()[off..off + 4], &[0, 0, 0, 255]);
 }
 
 #[test]
@@ -379,7 +390,7 @@ fn v1_packbits_decode() {
     // All 16 pixels should be black.
     for x in 0..16 {
         let off = x * 4;
-        assert_eq!(&img.data[off..off + 4], &[0, 0, 0, 255]);
+        assert_eq!(&img.data()[off..off + 4], &[0, 0, 0, 255]);
     }
 }
 
@@ -403,5 +414,5 @@ fn encode_decode_roundtrip_8x8() {
     let img = parse_pict(&pict).expect("decode roundtrip failed");
     assert_eq!(img.width, width);
     assert_eq!(img.height, height);
-    assert_eq!(img.data, rgba);
+    assert_eq!(img.data(), rgba);
 }

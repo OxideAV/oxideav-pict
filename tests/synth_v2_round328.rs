@@ -22,6 +22,11 @@
 //! *same* pixels for the patched (`packType = 0`) stream as for the
 //! original concrete-`packType` stream.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{encode_pict_v2, parse_pict, PackType};
 
 /// Locate the `DirectBitsRect` (`0x009A`) opcode in an encoded v2 PICT
@@ -88,7 +93,8 @@ fn direct_bits_packtype0_16bpp_defaults_to_type3() {
     assert_eq!(got.width, want.width);
     assert_eq!(got.height, want.height);
     assert_eq!(
-        got.data, want.data,
+        got.data(),
+        want.data(),
         "packType 0 (16bpp) must resolve to the documented default (type 3)"
     );
 }
@@ -111,7 +117,8 @@ fn direct_bits_packtype0_32bpp_defaults_to_type4() {
     assert_eq!(got.width, want.width);
     assert_eq!(got.height, want.height);
     assert_eq!(
-        got.data, want.data,
+        got.data(),
+        want.data(),
         "packType 0 (32bpp) must resolve to the documented default (type 4)"
     );
 }
@@ -136,10 +143,10 @@ fn direct_bits_packtype0_32bpp_is_bit_exact_source() {
     for y in 0..h {
         for x in 0..w {
             let off = (y * w + x) * 4;
-            assert_eq!(got.data[off], rgba[off], "R at ({x},{y})");
-            assert_eq!(got.data[off + 1], rgba[off + 1], "G at ({x},{y})");
-            assert_eq!(got.data[off + 2], rgba[off + 2], "B at ({x},{y})");
-            assert_eq!(got.data[off + 3], 0xFF, "A at ({x},{y})");
+            assert_eq!(got.data()[off], rgba[off], "R at ({x},{y})");
+            assert_eq!(got.data()[off + 1], rgba[off + 1], "G at ({x},{y})");
+            assert_eq!(got.data()[off + 2], rgba[off + 2], "B at ({x},{y})");
+            assert_eq!(got.data()[off + 3], 0xFF, "A at ({x},{y})");
         }
     }
 }

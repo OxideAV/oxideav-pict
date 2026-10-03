@@ -19,6 +19,11 @@
 //! Every behavioural test asserts pixel-exact equality between the
 //! compact form and the equivalent explicit-coordinate stream.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{
     build_origin, build_same_arc_op, build_same_oval_op, build_same_rect_op,
@@ -27,7 +32,7 @@ use oxideav_pict::{
 
 /// Count non-white pixels.
 fn ink_count(img: &PictImage) -> usize {
-    img.data
+    img.data()
         .chunks_exact(4)
         .filter(|px| px[0] < 240 || px[1] < 240 || px[2] < 240)
         .count()
@@ -75,7 +80,11 @@ fn short_line_matches_explicit_line() {
     b2.line(10, 12, 25, 17);
     let i1 = parse_pict(&b1.finish()).unwrap();
     let i2 = parse_pict(&b2.finish()).unwrap();
-    assert_eq!(i1.data, i2.data, "ShortLine must equal the explicit Line");
+    assert_eq!(
+        i1.data(),
+        i2.data(),
+        "ShortLine must equal the explicit Line"
+    );
     assert!(ink_count(&i1) >= 10);
 }
 
@@ -89,7 +98,7 @@ fn short_line_from_continues_a_polyline() {
     b2.line(5, 5, 10, 8).line_from(7, 15);
     let i1 = parse_pict(&b1.finish()).unwrap();
     let i2 = parse_pict(&b2.finish()).unwrap();
-    assert_eq!(i1.data, i2.data);
+    assert_eq!(i1.data(), i2.data());
     assert!(ink_count(&i1) >= 10);
 }
 
@@ -108,7 +117,8 @@ fn origin_moves_subsequent_shapes_up_left() {
     let i1 = parse_pict(&with_origin.finish()).unwrap();
     let i2 = parse_pict(&explicit.finish()).unwrap();
     assert_eq!(
-        i1.data, i2.data,
+        i1.data(),
+        i2.data(),
         "Origin(5, 3) must equal drawing at (left − 5, top − 3)"
     );
     assert_eq!(ink_count(&i1), 100);
@@ -125,7 +135,7 @@ fn origin_deltas_accumulate_and_negative_deltas_move_down_right() {
     b2.rect(Verb::Paint, 10, 14, 18, 22);
     let i1 = parse_pict(&b1.finish()).unwrap();
     let i2 = parse_pict(&b2.finish()).unwrap();
-    assert_eq!(i1.data, i2.data);
+    assert_eq!(i1.data(), i2.data());
     assert_eq!(ink_count(&i1), 64);
 }
 
@@ -146,7 +156,7 @@ fn same_rect_replays_the_previous_rect() {
         .rect(Verb::Invert, 5, 5, 15, 15);
     let i1 = parse_pict(&b1.finish()).unwrap();
     let i2 = parse_pict(&b2.finish()).unwrap();
-    assert_eq!(i1.data, i2.data);
+    assert_eq!(i1.data(), i2.data());
     assert_eq!(ink_count(&i1), 0, "paint + invert of the same rect cancels");
 }
 
@@ -165,7 +175,7 @@ fn same_oval_and_same_round_rect_replay_geometry() {
         .round_rect(Verb::Invert, 2, 30, 14, 50);
     let i1 = parse_pict(&b1.finish()).unwrap();
     let i2 = parse_pict(&b2.finish()).unwrap();
-    assert_eq!(i1.data, i2.data);
+    assert_eq!(i1.data(), i2.data());
     assert_eq!(ink_count(&i1), 0);
 }
 
@@ -180,7 +190,7 @@ fn same_arc_shares_the_rect_but_takes_fresh_angles() {
         .arc(Verb::Paint, 4, 4, 36, 36, 90, 90);
     let i1 = parse_pict(&b1.finish()).unwrap();
     let i2 = parse_pict(&b2.finish()).unwrap();
-    assert_eq!(i1.data, i2.data);
+    assert_eq!(i1.data(), i2.data());
     assert!(ink_count(&i1) > 100, "two wedges should ink a lot");
 }
 
@@ -208,7 +218,7 @@ fn clip_rect_masks_subsequent_paint() {
     for y in 0..30u32 {
         for x in 0..30u32 {
             let off = ((y * 30 + x) * 4) as usize;
-            let inked = img.data[off] < 240;
+            let inked = img.data()[off] < 240;
             assert_eq!(inked, x < 10 && y < 10, "clip breach at ({x},{y})");
         }
     }
@@ -243,7 +253,8 @@ fn clip_region_masks_like_the_region_verb() {
     let i1 = parse_pict(&clipped.finish()).unwrap();
     let i2 = parse_pict(&direct.finish()).unwrap();
     assert_eq!(
-        i1.data, i2.data,
+        i1.data(),
+        i2.data(),
         "clip_region + full paint must equal the Paint region verb"
     );
     // Non-degenerate: some but not all of the 16 × 8 canvas is inked.

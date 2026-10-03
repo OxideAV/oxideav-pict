@@ -6,6 +6,11 @@
 //!   / arc / poly / region inversion-encoded).
 //! * Region-path emit byte layout validation.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{
     encode_pict_v2, ops::PictBuilder, ops::Verb, parse_pict, pixel_data_sizes, PackType,
 };
@@ -31,11 +36,11 @@ fn packtype3_roundtrip_16x16_solid() {
     for i in 0..width as usize * height as usize {
         let off = i * 4;
         // R channel: 0 → 0 (5-bit 0 → 8-bit 0).
-        assert_eq!(img.data[off], 0x00, "R");
+        assert_eq!(img.data()[off], 0x00, "R");
         // G channel: 0xFF >> 3 = 0x1F → 8-bit reproduction = 0xFF.
         // (Decoder uses (5-bit << 3) | (5-bit >> 2) for accuracy.)
-        assert!(img.data[off + 1] >= 0xF8, "G should round-trip near 0xFF");
-        assert_eq!(img.data[off + 2], 0x00, "B");
+        assert!(img.data()[off + 1] >= 0xF8, "G should round-trip near 0xFF");
+        assert_eq!(img.data()[off + 2], 0x00, "B");
     }
 }
 
@@ -62,12 +67,12 @@ fn packtype3_roundtrip_gradient() {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
             for ch in 0..3 {
-                let diff = (rgba[off + ch] as i32 - img.data[off + ch] as i32).abs();
+                let diff = (rgba[off + ch] as i32 - img.data()[off + ch] as i32).abs();
                 assert!(
                     diff < 8,
                     "channel {ch} at ({x},{y}): want {} got {}",
                     rgba[off + ch],
-                    img.data[off + ch]
+                    img.data()[off + ch]
                 );
             }
         }
@@ -101,13 +106,13 @@ fn builder_horizontal_line_decode() {
     // Pixels along the line should be red.
     for x in 3..12 {
         let off = (4 * 16 + x) * 4;
-        assert_eq!(img.data[off], 0xFF, "line pixel R at x={x}");
+        assert_eq!(img.data()[off], 0xFF, "line pixel R at x={x}");
     }
     // Other rows = paper.
     let off = 0;
-    assert_eq!(img.data[off], 0xFF);
-    assert_eq!(img.data[off + 1], 0xFF);
-    assert_eq!(img.data[off + 2], 0xFF);
+    assert_eq!(img.data()[off], 0xFF);
+    assert_eq!(img.data()[off + 1], 0xFF);
+    assert_eq!(img.data()[off + 2], 0xFF);
 }
 
 #[test]
@@ -123,11 +128,11 @@ fn builder_filled_rect_with_frame() {
     let img = parse_pict(&bytes).expect("decode");
     // Inside the inner rect (8,8) is red.
     let off = (8 * 16 + 8) * 4;
-    assert_eq!(img.data[off], 0xFF, "inner R");
+    assert_eq!(img.data()[off], 0xFF, "inner R");
     // Outline at (2,2) is black.
     let off = (2 * 16 + 2) * 4;
-    assert_eq!(img.data[off], 0x00, "outline R");
-    assert_eq!(img.data[off + 1], 0x00, "outline G");
+    assert_eq!(img.data()[off], 0x00, "outline R");
+    assert_eq!(img.data()[off + 1], 0x00, "outline G");
 }
 
 #[test]
@@ -146,13 +151,13 @@ fn builder_chained_drawing_commands() {
     let img = parse_pict(&bytes).expect("decode");
     // Top-left quadrant = red.
     let off = (4 * 32 + 4) * 4;
-    assert_eq!(img.data[off], 0xFF, "top-left R");
+    assert_eq!(img.data()[off], 0xFF, "top-left R");
     // Bottom-right oval centre = green.
     let off = (24 * 32 + 24) * 4;
-    assert_eq!(img.data[off + 1], 0xFF, "bot-right G");
+    assert_eq!(img.data()[off + 1], 0xFF, "bot-right G");
     // Triangle interior = blue.
     let off = (8 * 32 + 25) * 4;
-    assert_eq!(img.data[off + 2], 0xFF, "triangle B");
+    assert_eq!(img.data()[off + 2], 0xFF, "triangle B");
 }
 
 #[test]
@@ -183,12 +188,12 @@ fn region_inverted_diagonal_band() {
     let img = parse_pict(&bytes).expect("decode");
     // Inside row 4, col 3 → purple ink.
     let off = (4 * 8 + 3) * 4;
-    assert_eq!(img.data[off], 0x80, "R inside band");
-    assert_eq!(img.data[off + 1], 0x40, "G inside band");
-    assert_eq!(img.data[off + 2], 0xC0, "B inside band");
+    assert_eq!(img.data()[off], 0x80, "R inside band");
+    assert_eq!(img.data()[off + 1], 0x40, "G inside band");
+    assert_eq!(img.data()[off + 2], 0xC0, "B inside band");
     // Outside row 0 col 0 → paper.
     let off = 0;
-    assert_eq!(img.data[off], 0xFF, "paper R");
+    assert_eq!(img.data()[off], 0xFF, "paper R");
 }
 
 // ---- Mixed: PackType + drawing commands NOT mixed in one stream

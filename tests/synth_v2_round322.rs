@@ -14,6 +14,11 @@
 //! `PictBuilder` always emits `srcRect == bounds == dstRect`, so a
 //! sub-rectangle `srcRect` can only be exercised at the byte level).
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::parse_pict;
 
 /// Build a v2 PICT with a single `DirectBitsRect` (`0x009A`) carrying a
@@ -123,7 +128,7 @@ fn direct_bits_src_rect_crops_inner_block() {
 
     let px = |x: usize, y: usize| {
         let off = (y * img.width as usize + x) * 4;
-        [img.data[off], img.data[off + 1], img.data[off + 2]]
+        [img.data()[off], img.data()[off + 1], img.data()[off + 2]]
     };
 
     // The destination 2×2 maps 1:1 onto the source srcRect (1,1)..(3,3).
@@ -157,7 +162,7 @@ fn direct_bits_full_src_rect_is_identity() {
     for y in 0..3 {
         for x in 0..3 {
             let off = (y * img.width as usize + x) * 4;
-            let got = [img.data[off], img.data[off + 1], img.data[off + 2]];
+            let got = [img.data()[off], img.data()[off + 1], img.data()[off + 2]];
             assert_eq!(got, color(x, y), "({x},{y}) identity");
         }
     }
@@ -191,7 +196,7 @@ fn direct_bits_src_rect_single_column_stretched() {
     for y in 0..2 {
         for x in 0..3 {
             let off = (y * img.width as usize + x) * 4;
-            let got = [img.data[off], img.data[off + 1], img.data[off + 2]];
+            let got = [img.data()[off], img.data()[off + 1], img.data()[off + 2]];
             assert_eq!(got, col(2), "dst ({x},{y}) is the stretched src column 2");
         }
     }

@@ -22,6 +22,11 @@
 //!   still parse (the `Size` field is authoritative per Inside
 //!   Macintosh: QuickTime page 3-26).
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{
     build_direct_bits_rect_op, parse_compressed_quicktime, parse_pict,

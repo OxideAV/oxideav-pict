@@ -24,6 +24,11 @@
 //! The probe walker also counts pattern-set occurrences via the new
 //! `PictProbe::pattern_set_count` field.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{parse_pict, probe_pict, Pattern, ProbeTermination};
 
@@ -40,10 +45,10 @@ const VSTRIPE: [u8; 8] = [0xAA; 8];
 fn at(img: &oxideav_pict::PictImage, x: u32, y: u32) -> [u8; 4] {
     let off = ((y * img.width + x) * 4) as usize;
     [
-        img.data[off],
-        img.data[off + 1],
-        img.data[off + 2],
-        img.data[off + 3],
+        img.data()[off],
+        img.data()[off + 1],
+        img.data()[off + 2],
+        img.data()[off + 3],
     ]
 }
 
@@ -184,7 +189,8 @@ fn solid_fg_pattern_collapses_to_solid_fg() {
     let bytes_b = b.finish();
     let img_b = parse_pict(&bytes_b).unwrap();
     assert_eq!(
-        img_a.data, img_b.data,
+        img_a.data(),
+        img_b.data(),
         "solid-fg pattern must match no-pattern"
     );
 }

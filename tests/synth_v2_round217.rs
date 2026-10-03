@@ -9,6 +9,11 @@
 //! picFrame`) so a `parse_pict(encode_pict(…))` round-trip recovers the
 //! header.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::header::{Fixed, PictHeader};
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{

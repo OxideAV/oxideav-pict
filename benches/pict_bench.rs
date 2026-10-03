@@ -10,6 +10,11 @@
 //!   `probe_pict` walker, to keep the "probe is cheap" contract
 //!   measurable.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{

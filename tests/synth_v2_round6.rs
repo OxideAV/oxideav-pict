@@ -18,6 +18,11 @@
 //!
 //! Every test self-roundtrips through `parse_pict`.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
     encode_pict_bits_rgn, encode_pict_pack_bits_rgn, encode_pict_v2_with_clip, parse_pict, PackType,
@@ -48,19 +53,19 @@ fn clip_rgn_masks_raster_outside() {
     assert_eq!(img.height, height);
     // Inside the clip — red.
     let off = (3 * 8 + 3) * 4;
-    assert_eq!(img.data[off], 0xFF, "R inside clip");
-    assert_eq!(img.data[off + 1], 0x00, "G inside clip");
-    assert_eq!(img.data[off + 2], 0x00, "B inside clip");
+    assert_eq!(img.data()[off], 0xFF, "R inside clip");
+    assert_eq!(img.data()[off + 1], 0x00, "G inside clip");
+    assert_eq!(img.data()[off + 2], 0x00, "B inside clip");
     // Outside the clip (top-left corner) — paper white.
     let off = 0;
-    assert_eq!(img.data[off], 0xFF, "paper R");
-    assert_eq!(img.data[off + 1], 0xFF, "paper G");
-    assert_eq!(img.data[off + 2], 0xFF, "paper B");
+    assert_eq!(img.data()[off], 0xFF, "paper R");
+    assert_eq!(img.data()[off + 1], 0xFF, "paper G");
+    assert_eq!(img.data()[off + 2], 0xFF, "paper B");
     // Outside the clip (bottom-right corner) — also paper.
     let off = (7 * 8 + 7) * 4;
-    assert_eq!(img.data[off], 0xFF, "br paper R");
-    assert_eq!(img.data[off + 1], 0xFF, "br paper G");
-    assert_eq!(img.data[off + 2], 0xFF, "br paper B");
+    assert_eq!(img.data()[off], 0xFF, "br paper R");
+    assert_eq!(img.data()[off + 1], 0xFF, "br paper G");
+    assert_eq!(img.data()[off + 2], 0xFF, "br paper B");
 }
 
 /// `ClipRgn` followed by drawing primitives — the rectangle's parts
@@ -77,19 +82,19 @@ fn clip_rgn_masks_drawing_primitives() {
     let img = parse_pict(&bytes).unwrap();
     // Inside clip — red.
     let off = (8 * 16 + 8) * 4;
-    assert_eq!(img.data[off], 0xFF);
-    assert_eq!(img.data[off + 1], 0x00);
-    assert_eq!(img.data[off + 2], 0x00);
+    assert_eq!(img.data()[off], 0xFF);
+    assert_eq!(img.data()[off + 1], 0x00);
+    assert_eq!(img.data()[off + 2], 0x00);
     // Outside clip (corner) — paper.
     let off = 0;
-    assert_eq!(img.data[off], 0xFF);
-    assert_eq!(img.data[off + 1], 0xFF);
-    assert_eq!(img.data[off + 2], 0xFF);
+    assert_eq!(img.data()[off], 0xFF);
+    assert_eq!(img.data()[off + 1], 0xFF);
+    assert_eq!(img.data()[off + 2], 0xFF);
     // Just outside the clip's right edge — paper.
     let off = (8 * 16 + 13) * 4;
-    assert_eq!(img.data[off], 0xFF);
-    assert_eq!(img.data[off + 1], 0xFF);
-    assert_eq!(img.data[off + 2], 0xFF);
+    assert_eq!(img.data()[off], 0xFF);
+    assert_eq!(img.data()[off + 1], 0xFF);
+    assert_eq!(img.data()[off + 2], 0xFF);
 }
 
 /// Clip narrower than the line should mask the line ends.
@@ -109,16 +114,16 @@ fn clip_rgn_masks_line() {
     // Inside the clip [4..12) — black.
     for x in 4..12 {
         let off = (row * 16 + x) * 4;
-        assert_eq!(img.data[off], 0x00, "x={x} should be inked");
+        assert_eq!(img.data()[off], 0x00, "x={x} should be inked");
     }
     // Outside the clip — paper.
     for x in 0..4 {
         let off = (row * 16 + x) * 4;
-        assert_eq!(img.data[off], 0xFF, "x={x} should be paper");
+        assert_eq!(img.data()[off], 0xFF, "x={x} should be paper");
     }
     for x in 12..16 {
         let off = (row * 16 + x) * 4;
-        assert_eq!(img.data[off], 0xFF, "x={x} should be paper");
+        assert_eq!(img.data()[off], 0xFF, "x={x} should be paper");
     }
 }
 
@@ -141,14 +146,14 @@ fn pen_size_3x3_horizontal_line() {
     let y_lit = 4usize;
     for dy in 0..3 {
         let off = ((y_lit + dy) * 16 + 8) * 4;
-        assert_eq!(img.data[off], 0x00, "row {} should be inked", y_lit + dy);
+        assert_eq!(img.data()[off], 0x00, "row {} should be inked", y_lit + dy);
     }
     // Row 3 (above) should still be paper.
     let off = (3 * 16 + 8) * 4;
-    assert_eq!(img.data[off], 0xFF, "row 3 should be paper");
+    assert_eq!(img.data()[off], 0xFF, "row 3 should be paper");
     // Row 7 (below 3-pixel extent) should also be paper.
     let off = (7 * 16 + 8) * 4;
-    assert_eq!(img.data[off], 0xFF, "row 7 should be paper");
+    assert_eq!(img.data()[off], 0xFF, "row 7 should be paper");
 }
 
 /// `PnSize` of (2, 2) — a frame-rect should produce a 2-pixel-thick
@@ -165,15 +170,15 @@ fn pen_size_2x2_frame_rect() {
     for y in [4, 5] {
         for x in 4..12 {
             let off = (y * 16 + x) * 4;
-            assert_eq!(img.data[off], 0xFF, "row={y} col={x} R");
-            assert_eq!(img.data[off + 2], 0xFF, "row={y} col={x} B");
+            assert_eq!(img.data()[off], 0xFF, "row={y} col={x} R");
+            assert_eq!(img.data()[off + 2], 0xFF, "row={y} col={x} B");
         }
     }
     // Interior (row 6, col 6) should still be paper.
     let off = (6 * 16 + 6) * 4;
-    assert_eq!(img.data[off], 0xFF);
-    assert_eq!(img.data[off + 1], 0xFF);
-    assert_eq!(img.data[off + 2], 0xFF);
+    assert_eq!(img.data()[off], 0xFF);
+    assert_eq!(img.data()[off + 1], 0xFF);
+    assert_eq!(img.data()[off + 2], 0xFF);
 }
 
 /// Pen size of (1, 1) — output must be identical to a default-pen
@@ -193,7 +198,7 @@ fn pen_size_1x1_matches_default() {
     let bytes_pen = b.finish();
     let img_pen = parse_pict(&bytes_pen).unwrap();
 
-    assert_eq!(img_default.data, img_pen.data);
+    assert_eq!(img_default.data(), img_pen.data());
 }
 
 // ---------------------------------------------------------------------------
@@ -232,9 +237,9 @@ fn bits_rgn_full_clip_roundtrip() {
     // All pixels should be black (bit=1 → 0x00).
     for i in 0..64 {
         let off = i * 4;
-        assert_eq!(img.data[off], 0x00);
-        assert_eq!(img.data[off + 1], 0x00);
-        assert_eq!(img.data[off + 2], 0x00);
+        assert_eq!(img.data()[off], 0x00);
+        assert_eq!(img.data()[off + 1], 0x00);
+        assert_eq!(img.data()[off + 2], 0x00);
     }
 }
 
@@ -251,9 +256,9 @@ fn pack_bits_rgn_wide_clip_roundtrip() {
     // All pixels should be white.
     for i in 0..(64 * 8) {
         let off = i * 4;
-        assert_eq!(img.data[off], 0xFF);
-        assert_eq!(img.data[off + 1], 0xFF);
-        assert_eq!(img.data[off + 2], 0xFF);
+        assert_eq!(img.data()[off], 0xFF);
+        assert_eq!(img.data()[off + 1], 0xFF);
+        assert_eq!(img.data()[off + 2], 0xFF);
     }
 }
 
@@ -268,12 +273,12 @@ fn bits_rgn_narrow_clip_masks() {
     let img = parse_pict(&enc).unwrap();
     // Inside the clip — black.
     let off = (3 * 8 + 3) * 4;
-    assert_eq!(img.data[off], 0x00, "inside clip should be black");
+    assert_eq!(img.data()[off], 0x00, "inside clip should be black");
     // Outside the clip — paper white.
     let off = 0;
-    assert_eq!(img.data[off], 0xFF, "outside clip should be paper");
+    assert_eq!(img.data()[off], 0xFF, "outside clip should be paper");
     let off = (7 * 8 + 7) * 4;
-    assert_eq!(img.data[off], 0xFF, "br outside clip should be paper");
+    assert_eq!(img.data()[off], 0xFF, "br outside clip should be paper");
 }
 
 /// `BitsRgn` with degenerate input — size mismatch must reject.

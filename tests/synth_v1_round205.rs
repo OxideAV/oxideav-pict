@@ -31,6 +31,11 @@
 //! Every byte sequence is traceable back to §A-3 Table A-3 (book pages
 //! A-18..A-21). No external implementation consulted.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{parse_pict, probe_pict, ProbeTermination};
 
 // ---------------------------------------------------------------------------

@@ -23,6 +23,11 @@
 //! Imaging With QuickDraw §4, book pages 4-104 and 4-120, and Apple's
 //! *develop* Issue 1, "Palette Manager" ("Drawing With Palette Colors").
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::parse_pict;
 
 const COLOR_TABLE_DEVICE_FLAG: u16 = 0x8000;
@@ -181,7 +186,7 @@ fn indexed_color_table_resolves_by_value_not_position() {
     let img = parse_pict(&bytes).expect("decode indexed PackBitsRect");
     let p = |x: u32| {
         let off = (x * 4) as usize;
-        [img.data[off], img.data[off + 1], img.data[off + 2]]
+        [img.data()[off], img.data()[off + 1], img.data()[off + 2]]
     };
     // Despite the reversed table order, each index resolves to the RGB
     // whose ColorSpec.value matches it.
@@ -227,7 +232,7 @@ fn indexed_color_table_unmatched_value_is_black() {
     let img = parse_pict(&bytes).expect("decode sparse-table indexed PackBitsRect");
     let p = |x: u32| {
         let off = (x * 4) as usize;
-        [img.data[off], img.data[off + 1], img.data[off + 2]]
+        [img.data()[off], img.data()[off + 1], img.data()[off + 2]]
     };
     assert_eq!(p(0), [0x00, 0x00, 0x00], "unmatched idx 0 → black");
     assert_eq!(p(1), [0xFF, 0x00, 0x00], "idx 1 → red");
@@ -260,7 +265,7 @@ fn device_color_table_resolves_by_position_not_value() {
     let img = parse_pict(&bytes).expect("decode device-table indexed PackBitsRect");
     let p = |x: u32| {
         let off = (x * 4) as usize;
-        [img.data[off], img.data[off + 1], img.data[off + 2]]
+        [img.data()[off], img.data()[off + 1], img.data()[off + 2]]
     };
     assert_eq!(p(0), [0x00, 0x00, 0x00], "position 0 → black");
     assert_eq!(p(1), [0xFF, 0x00, 0x00], "position 1 → red");
@@ -295,7 +300,7 @@ fn palette_index_color_table_is_sequential_like_a_device_table() {
     let img = parse_pict(&bytes).expect("decode palette-index-table indexed PackBitsRect");
     let p = |x: u32| {
         let off = (x * 4) as usize;
-        [img.data[off], img.data[off + 1], img.data[off + 2]]
+        [img.data()[off], img.data()[off + 1], img.data()[off + 2]]
     };
     assert_eq!(p(0), [0x00, 0x00, 0x00], "position 0 → black");
     assert_eq!(p(1), [0xFF, 0x00, 0x00], "position 1 → red");

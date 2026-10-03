@@ -8,7 +8,7 @@
 //! movie's sample description does. `oxideav-pict` therefore never
 //! implements a compressor itself — it hands the description + bytes
 //! to a [`QuickTimeImageDecoder`] and composites whatever RGBA comes
-//! back (see [`crate::parse_pict_with`]).
+//! back (see [`crate::decode_with_quicktime`]).
 //!
 //! Three decoders ship with the crate:
 //!
@@ -16,13 +16,13 @@
 //!   book page 3-64: the *raw* compressor "does not compress"): the
 //!   image data is the source pixel map itself, laid out by the
 //!   description's `depth`. Framework-free.
-//! * [`DefaultQuickTimeDecoder`] — what [`crate::parse_pict`] uses:
+//! * [`DefaultQuickTimeDecoder`] — what [`crate::decode`] uses:
 //!   `'raw '` through the built-in path and, with the `registry`
 //!   feature, `'jpeg'` (the "Photo - JPEG" compressor) through the
 //!   sibling `oxideav-mjpeg` decoder — the same arrangement the
 //!   workspace's other embedded-codec image formats use.
 //! * `RegistryQuickTimeDecoder` (`registry` feature, in
-//!   [`crate::registry`]) — resolves the FourCC through a caller's
+//!   `crate::registry`) — resolves the FourCC through a caller's
 //!   `oxideav_core::CodecRegistry` first and falls back to the
 //!   default chain.
 //!
@@ -120,7 +120,7 @@ pub enum QuickTimeRender {
         /// Inside Macintosh: QuickTime page 3-139: `StdPix` appends
         /// "default picture opcodes (for displaying a warning when
         /// QuickTime is not installed)" — the "QuickTime™ and a
-        /// <name> decompressor are needed to see this picture" text
+        /// `<name>` decompressor are needed to see this picture" text
         /// — after the `$8200`; a reader that *did* decode the image
         /// is the QuickTime-installed case and must not draw them.
         /// The books do not state the suppression mechanism, so the
@@ -266,7 +266,7 @@ impl QuickTimeImageDecoder for RawQuickTimeDecoder {
     }
 }
 
-/// The decoder chain [`crate::parse_pict`] uses when the caller
+/// The decoder chain [`crate::decode`] uses when the caller
 /// supplies none: `'raw '` through [`RawQuickTimeDecoder`] and — with
 /// the `registry` feature — `'jpeg'` through `oxideav-mjpeg`. Every
 /// other compressor is reported unsupported.
@@ -295,7 +295,11 @@ impl QuickTimeImageDecoder for DefaultQuickTimeDecoder {
 /// samples carry exactly that — so it goes to the framework-free
 /// `decode_jpeg` entry point unchanged; the decoded frame's planes
 /// are then folded to RGBA by [`video_frame_to_rgba`].
+// The published `oxideav-mjpeg` (0.1.9) has only the `decode_jpeg`
+// entry point; its successor is deprecated-but-present on master, so
+// the call stays on the published surface and the warning is allowed.
 #[cfg(feature = "registry")]
+#[allow(deprecated)]
 pub fn decode_jpeg_image(
     description: &ImageDescription,
     data: &[u8],

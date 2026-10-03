@@ -18,6 +18,11 @@
 //!   without failing the picture, because the `Size` field is
 //!   authoritative even for a reader that cannot decode the payload.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::state::RectI32;
 use oxideav_pict::{
@@ -160,7 +165,7 @@ fn malformed_compressed_interior_degrades_to_verbatim_capture() {
     assert!(img.quicktime[0].image.is_none());
     // The paint before the opcode still landed (walker resumed).
     let off = (8 + 1) * 4;
-    assert_eq!(&img.data[off..off + 4], &[0, 0, 0, 255]);
+    assert_eq!(&img.data()[off..off + 4], &[0, 0, 0, 255]);
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +199,7 @@ fn uncompressed_quicktime_blits_embedded_direct_bits_rect() {
     // Interior of the blit is red; outside stays background.
     for (x, y, inside) in [(3, 3, true), (2, 2, true), (5, 5, true), (7, 7, false)] {
         let off = (y * 16 + x) * 4;
-        let px = &img.data[off..off + 4];
+        let px = &img.data()[off..off + 4];
         if inside {
             assert_eq!(px, &[255, 0, 0, 255], "pixel ({x},{y})");
         } else {
@@ -222,12 +227,12 @@ fn uncompressed_quicktime_with_truncated_sub_data_degrades() {
     assert_eq!(qt.data, payload);
     // No red pixel anywhere.
     assert!(
-        !img.data.chunks(4).any(|px| px == [255, 0, 0, 255]),
+        !img.data().chunks(4).any(|px| px == [255, 0, 0, 255]),
         "truncated sub-opcode must not blit"
     );
     // The paint opcode before it still landed.
     let off = (11 * 16 + 11) * 4;
-    assert_eq!(&img.data[off..off + 4], &[0, 0, 0, 255]);
+    assert_eq!(&img.data()[off..off + 4], &[0, 0, 0, 255]);
 }
 
 #[test]
@@ -264,7 +269,7 @@ fn uncompressed_quicktime_with_matte_still_reaches_subopcode() {
     assert_eq!(u.subopcode, 0x009A);
     // Blit still happened after the matte fields.
     let off = (3 * 16 + 3) * 4;
-    assert_eq!(&img.data[off..off + 4], &[255, 0, 0, 255]);
+    assert_eq!(&img.data()[off..off + 4], &[255, 0, 0, 255]);
 }
 
 // ---------------------------------------------------------------------------
@@ -355,7 +360,7 @@ fn typed_uncompressed_builder_round_trips_and_blits() {
     };
     assert_eq!(back, &qt);
     let off = (3 * 16 + 3) * 4;
-    assert_eq!(&img.data[off..off + 4], &[255, 0, 0, 255]);
+    assert_eq!(&img.data()[off..off + 4], &[255, 0, 0, 255]);
 }
 
 #[test]
@@ -402,10 +407,10 @@ fn quicktime_only_pict_parses_instead_of_no_raster() {
 
     // A truly empty PICT still reports NoRaster.
     let empty = PictBuilder::new(0, 0, 8, 8).finish();
-    assert_eq!(
+    assert!(matches!(
         parse_pict(&empty).unwrap_err(),
         oxideav_pict::PictError::NoRaster
-    );
+    ));
 }
 
 // ---------------------------------------------------------------------------

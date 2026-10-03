@@ -42,7 +42,7 @@
 
 use crate::error::{PictError, Result};
 use crate::header::{Fixed, PictHeader};
-use crate::image::{PictComment, PictImage, PictPixelFormat};
+use crate::image::{PictComment, PictImage, PictPixelFormat, PictVersion};
 use crate::opcodes::*;
 use crate::packbits;
 use crate::raster::{
@@ -65,29 +65,17 @@ use crate::state::{
     TextRatio,
 };
 
-/// Decode a complete PICT byte stream into a single rasterised
-/// [`PictImage`].
-///
-/// Accepts both forms produced by real-world generators:
-///
-/// * Raw PICT body — the 10-byte v1/v2 picture record header is at
-///   offset 0.
-/// * 512-byte launch-stub prefix + PICT body — Apple's pre-OS-X file-
-///   manager habit. Detected by checking that offset 512 looks like a
-///   plausible picture record (picSize then picFrame then the version
-///   sentinel at +10) and the 0..512 prefix doesn't.
-///
-/// Returns [`PictError::NoRaster`] if the opcode stream terminates
-/// (`OpEndPic`) or runs out of bytes without producing any drawing
-/// or raster output.
 /// Decode-allocation budget (round 401 hostile-input hardening).
 ///
-/// Every buffer whose size is derived from attacker-controlled length
-/// fields (`picFrame`, PixMap `bounds` × `rowBytes`, …) is checked
-/// against this budget before allocation: 256 MiB, comfortably above
-/// any real QuickDraw-era picture (an 8192 × 8192 RGBA canvas) while
-/// keeping a hostile 12-byte header from demanding a multi-gigabyte
-/// allocation. Exceeding it returns [`PictError::InvalidData`].
+/// Every buffer a raster opcode sizes from its own attacker-controlled
+/// fields (PixMap `bounds` × `rowBytes`, the unpacked RGBA of one
+/// sub-image, …) is checked against this budget before allocation:
+/// 256 MiB, comfortably above any real QuickDraw-era picture (an
+/// 8192 × 8192 RGBA canvas) while keeping a hostile header from
+/// demanding a multi-gigabyte allocation. Exceeding it returns
+/// [`PictError::InvalidData`]. The picture canvas itself (`picFrame`)
+/// is governed by [`crate::DecodeOptions`], whose default `max_bytes`
+/// is this same value.
 pub const MAX_RASTER_BYTES: usize = 1 << 28;
 
 /// Checked `rows × bytes_per_row` buffer sizing against
@@ -149,24 +137,33 @@ pub(crate) fn read_packed_row_count(
     Ok(word)
 }
 
+/// The pre-contract name of [`crate::decode`].
+#[deprecated(note = "use oxideav_pict::decode (IMAGE_CRATE_API)")]
 pub fn parse_pict(bytes: &[u8]) -> Result<PictImage> {
-    let mut qt = crate::qtimage::DefaultQuickTimeDecoder::default();
-    parse_pict_with(bytes, &mut qt)
+    crate::decode(bytes)
 }
 
-/// [`parse_pict`] with a caller-supplied decoder for the image data
-/// of `CompressedQuickTime` (`$8200`) opcodes and QuickTime mattes.
+/// The pre-contract name of [`crate::decode_with_quicktime`] (with
+/// [`DecodeOptions::default`](crate::DecodeOptions::default)).
+#[deprecated(note = "use oxideav_pict::decode_with_quicktime (IMAGE_CRATE_API)")]
+pub fn parse_pict_with(
+    bytes: &[u8],
+    qt: &mut dyn crate::qtimage::QuickTimeImageDecoder,
+) -> Result<PictImage> {
+    decode_image(bytes, &crate::DecodeOptions::default(), qt)
+}
+
+/// Shared by [`crate::decode`] / [`crate::decode_with`] /
+/// [`crate::decode_with_quicktime`]: walk the whole picture onto an
+/// RGBA canvas sized to `picFrame`.
 ///
 /// The `$8200` payload is a codec boundary (Inside Macintosh:
 /// QuickTime, page 3-50: the `cType` FourCC names the decompressor);
 /// `qt` is asked for the pixels of every such image and the result is
-/// composited per the opcode's matrix / matte / mask / mode. Pass a
-/// `registry::RegistryQuickTimeDecoder` (feature `registry`) to route
-/// FourCCs through an `oxideav_core::CodecRegistry`, or any
-/// [`crate::qtimage::QuickTimeImageDecoder`] of your own. [`parse_pict`] uses
-/// [`DefaultQuickTimeDecoder`](crate::qtimage::DefaultQuickTimeDecoder).
-pub fn parse_pict_with(
+/// composited per the opcode's matrix / matte / mask / mode.
+pub(crate) fn decode_image(
     bytes: &[u8],
+    opts: &crate::DecodeOptions,
     qt: &mut dyn crate::qtimage::QuickTimeImageDecoder,
 ) -> Result<PictImage> {
     let body_offset = detect_body_offset(bytes)?;
@@ -177,7 +174,12 @@ pub fn parse_pict_with(
     let pic_frame = r.read_rect()?;
     let pic_frame = RectI32::from_be(pic_frame.0, pic_frame.1, pic_frame.2, pic_frame.3);
 
-    let (version, header) = detect_version(&mut r)?;
+    let (version, header, header_canonical) = detect_version(&mut r)?;
+    if opts.strict && version == PictVersion::V2 && !header_canonical {
+        return Err(PictError::invalid(
+            "strict: v2 HeaderOp payload version word is neither $FFFE nor $FFFF (§A-3)",
+        ));
+    }
 
     // Initial canvas sized to the picture frame, pre-filled white
     // (QuickDraw "paper"). The drawing-state machine adjusts the
@@ -197,8 +199,15 @@ pub fn parse_pict_with(
         )));
     }
     // Hostile-input hardening: a 12-byte header can claim a 65535 ×
-    // 65535 frame (~17 GB of RGBA canvas). Refuse before allocating.
-    checked_raster_len(height as usize, width as usize * 4, "picFrame canvas")?;
+    // 65535 frame (~17 GB of RGBA canvas). Refuse before allocating:
+    // the caller's limits first, then the platform's address space.
+    let canvas_bytes = u64::from(width) * u64::from(height) * 4;
+    opts.check(width, height, canvas_bytes)?;
+    if usize::try_from(canvas_bytes).is_err() {
+        return Err(PictError::unsupported(format!(
+            "picFrame canvas of {canvas_bytes} bytes does not fit the platform's usize"
+        )));
+    }
     let canvas = Canvas::new(width, height, Rgba::WHITE);
     let state = PictState {
         // Origin shifts so picFrame.top/left maps to canvas (0, 0).
@@ -206,12 +215,53 @@ pub fn parse_pict_with(
         ..PictState::default()
     };
 
-    let mut img = match version {
+    let (mut img, end_pic) = match version {
         PictVersion::V1 => parse_v1_opcodes(&mut r, pic_frame, canvas, state)?,
         PictVersion::V2 => parse_v2_opcodes(&mut r, pic_frame, canvas, state, qt)?,
     };
+    if opts.strict {
+        if !end_pic {
+            return Err(PictError::invalid(
+                "strict: opcode stream ended without OpEndPic",
+            ));
+        }
+        if !r.at_eof() {
+            return Err(PictError::invalid(format!(
+                "strict: {} trailing byte(s) after OpEndPic",
+                r.remaining()
+            )));
+        }
+    }
     img.header = header;
     Ok(img)
+}
+
+/// Header-only read for [`crate::info`]: body offset, `picFrame`,
+/// version stanza and (v2) `HeaderOp` payload. No opcode is walked and
+/// nothing is allocated.
+pub(crate) fn read_info(bytes: &[u8]) -> Result<crate::image::ImageInfo> {
+    let body_offset = detect_body_offset(bytes)?;
+    let body = &bytes[body_offset..];
+    let mut r = Reader::new(body);
+    let _pic_size = r.read_u16()?;
+    let frame = r.read_rect()?;
+    let (version, header, _) = detect_version(&mut r)?;
+    let width = (frame.3 as i32 - frame.1 as i32).max(0) as u32;
+    let height = (frame.2 as i32 - frame.0 as i32).max(0) as u32;
+    let mut info = crate::image::ImageInfo::new(width, height);
+    info.version = version;
+    info.has_launch_stub = body_offset > 0;
+    info.frame = frame;
+    info.header = header;
+    Ok(info)
+}
+
+/// `true` when `bytes` carry a PICT picture record at offset 0 or 512
+/// (the §A-3 version stanza `$0011 $02FF` or `$11 $01` at offset 10 of
+/// the record). Allocation-free; `false` on short input.
+pub(crate) fn probe_bytes(bytes: &[u8]) -> bool {
+    looks_like_picture_record(bytes)
+        || (bytes.len() >= 512 + 12 && looks_like_picture_record(&bytes[512..]))
 }
 
 /// Advance the QuickDraw text-drawing pen by a `(dh, dv)` delta from the
@@ -311,12 +361,6 @@ fn render_text(canvas: &mut Canvas, state: &mut PictState, text: &[u8]) {
     state.text_state.text_pen = Some((pen_h.saturating_add(advanced), pen_v));
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PictVersion {
-    V1,
-    V2,
-}
-
 fn detect_body_offset(bytes: &[u8]) -> Result<usize> {
     if looks_like_picture_record(bytes) {
         return Ok(0);
@@ -342,7 +386,11 @@ fn looks_like_picture_record(bytes: &[u8]) -> bool {
     false
 }
 
-fn detect_version(r: &mut Reader<'_>) -> Result<(PictVersion, Option<PictHeader>)> {
+/// Returns the framing version, the parsed v2 header (when canonical)
+/// and whether the header payload was canonical (`false` when the
+/// 24-byte payload was skipped because its version word was unknown —
+/// what `strict` rejects).
+fn detect_version(r: &mut Reader<'_>) -> Result<(PictVersion, Option<PictHeader>, bool)> {
     // The version stanza is the first thing after the 10-byte
     // picture-record header. v2 emits the 2-byte opcode 0x0011
     // followed by the 2-byte 0x02FF v2 sentinel and the headerOp
@@ -375,7 +423,8 @@ fn detect_version(r: &mut Reader<'_>) -> Result<(PictVersion, Option<PictHeader>
                     None
                 }
             };
-            return Ok((PictVersion::V2, header));
+            let canonical = header.is_some();
+            return Ok((PictVersion::V2, header, canonical));
         }
         // Some pre-v2 generators pad the version opcode out to 2 bytes
         // (`0x0011`) followed by a 1-byte version `0x01` then v1
@@ -386,7 +435,7 @@ fn detect_version(r: &mut Reader<'_>) -> Result<(PictVersion, Option<PictHeader>
             // We have to back up one byte: the low byte of `next` is
             // the first v1 opcode.
             r.pos -= 1;
-            return Ok((PictVersion::V1, None));
+            return Ok((PictVersion::V1, None, true));
         }
         return Err(PictError::invalid(format!(
             "unrecognised version stanza after 0x0011: 0x{next:04X}"
@@ -396,7 +445,7 @@ fn detect_version(r: &mut Reader<'_>) -> Result<(PictVersion, Option<PictHeader>
         // Canonical v1 form: 1-byte opcode 0x11 then 1-byte version
         // 0x01. Both bytes consumed; the next byte is the first v1
         // opcode.
-        return Ok((PictVersion::V1, None));
+        return Ok((PictVersion::V1, None, true));
     }
     Err(PictError::invalid(format!(
         "expected version opcode 0x0011 or 0x1101, got 0x{v_word:04X}"
@@ -423,7 +472,8 @@ fn parse_v2_opcodes(
     mut canvas: Canvas,
     mut state: PictState,
     qt: &mut dyn crate::qtimage::QuickTimeImageDecoder,
-) -> Result<PictImage> {
+) -> Result<(PictImage, bool)> {
+    let mut end_pic = false;
     while !r.at_eof() {
         r.align_word()?;
         if r.at_eof() {
@@ -431,10 +481,11 @@ fn parse_v2_opcodes(
         }
         let opcode = r.read_u16()?;
         if !dispatch_v2_opcode(r, opcode, &pic_frame, &mut canvas, &mut state, qt)? {
+            end_pic = true;
             break; // OpEndPic
         }
     }
-    finalise_canvas(canvas, &state)
+    Ok((finalise_canvas(canvas, &state)?, end_pic))
 }
 
 /// One v2 opcode dispatch. Returns `Ok(false)` only on `OpEndPic` —
@@ -2545,17 +2596,17 @@ fn finalise_canvas(canvas: Canvas, state: &PictState) -> Result<PictImage> {
     if !canvas.dirty && state.quicktime.is_empty() {
         return Err(PictError::NoRaster);
     }
-    Ok(PictImage {
-        width: canvas.width,
-        height: canvas.height,
-        pixel_format: PictPixelFormat::Rgba,
-        data: canvas.data,
-        pts: None,
-        header: None,
-        comments: state.comments.clone(),
-        quicktime: state.quicktime.clone(),
-        text_state: state.text_state.clone(),
-    })
+    let stride = canvas.width as usize * 4;
+    let mut img = PictImage::unchecked(
+        canvas.width,
+        canvas.height,
+        PictPixelFormat::Rgba,
+        vec![crate::image::Plane::new(stride, canvas.data)],
+    );
+    img.comments = state.comments.clone();
+    img.quicktime = state.quicktime.clone();
+    img.text_state = state.text_state.clone();
+    Ok(img)
 }
 
 // ---------------------------------------------------------------------------
@@ -3655,14 +3706,16 @@ fn parse_v1_opcodes(
     pic_frame: RectI32,
     mut canvas: Canvas,
     mut state: PictState,
-) -> Result<PictImage> {
+) -> Result<(PictImage, bool)> {
+    let mut end_pic = false;
     while !r.at_eof() {
         let opcode = r.read_u8()? as u16;
         if !dispatch_v1_opcode(r, opcode, &pic_frame, &mut canvas, &mut state)? {
+            end_pic = true;
             break;
         }
     }
-    finalise_canvas(canvas, &state)
+    Ok((finalise_canvas(canvas, &state)?, end_pic))
 }
 
 fn dispatch_v1_opcode(
@@ -4026,72 +4079,5 @@ fn dispatch_v1_opcode(
             "unknown / unsupported v1 opcode 0x{opcode:02X} at offset {} (frame={pic_frame:?})",
             r.pos - 1
         ))),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Registry-feature trait surface.
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "registry")]
-use oxideav_core::Decoder;
-#[cfg(feature = "registry")]
-use oxideav_core::{CodecId, CodecParameters, Frame, Packet, VideoFrame, VideoPlane};
-
-/// Factory registered with the codec registry. Consumes one packet
-/// per whole PICT file and produces one frame.
-#[cfg(feature = "registry")]
-pub fn make_decoder(_params: &CodecParameters) -> oxideav_core::Result<Box<dyn Decoder>> {
-    Ok(Box::new(PictDecoder {
-        codec_id: CodecId::new(crate::CODEC_ID_STR),
-        pending: None,
-        eof: false,
-    }))
-}
-
-#[cfg(feature = "registry")]
-struct PictDecoder {
-    codec_id: CodecId,
-    pending: Option<VideoFrame>,
-    eof: bool,
-}
-
-#[cfg(feature = "registry")]
-impl Decoder for PictDecoder {
-    fn codec_id(&self) -> &CodecId {
-        &self.codec_id
-    }
-    fn send_packet(&mut self, packet: &Packet) -> oxideav_core::Result<()> {
-        let image = parse_pict(&packet.data)?;
-        self.pending = Some(image_to_video_frame(image));
-        Ok(())
-    }
-    fn receive_frame(&mut self) -> oxideav_core::Result<Frame> {
-        match self.pending.take() {
-            Some(f) => Ok(Frame::Video(f)),
-            None => {
-                if self.eof {
-                    Err(oxideav_core::Error::Eof)
-                } else {
-                    Err(oxideav_core::Error::NeedMore)
-                }
-            }
-        }
-    }
-    fn flush(&mut self) -> oxideav_core::Result<()> {
-        self.eof = true;
-        Ok(())
-    }
-}
-
-#[cfg(feature = "registry")]
-fn image_to_video_frame(image: PictImage) -> VideoFrame {
-    let stride = image.stride();
-    VideoFrame {
-        pts: image.pts,
-        planes: vec![VideoPlane {
-            stride,
-            data: image.data,
-        }],
     }
 }

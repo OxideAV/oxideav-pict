@@ -14,6 +14,11 @@
 //!
 //! Every test self-roundtrips through [`parse_pict`].
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
     encode_pict_bits_rect, encode_pict_pack_bits_rect, encode_pict_v1_with, parse_pict, PackType,
@@ -35,10 +40,10 @@ fn v1_packtype_raw_roundtrip() {
     for y in 0..height as usize {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
-            assert_eq!(img.data[off], rgba[off], "R ({x},{y})");
-            assert_eq!(img.data[off + 1], rgba[off + 1], "G ({x},{y})");
-            assert_eq!(img.data[off + 2], rgba[off + 2], "B ({x},{y})");
-            assert_eq!(img.data[off + 3], 0xFF, "A ({x},{y})");
+            assert_eq!(img.data()[off], rgba[off], "R ({x},{y})");
+            assert_eq!(img.data()[off + 1], rgba[off + 1], "G ({x},{y})");
+            assert_eq!(img.data()[off + 2], rgba[off + 2], "B ({x},{y})");
+            assert_eq!(img.data()[off + 3], 0xFF, "A ({x},{y})");
         }
     }
 }
@@ -55,9 +60,9 @@ fn v1_packtype_packed24_roundtrip() {
     for y in 0..height as usize {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
-            assert_eq!(img.data[off], rgba[off], "R ({x},{y})");
-            assert_eq!(img.data[off + 1], rgba[off + 1], "G ({x},{y})");
-            assert_eq!(img.data[off + 2], rgba[off + 2], "B ({x},{y})");
+            assert_eq!(img.data()[off], rgba[off], "R ({x},{y})");
+            assert_eq!(img.data()[off + 1], rgba[off + 1], "G ({x},{y})");
+            assert_eq!(img.data()[off + 2], rgba[off + 2], "B ({x},{y})");
         }
     }
 }
@@ -93,13 +98,13 @@ fn v1_packtype_rle16_roundtrip() {
             // << 3 | (px[0] >> 3) >> 2 — round-trip preserves only the
             // top 5 bits.  Check the channel value is at most 7 off
             // from the input (one quantum).
-            let diff_r = (img.data[off] as i32 - rgba[off] as i32).abs();
-            let diff_g = (img.data[off + 1] as i32 - rgba[off + 1] as i32).abs();
-            let diff_b = (img.data[off + 2] as i32 - rgba[off + 2] as i32).abs();
+            let diff_r = (img.data()[off] as i32 - rgba[off] as i32).abs();
+            let diff_g = (img.data()[off + 1] as i32 - rgba[off + 1] as i32).abs();
+            let diff_b = (img.data()[off + 2] as i32 - rgba[off + 2] as i32).abs();
             assert!(
                 diff_r <= 7,
                 "R ({x},{y}): {} vs {}",
-                img.data[off],
+                img.data()[off],
                 rgba[off]
             );
             assert!(diff_g <= 7, "G ({x},{y})");
@@ -128,10 +133,10 @@ fn v1_packtype_component_packbits_roundtrip() {
     for y in 0..height as usize {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
-            assert_eq!(img.data[off], 0x77);
-            assert_eq!(img.data[off + 1], 0x88);
-            assert_eq!(img.data[off + 2], 0x99);
-            assert_eq!(img.data[off + 3], 0xFF);
+            assert_eq!(img.data()[off], 0x77);
+            assert_eq!(img.data()[off + 1], 0x88);
+            assert_eq!(img.data()[off + 2], 0x99);
+            assert_eq!(img.data()[off + 3], 0xFF);
         }
     }
 }
@@ -189,9 +194,9 @@ fn bits_rect_all_white_roundtrip() {
     for y in 0..height as usize {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
-            assert_eq!(img.data[off], 0xFF, "white R ({x},{y})");
-            assert_eq!(img.data[off + 1], 0xFF, "white G ({x},{y})");
-            assert_eq!(img.data[off + 2], 0xFF, "white B ({x},{y})");
+            assert_eq!(img.data()[off], 0xFF, "white R ({x},{y})");
+            assert_eq!(img.data()[off + 1], 0xFF, "white G ({x},{y})");
+            assert_eq!(img.data()[off + 2], 0xFF, "white B ({x},{y})");
         }
     }
 }
@@ -209,9 +214,9 @@ fn bits_rect_all_black_roundtrip() {
     for y in 0..height as usize {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
-            assert_eq!(img.data[off], 0x00, "black R ({x},{y})");
-            assert_eq!(img.data[off + 1], 0x00, "black G ({x},{y})");
-            assert_eq!(img.data[off + 2], 0x00, "black B ({x},{y})");
+            assert_eq!(img.data()[off], 0x00, "black R ({x},{y})");
+            assert_eq!(img.data()[off + 1], 0x00, "black G ({x},{y})");
+            assert_eq!(img.data()[off + 2], 0x00, "black B ({x},{y})");
         }
     }
 }
@@ -239,7 +244,7 @@ fn bits_rect_checkerboard_roundtrip() {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
             let expected = if (x + y) % 2 == 0 { 0x00 } else { 0xFF };
-            assert_eq!(img.data[off], expected, "({x},{y})");
+            assert_eq!(img.data()[off], expected, "({x},{y})");
         }
     }
 }
@@ -267,7 +272,7 @@ fn pack_bits_rect_wide_image_compresses() {
     for y in 0..height as usize {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
-            assert_eq!(img.data[off], 0xFF, "white R ({x},{y})");
+            assert_eq!(img.data()[off], 0xFF, "white R ({x},{y})");
         }
     }
 }
@@ -300,10 +305,10 @@ fn bits_rect_luma_threshold() {
     ];
     let enc = encode_pict_bits_rect(width, height, &rgba).unwrap();
     let img = parse_pict(&enc).unwrap();
-    assert_eq!(img.data[0], 0x00, "red → black"); // x=0
-    assert_eq!(img.data[4], 0xFF, "green → white"); // x=1
-    assert_eq!(img.data[8], 0x00, "blue → black"); // x=2
-    assert_eq!(img.data[12], 0xFF, "grey → white"); // x=3
+    assert_eq!(img.data()[0], 0x00, "red → black"); // x=0
+    assert_eq!(img.data()[4], 0xFF, "green → white"); // x=1
+    assert_eq!(img.data()[8], 0x00, "blue → black"); // x=2
+    assert_eq!(img.data()[12], 0xFF, "grey → white"); // x=3
 }
 
 // ---------------------------------------------------------------------------
@@ -329,8 +334,8 @@ fn builder_raster_alone_decodes() {
     for y in 0..height as usize {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
-            assert_eq!(img.data[off], 0xCC, "R ({x},{y})");
-            assert_eq!(img.data[off + 1], 0x00, "G ({x},{y})");
+            assert_eq!(img.data()[off], 0xCC, "R ({x},{y})");
+            assert_eq!(img.data()[off + 1], 0x00, "G ({x},{y})");
         }
     }
 }
@@ -356,14 +361,14 @@ fn builder_drawing_under_raster() {
     let img = parse_pict(&bytes).expect("decode failed");
     // Inside the raster window: yellow.
     let off = (5 * 16 + 5) * 4;
-    assert_eq!(img.data[off], 0xFF, "yellow R inside raster");
-    assert_eq!(img.data[off + 1], 0xFF, "yellow G inside raster");
-    assert_eq!(img.data[off + 2], 0x00, "yellow B inside raster");
+    assert_eq!(img.data()[off], 0xFF, "yellow R inside raster");
+    assert_eq!(img.data()[off + 1], 0xFF, "yellow G inside raster");
+    assert_eq!(img.data()[off + 2], 0x00, "yellow B inside raster");
     // Outside the raster window but inside the green paint: green.
     let off = (16 + 1) * 4; // (y=1, x=1)
-    assert_eq!(img.data[off], 0x00, "green R outside raster");
-    assert_eq!(img.data[off + 1], 0xFF, "green G outside raster");
-    assert_eq!(img.data[off + 2], 0x00, "green B outside raster");
+    assert_eq!(img.data()[off], 0x00, "green R outside raster");
+    assert_eq!(img.data()[off + 1], 0xFF, "green G outside raster");
+    assert_eq!(img.data()[off + 2], 0x00, "green B outside raster");
 }
 
 #[test]
@@ -382,13 +387,13 @@ fn builder_raster_then_drawing_overlays() {
     let img = parse_pict(&bytes).expect("decode failed");
     // Centre pixel: red (overlay wins).
     let off = (8 * 16 + 8) * 4;
-    assert_eq!(img.data[off], 0xFF, "centre overlay R");
-    assert_eq!(img.data[off + 1], 0x00, "centre overlay G");
-    assert_eq!(img.data[off + 2], 0x00, "centre overlay B");
+    assert_eq!(img.data()[off], 0xFF, "centre overlay R");
+    assert_eq!(img.data()[off + 1], 0x00, "centre overlay G");
+    assert_eq!(img.data()[off + 2], 0x00, "centre overlay B");
     // Edge pixel: blue (raster shows through outside the overlay).
     let off = 0; // (y=0, x=0) flat-index 0
-    assert_eq!(img.data[off], 0x00, "edge raster R");
-    assert_eq!(img.data[off + 2], 0xFF, "edge raster B");
+    assert_eq!(img.data()[off], 0x00, "edge raster R");
+    assert_eq!(img.data()[off + 2], 0xFF, "edge raster B");
 }
 
 #[test]
@@ -428,15 +433,15 @@ fn builder_drawing_and_packtype3_raster() {
     // (0xFF, 0xC0, 0x00) becomes A1R5G5B5 = (1, 31, 24, 0) and
     // decodes to (~0xFF, ~0xC6, 0x00).  Allow ±8 quantisation slop.
     let off = (4 * 8 + 4) * 4;
-    let diff_r = (img.data[off] as i32 - 0xFF).abs();
-    let diff_g = (img.data[off + 1] as i32 - 0xC0).abs();
-    let diff_b = img.data[off + 2] as i32; // expected 0
+    let diff_r = (img.data()[off] as i32 - 0xFF).abs();
+    let diff_g = (img.data()[off + 1] as i32 - 0xC0).abs();
+    let diff_b = img.data()[off + 2] as i32; // expected 0
     let diff_b = diff_b.abs();
     assert!(
         diff_r <= 8 && diff_g <= 8 && diff_b <= 8,
         "5-bit quant slop: ({:#x}, {:#x}, {:#x})",
-        img.data[off],
-        img.data[off + 1],
-        img.data[off + 2]
+        img.data()[off],
+        img.data()[off + 1],
+        img.data()[off + 2]
     );
 }

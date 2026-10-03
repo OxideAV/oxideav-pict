@@ -138,7 +138,7 @@ pub const OP_UNCOMPRESSED_QUICKTIME: u16 = 0x8201;
 /// **not-determined** (`0x0017..=0x0019` only).
 ///
 /// This helper covers the *reserved* families — the defined opcodes
-/// are handled by dedicated `match` arms / [`fixed_operand_size`] in
+/// are handled by dedicated `match` arms / `fixed_operand_size` in
 /// the decoder and probe. A `Some(ReservedV2Skip)` return tells the
 /// caller exactly how to walk past the payload so an unknown opcode
 /// doesn't terminate the rest of the picture.

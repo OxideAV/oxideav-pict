@@ -21,13 +21,18 @@
 //!    of each boundary point (the spec's pen-hang rule);
 //! 3. a non-solid `PnPat` outline stipples foreground / background.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{parse_pict, PictImage};
 
 /// Read pixel `(x, y)` as `(r, g, b)`.
 fn pix(img: &PictImage, x: u32, y: u32) -> (u8, u8, u8) {
     let off = ((y * img.width + x) * 4) as usize;
-    (img.data[off], img.data[off + 1], img.data[off + 2])
+    (img.data()[off], img.data()[off + 1], img.data()[off + 2])
 }
 
 const INK: (u8, u8, u8) = (0xE0, 0x20, 0x40);

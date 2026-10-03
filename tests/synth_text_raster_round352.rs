@@ -12,6 +12,11 @@
 //! RGBA canvas, asserting that visible ink lands inside the expected
 //! glyph box and that whitespace / out-of-text regions stay paper-white.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::font::{measure_text, TextScale, ADVANCE, GLYPH_H};
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::PictTextFace;
@@ -40,14 +45,14 @@ fn is_ink(img: &PictImage, x: u32, y: u32) -> bool {
         return false;
     }
     let off = ((y * img.width + x) * 4) as usize;
-    let (r, g, b) = (img.data[off], img.data[off + 1], img.data[off + 2]);
+    let (r, g, b) = (img.data()[off], img.data()[off + 1], img.data()[off + 2]);
     r < 40 && g < 40 && b < 40
 }
 
 /// True if pixel `(x, y)` is (near-)white paper.
 fn is_paper(img: &PictImage, x: u32, y: u32) -> bool {
     let off = ((y * img.width + x) * 4) as usize;
-    let (r, g, b) = (img.data[off], img.data[off + 1], img.data[off + 2]);
+    let (r, g, b) = (img.data()[off], img.data()[off + 1], img.data()[off + 2]);
     r > 215 && g > 215 && b > 215
 }
 
@@ -151,7 +156,7 @@ fn fg_color_inks_the_glyphs() {
     for y in (14 - GLYPH_H) as u32..15 {
         for x in 6..6 + ADVANCE as u32 {
             let off = ((y * img.width + x) * 4) as usize;
-            if img.data[off] > 200 && img.data[off + 1] < 60 && img.data[off + 2] < 60 {
+            if img.data()[off] > 200 && img.data()[off + 1] < 60 && img.data()[off + 2] < 60 {
                 red = true;
             }
         }

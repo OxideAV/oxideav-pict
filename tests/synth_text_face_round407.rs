@@ -14,6 +14,11 @@
 //! These tests drive full PICT v2 streams (`TxFace $0004` + `LongText
 //! $0028`) through `parse_pict` and inspect the rendered RGBA canvas.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::font::{measure_text, TextScale};
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{
@@ -48,7 +53,7 @@ fn ink_set(img: &PictImage) -> std::collections::BTreeSet<(i32, i32)> {
     for y in 0..img.height {
         for x in 0..img.width {
             let off = ((y * img.width + x) * 4) as usize;
-            if img.data[off] < 40 && img.data[off + 1] < 40 && img.data[off + 2] < 40 {
+            if img.data()[off] < 40 && img.data()[off + 1] < 40 && img.data()[off + 2] < 40 {
                 s.insert((x as i32, y as i32));
             }
         }
@@ -214,7 +219,7 @@ fn condense_and_extend_move_the_pen() {
 /// Pixel at `(x, y)` as an `(r, g, b)` triple.
 fn px(img: &PictImage, x: u32, y: u32) -> (u8, u8, u8) {
     let off = ((y * img.width + x) * 4) as usize;
-    (img.data[off], img.data[off + 1], img.data[off + 2])
+    (img.data()[off], img.data()[off + 1], img.data()[off + 2])
 }
 
 #[test]

@@ -8,6 +8,11 @@
 //! `build_pix_pat_op_sized` / `PictBuilder::pen_pix_pattern_sized`
 //! encoder helpers so the path is round-trip tested.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{build_pix_pat_op_sized, parse_pict, probe_pict, PictPixelFormat, PixPatSlot};
 
@@ -29,11 +34,11 @@ fn pen_pix_pattern_4x2_tiles() {
 
     assert_eq!(img.width, 8);
     assert_eq!(img.height, 8);
-    assert_eq!(img.pixel_format, PictPixelFormat::Rgba);
+    assert_eq!(img.format, PictPixelFormat::Rgba);
 
     let px = |x: usize, y: usize| {
         let off = (y * img.width as usize + x) * 4;
-        &img.data[off..off + 4]
+        &img.data()[off..off + 4]
     };
 
     // Row 0 (tile row 0) — red across the whole width, including the
@@ -71,7 +76,7 @@ fn pen_pix_pattern_2x4_per_cell() {
 
     let px = |x: usize, y: usize| {
         let off = (y * img.width as usize + x) * 4;
-        &img.data[off..off + 4]
+        &img.data()[off..off + 4]
     };
 
     assert_eq!(px(0, 0), &RED);
@@ -101,7 +106,7 @@ fn pen_pix_pattern_16x16_packbits_rows() {
 
     let px = |x: usize, y: usize| {
         let off = (y * img.width as usize + x) * 4;
-        &img.data[off..off + 4]
+        &img.data()[off..off + 4]
     };
     assert_eq!(px(0, 0), &RED);
     assert_eq!(px(15, 0), &GREEN);
@@ -152,7 +157,7 @@ fn pen_pix_pattern_1x1_solid() {
     for y in 0..4 {
         for x in 0..4 {
             let off = (y * 4 + x) * 4;
-            assert_eq!(&img.data[off..off + 4], &YELLOW);
+            assert_eq!(&img.data()[off..off + 4], &YELLOW);
         }
     }
 }

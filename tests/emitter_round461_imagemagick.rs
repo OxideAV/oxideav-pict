@@ -19,13 +19,18 @@
 //! of the file (`magick out.pict out.png`), against which the crate's
 //! render is byte-identical (AE 0 over 64×48).
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{parse_pict, probe_pict, ProbeTermination};
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/imagemagick_gradient_64x48.pict");
 
 fn px(img: &oxideav_pict::PictImage, x: u32, y: u32) -> [u8; 3] {
     let off = ((y * img.width + x) * 4) as usize;
-    [img.data[off], img.data[off + 1], img.data[off + 2]]
+    [img.data()[off], img.data()[off + 1], img.data()[off + 2]]
 }
 
 #[test]

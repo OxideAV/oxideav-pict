@@ -10,6 +10,11 @@
 //! whole stream — and that the probe terminates exactly as the
 //! decoder would.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
     encode_pict, encode_pict_pack_bits_rect, encode_pict_v1, encode_pict_v1_with, encode_pict_v2,

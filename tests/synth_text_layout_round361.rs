@@ -14,6 +14,11 @@
 //! These tests drive the full `parse_pict` path and inspect the rendered
 //! RGBA canvas + final text pen.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{build_line_justify, build_tx_ratio, build_tx_size, parse_pict, PictImage};
 
@@ -33,7 +38,7 @@ fn is_ink(img: &PictImage, x: u32, y: u32) -> bool {
         return false;
     }
     let off = ((y * img.width + x) * 4) as usize;
-    let (r, g, b) = (img.data[off], img.data[off + 1], img.data[off + 2]);
+    let (r, g, b) = (img.data()[off], img.data()[off + 1], img.data()[off + 2]);
     r < 40 && g < 40 && b < 40
 }
 
@@ -182,7 +187,8 @@ fn identity_ratio_no_justify_matches_plain_draw() {
         "1/1 ratio must not change the pen"
     );
     assert_eq!(
-        plain_img.data, ident_img.data,
+        plain_img.data(),
+        ident_img.data(),
         "1/1 ratio must render identically to no ratio"
     );
 }

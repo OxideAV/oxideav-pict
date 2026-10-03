@@ -56,13 +56,23 @@
 //!
 //! ## Standalone vs registry-integrated
 //!
-//! The crate's default `registry` Cargo feature pulls in `oxideav-core`
-//! and exposes the framework `Decoder` trait surface plus a
-//! [`registry::register`] entry point. Disable the feature
-//! (`default-features = false`) for an `oxideav-core`-free build that
-//! still exposes the standalone [`parse_pict`] API plus crate-local
-//! [`PictImage`] / [`PictPixelFormat`] / [`PictError`] types.
+//! The crate follows the OxideAV image-crate contract
+//! (`IMAGE_CRATE_API`): the root exposes [`probe()`], [`info`],
+//! [`decode`] / [`decode_with`] / [`decode_rgb8`] / [`decode_rgba8`] /
+//! [`decode_from`], [`encode`] / [`encode_rgb8`] / [`encode_rgba8`] /
+//! [`encode_to`], the [`PictImage`] / [`RgbImage`] / [`RgbaImage`] /
+//! [`ImageInfo`] records, [`DecodeOptions`] / [`EncodeOptions`] and
+//! [`PictError`] — all usable with `default-features = false` and no
+//! `oxideav-core`. The default `registry` Cargo feature adds the
+//! framework `Decoder` / `Encoder` adapters (`make_decoder` /
+//! `make_encoder`), the `registry::register` entry point and the
+//! `VideoFrame` bridge. The depth API below the contract — the
+//! read-only [`inspect`] walker, the drawing builders
+//! ([`PictBuilder`] / [`PictV1Builder`]), the monochrome and
+//! indexed-PixMap writers, the typed QuickTime payloads and the
+//! [`decode_with_quicktime`] hook — keeps its own names.
 
+mod api;
 pub mod decoder;
 pub mod encoder;
 pub mod error;
@@ -75,6 +85,7 @@ pub mod image;
 #[doc(hidden)]
 pub mod opcodes;
 pub mod ops;
+pub mod options;
 // internal — exposed for tests/fuzz; not part of the stable API
 #[doc(hidden)]
 pub mod packbits;
@@ -95,16 +106,33 @@ pub mod state;
 /// Codec id for PICT image frames.
 pub const CODEC_ID_STR: &str = "pict";
 
-pub use decoder::{parse_pict, parse_pict_with, MAX_RASTER_BYTES};
+// The image-crate contract vocabulary (IMAGE_CRATE_API).
+#[allow(deprecated)]
+pub use api::probe_pict;
+pub use api::{
+    decode, decode_from, decode_rgb8, decode_rgba8, decode_with, decode_with_quicktime, encode,
+    encode_rgb8, encode_rgba8, encode_to, info, probe,
+};
+pub use decoder::MAX_RASTER_BYTES;
+#[allow(deprecated)]
+pub use decoder::{parse_pict, parse_pict_with};
+#[allow(deprecated)]
+pub use encoder::encode_pict;
+pub use error::Error;
+pub use image::{
+    ColorInfo, ColorRange, ImageInfo, Metadata, PictVersion, PixelFormat, Plane, RgbImage,
+    RgbaImage,
+};
+pub use options::{DecodeOptions, EncodeOptions};
+
 pub use encoder::{
     build_clip_rgn_rect, build_direct_bits_rect_op, build_direct_bits_rect_op_with_mode,
-    build_pix_pat_dither_op, build_pix_pat_op, build_pix_pat_op_sized, encode_pict,
-    encode_pict_bits_rect, encode_pict_bits_rgn, encode_pict_indexed_bits_rect,
-    encode_pict_indexed_bits_rgn, encode_pict_indexed_pack_bits_rect,
-    encode_pict_indexed_pack_bits_rgn, encode_pict_pack_bits_rect, encode_pict_pack_bits_rgn,
-    encode_pict_v1, encode_pict_v1_bits_rect, encode_pict_v1_pack_bits_rect, encode_pict_v1_with,
-    encode_pict_v2, encode_pict_v2_with_clip, pixel_data_sizes, IndexedPixelSize, PackType,
-    PixPatSlot,
+    build_pix_pat_dither_op, build_pix_pat_op, build_pix_pat_op_sized, encode_pict_bits_rect,
+    encode_pict_bits_rgn, encode_pict_indexed_bits_rect, encode_pict_indexed_bits_rgn,
+    encode_pict_indexed_pack_bits_rect, encode_pict_indexed_pack_bits_rgn,
+    encode_pict_pack_bits_rect, encode_pict_pack_bits_rgn, encode_pict_v1,
+    encode_pict_v1_bits_rect, encode_pict_v1_pack_bits_rect, encode_pict_v1_with, encode_pict_v2,
+    encode_pict_v2_with_clip, pixel_data_sizes, IndexedPixelSize, PackType, PixPatSlot,
 };
 pub use error::{PictError, Result};
 pub use header::{Fixed, PictHeader};
@@ -123,7 +151,7 @@ pub use ops::{
     build_tx_font, build_tx_mode, build_tx_ratio, build_tx_size, build_uncompressed_quicktime,
     build_uncompressed_quicktime_image, PictBuilder, PictV1Builder, Verb,
 };
-pub use probe::{probe_pict, PictProbe, ProbeQuickTime, ProbeRect, ProbeTermination, ProbeVersion};
+pub use probe::{inspect, PictProbe, ProbeQuickTime, ProbeRect, ProbeTermination, ProbeVersion};
 pub use qtimage::{
     DecodedQuickTimeImage, DefaultQuickTimeDecoder, QuickTimeImageDecoder, QuickTimeRender,
     RawQuickTimeDecoder,
@@ -143,6 +171,7 @@ pub use state::{
 
 #[cfg(feature = "registry")]
 pub use registry::{
-    __oxideav_entry, quicktime_codec_parameters, register, register_codecs, register_containers,
+    __oxideav_entry, image_into_video_frame, make_decoder, make_encoder,
+    quicktime_codec_parameters, register, register_codecs, register_containers,
     resolve_quicktime_codec, RegistryQuickTimeDecoder,
 };

@@ -19,6 +19,11 @@
 //! header demanding a multi-gigabyte canvas or pixel buffer is
 //! rejected with `PictError::InvalidData` before the allocation.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, PictV1Builder};
 use oxideav_pict::{
     build_fg_color_code, build_rect_op, build_short_line, build_tx_face, build_tx_mode,

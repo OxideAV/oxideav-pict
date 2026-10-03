@@ -17,6 +17,11 @@
 //! reduces to "emit the target RGB at every cell" with zero
 //! approximation error.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
     build_pix_pat_dither_op, parse_pict, probe_pict, PictImage, PixPatSlot, ProbeTermination,
@@ -25,10 +30,10 @@ use oxideav_pict::{
 fn at(img: &PictImage, x: u32, y: u32) -> [u8; 4] {
     let off = ((y * img.width + x) * 4) as usize;
     [
-        img.data[off],
-        img.data[off + 1],
-        img.data[off + 2],
-        img.data[off + 3],
+        img.data()[off],
+        img.data()[off + 1],
+        img.data()[off + 2],
+        img.data()[off + 3],
     ]
 }
 

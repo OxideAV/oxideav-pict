@@ -27,6 +27,11 @@
 //! [`PictBuilder`] methods ([`tx_font`] … [`op_color`]) round-trip
 //! through `parse_pict` / `probe_pict` bit-for-bit.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
     build_ch_extra, build_def_hilite, build_hilite_color, build_hilite_mode, build_op_color,

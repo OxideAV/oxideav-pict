@@ -16,6 +16,11 @@
 //! `$23` v1) through the pen pattern / pattern mode (book page 3-81),
 //! covered by the `line_*` tests below.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{ops::PictBuilder, ops::Verb, parse_pict};
 
 /// A vertical-stripe pen pattern (`0xAA` rows → foreground on even
@@ -38,7 +43,7 @@ fn frame_round_rect_honours_pen_pattern() {
     // column is inked, the odd neighbour is paper.
     let px = |x: usize, y: usize| {
         let off = (y * 16 + x) * 4;
-        [img.data[off], img.data[off + 1], img.data[off + 2]]
+        [img.data()[off], img.data()[off + 1], img.data()[off + 2]]
     };
     assert_eq!(px(6, 1), [0x10, 0x20, 0x30], "even-x boundary cell inked");
     assert_eq!(px(7, 1), [0xFF, 0xFF, 0xFF], "odd-x boundary cell paper");
@@ -61,7 +66,7 @@ fn frame_oval_honours_pen_size() {
     let thick_img = parse_pict(&thick.finish()).expect("thick oval");
 
     let inked = |img: &oxideav_pict::PictImage| {
-        img.data
+        img.data()
             .chunks_exact(4)
             .filter(|p| p[0] == 0 && p[1] == 0 && p[2] == 0)
             .count()
@@ -95,7 +100,8 @@ fn frame_oval_pen_mode_xor_round_trips() {
     let zero = build(0);
     let twice = build(2);
     assert_eq!(
-        zero.data, twice.data,
+        zero.data(),
+        twice.data(),
         "two patXor oval frames cancel to the blank canvas"
     );
 }
@@ -113,7 +119,7 @@ fn frame_arc_honours_pen_pattern() {
 
     let img = parse_pict(&bytes).expect("decode patterned frameArc");
     let inked = img
-        .data
+        .data()
         .chunks_exact(4)
         .filter(|p| p[0] == 0x80 && p[1] == 0x40 && p[2] == 0x20)
         .count();
@@ -126,7 +132,7 @@ fn frame_arc_honours_pen_pattern() {
     solid.arc(Verb::Frame, 2, 2, 14, 14, 0, 90);
     let solid_img = parse_pict(&solid.finish()).expect("solid arc");
     let solid_inked = solid_img
-        .data
+        .data()
         .chunks_exact(4)
         .filter(|p| p[0] == 0x80 && p[1] == 0x40 && p[2] == 0x20)
         .count();
@@ -151,7 +157,7 @@ fn line_honours_pen_pattern() {
     let img = parse_pict(&bytes).expect("decode patterned line");
     let px = |x: usize, y: usize| {
         let off = (y * 16 + x) * 4;
-        [img.data[off], img.data[off + 1], img.data[off + 2]]
+        [img.data()[off], img.data()[off + 1], img.data()[off + 2]]
     };
     // Along the line (y == 4), even x is inked, odd x is paper.
     assert_eq!(px(2, 4), [0x11, 0x22, 0x33], "even-x line cell inked");
@@ -175,8 +181,8 @@ fn line_pen_mode_xor_round_trips() {
         parse_pict(&b.finish()).expect("decode xor line")
     };
     assert_eq!(
-        build(0).data,
-        build(2).data,
+        build(0).data(),
+        build(2).data(),
         "two patXor lines cancel to the backdrop"
     );
 }
@@ -205,13 +211,13 @@ fn default_pen_frames_unchanged() {
         // Outline-only: the centre pixel must remain paper white.
         let off = (8 * 16 + 8) * 4;
         assert_eq!(
-            &img.data[off..off + 3],
+            &img.data()[off..off + 3],
             &[0xFF, 0xFF, 0xFF],
             "shape {shape}: interior unaffected by frame verb"
         );
         // At least one black boundary pixel must exist.
         let any_black = img
-            .data
+            .data()
             .chunks_exact(4)
             .any(|p| p[0] == 0 && p[1] == 0 && p[2] == 0);
         assert!(any_black, "shape {shape}: outline drawn");

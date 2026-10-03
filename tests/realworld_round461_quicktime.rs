@@ -21,10 +21,15 @@
 //!   (0.375555 over RGB, measured 2026-09-25; the crate's own render
 //!   measured 0.375545, 45.6 dB PSNR against it).
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use std::path::PathBuf;
 
 use oxideav_pict::state::RectI32;
-use oxideav_pict::{parse_pict, probe_pict, QuickTimePayload, QuickTimeRender};
+use oxideav_pict::{parse_pict, probe_pict, QuickTimePayload};
 
 fn sample() -> Option<Vec<u8>> {
     let dir = std::env::var_os("OXIDEAV_PICT_SAMPLES")?;
@@ -84,6 +89,7 @@ fn jd_snowy_blog_structure_matches_the_fixtures_note() {
 #[cfg(feature = "registry")]
 #[test]
 fn jd_snowy_blog_renders_and_hides_the_warning_lines() {
+    use oxideav_pict::QuickTimeRender;
     let Some(bytes) = sample() else {
         return;
     };
@@ -101,15 +107,15 @@ fn jd_snowy_blog_renders_and_hides_the_warning_lines() {
     // (drawing it moved the mean by more than that) yet loose enough
     // for a different JPEG decoder's rounding.
     let sum: u64 = img
-        .data
+        .data()
         .chunks_exact(4)
         .map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]))
         .sum();
-    let mean = sum as f64 / (img.data.len() as f64 / 4.0 * 3.0 * 255.0);
+    let mean = sum as f64 / (img.data().len() as f64 / 4.0 * 3.0 * 255.0);
     assert!((mean - 0.375_555).abs() < 0.005, "mean {mean}");
     // Not a flat image: the photo has real contrast.
     let (mut lo, mut hi) = (255u8, 0u8);
-    for p in img.data.chunks_exact(4) {
+    for p in img.data().chunks_exact(4) {
         lo = lo.min(p[1]);
         hi = hi.max(p[1]);
     }

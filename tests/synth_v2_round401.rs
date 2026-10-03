@@ -14,6 +14,11 @@
 //! equivalence relations between the delta forms (`DHText dh` ==
 //! `DHDVText (dh, 0)`, `DVText dv` == `DHDVText (0, dv)`).
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::font::{measure_text, TextScale, GLYPH_H};
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::PictTextFace;
@@ -28,7 +33,7 @@ fn is_ink(img: &PictImage, x: u32, y: u32) -> bool {
         return false;
     }
     let off = ((y * img.width + x) * 4) as usize;
-    let (r, g, b) = (img.data[off], img.data[off + 1], img.data[off + 2]);
+    let (r, g, b) = (img.data()[off], img.data()[off + 1], img.data()[off + 2]);
     r < 40 && g < 40 && b < 40
 }
 
@@ -165,7 +170,11 @@ fn dh_text_matches_dhdv_text_with_zero_dv() {
 
     let i1 = parse_pict(&b1.finish()).unwrap();
     let i2 = parse_pict(&b2.finish()).unwrap();
-    assert_eq!(i1.data, i2.data, "DHText(dh) must equal DHDVText(dh, 0)");
+    assert_eq!(
+        i1.data(),
+        i2.data(),
+        "DHText(dh) must equal DHDVText(dh, 0)"
+    );
     assert_eq!(i1.text_state.text_pen, i2.text_state.text_pen);
     // Both really drew a second glyph right of the first.
     assert!(count_ink(&i1, 16, 8, 120, 17) >= 5);
@@ -186,7 +195,11 @@ fn dv_text_matches_dhdv_text_with_zero_dh() {
 
     let i1 = parse_pict(&b1.finish()).unwrap();
     let i2 = parse_pict(&b2.finish()).unwrap();
-    assert_eq!(i1.data, i2.data, "DVText(dv) must equal DHDVText(0, dv)");
+    assert_eq!(
+        i1.data(),
+        i2.data(),
+        "DVText(dv) must equal DHDVText(0, dv)"
+    );
     assert_eq!(i1.text_state.text_pen, i2.text_state.text_pen);
     // The second glyph landed a line below the first.
     assert!(count_ink(&i1, 0, 15, 60, 24) >= 5);

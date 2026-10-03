@@ -10,6 +10,11 @@
 //! of discarding it, and `build_compressed_quicktime` /
 //! `build_uncompressed_quicktime` close the emission gap.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{
     build_compressed_quicktime, build_uncompressed_quicktime, parse_pict, probe_pict,
@@ -57,7 +62,7 @@ fn quicktime_payloads_round_trip_verbatim() {
     assert_eq!(img.quicktime[1].data, raw);
     // The paint between the two QT opcodes really landed.
     let off = (3 * 16 + 3) * 4;
-    assert_eq!(&img.data[off..off + 4], &[0, 0, 0, 255]);
+    assert_eq!(&img.data()[off..off + 4], &[0, 0, 0, 255]);
 
     let p = probe_pict(&bytes).unwrap();
     assert_eq!(p.compressed_quicktime_count, 1);

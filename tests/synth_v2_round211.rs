@@ -7,6 +7,11 @@
 //! to the same RGBA output, with the embedded ColorTable resolving each
 //! pixel index to its palette colour.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{
     encode_pict_indexed_bits_rect, encode_pict_indexed_bits_rgn,
     encode_pict_indexed_pack_bits_rect, encode_pict_indexed_pack_bits_rgn, parse_pict, probe_pict,
@@ -45,12 +50,12 @@ fn eight_bpp_bits_rect_4x4_roundtrip() {
     let img = parse_pict(&pict).expect("decode");
     assert_eq!(img.width, 4);
     assert_eq!(img.height, 4);
-    assert_eq!(img.pixel_format, PictPixelFormat::Rgba);
+    assert_eq!(img.format, PictPixelFormat::Rgba);
     for y in 0..4 {
-        assert_pixel(&img.data, 4, 0, y, RED, "BitsRect 8bpp");
-        assert_pixel(&img.data, 4, 1, y, GRN, "BitsRect 8bpp");
-        assert_pixel(&img.data, 4, 2, y, BLU, "BitsRect 8bpp");
-        assert_pixel(&img.data, 4, 3, y, YEL, "BitsRect 8bpp");
+        assert_pixel(img.data(), 4, 0, y, RED, "BitsRect 8bpp");
+        assert_pixel(img.data(), 4, 1, y, GRN, "BitsRect 8bpp");
+        assert_pixel(img.data(), 4, 2, y, BLU, "BitsRect 8bpp");
+        assert_pixel(img.data(), 4, 3, y, YEL, "BitsRect 8bpp");
     }
 }
 
@@ -74,7 +79,7 @@ fn eight_bpp_pack_bits_rect_8x8_roundtrip() {
     for y in 0..8 {
         for x in 0..8 {
             let expected = if (x + y) % 2 == 0 { RED } else { GRN };
-            assert_pixel(&img.data, 8, x, y, expected, "PackBitsRect 8bpp");
+            assert_pixel(img.data(), 8, x, y, expected, "PackBitsRect 8bpp");
         }
     }
 }
@@ -92,7 +97,7 @@ fn eight_bpp_pack_bits_rect_4x4_falls_back_to_raw() {
     for y in 0..4 {
         for x in 0..4 {
             let expected = if (y * 4 + x) & 1 == 0 { BLK } else { WHT };
-            assert_pixel(&img.data, 4, x, y, expected, "PackBitsRect 4×4 carve-out");
+            assert_pixel(img.data(), 4, x, y, expected, "PackBitsRect 4×4 carve-out");
         }
     }
 }
@@ -119,7 +124,7 @@ fn one_bpp_bits_rect_8x4_roundtrip() {
     for y in 0..4 {
         for x in 0..8 {
             let expected = if ((x / 2) & 1) == 0 { BLK } else { WHT };
-            assert_pixel(&img.data, 8, x, y, expected, "BitsRect 1bpp");
+            assert_pixel(img.data(), 8, x, y, expected, "BitsRect 1bpp");
         }
     }
 }
@@ -144,10 +149,10 @@ fn two_bpp_bits_rect_4x4_roundtrip() {
     let pict = encode_pict_indexed_bits_rect(4, 4, &indices, &palette, IndexedPixelSize::TwoBpp)
         .expect("encode");
     let img = parse_pict(&pict).expect("decode");
-    assert_pixel(&img.data, 4, 0, 0, RED, "2bpp TL");
-    assert_pixel(&img.data, 4, 3, 0, GRN, "2bpp TR");
-    assert_pixel(&img.data, 4, 0, 3, BLU, "2bpp BL");
-    assert_pixel(&img.data, 4, 3, 3, YEL, "2bpp BR");
+    assert_pixel(img.data(), 4, 0, 0, RED, "2bpp TL");
+    assert_pixel(img.data(), 4, 3, 0, GRN, "2bpp TR");
+    assert_pixel(img.data(), 4, 0, 3, BLU, "2bpp BL");
+    assert_pixel(img.data(), 4, 3, 3, YEL, "2bpp BR");
 }
 
 #[test]
@@ -167,9 +172,9 @@ fn four_bpp_bits_rect_8x2_roundtrip() {
     let pict = encode_pict_indexed_bits_rect(8, 2, &indices, &palette, IndexedPixelSize::FourBpp)
         .expect("encode");
     let img = parse_pict(&pict).expect("decode");
-    assert_pixel(&img.data, 8, 0, 0, RED, "4bpp col0");
-    assert_pixel(&img.data, 8, 4, 0, BLK, "4bpp col4");
-    assert_pixel(&img.data, 8, 7, 0, [0, 0x80, 0, 0xFF], "4bpp col7");
+    assert_pixel(img.data(), 8, 0, 0, RED, "4bpp col0");
+    assert_pixel(img.data(), 8, 4, 0, BLK, "4bpp col4");
+    assert_pixel(img.data(), 8, 7, 0, [0, 0x80, 0, 0xFF], "4bpp col7");
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +204,7 @@ fn eight_bpp_pack_bits_rect_16x4_packbits_path() {
                 2 => BLU,
                 _ => BLK,
             };
-            assert_pixel(&img.data, 16, x, y, expected, "PackBitsRect 16×4");
+            assert_pixel(img.data(), 16, x, y, expected, "PackBitsRect 16×4");
         }
     }
 }
@@ -226,7 +231,7 @@ fn eight_bpp_bits_rgn_4x4_roundtrip() {
     for y in 0..4 {
         let expected = if (y & 1) == 0 { RED } else { GRN };
         for x in 0..4 {
-            assert_pixel(&img.data, 4, x, y, expected, "BitsRgn full clip");
+            assert_pixel(img.data(), 4, x, y, expected, "BitsRgn full clip");
         }
     }
 }
@@ -247,11 +252,11 @@ fn eight_bpp_pack_bits_rgn_8x8_with_clip() {
     .expect("encode");
     let img = parse_pict(&pict).expect("decode");
     // Inside the clip box: red.
-    assert_pixel(&img.data, 8, 3, 3, RED, "inside clip");
-    assert_pixel(&img.data, 8, 5, 5, RED, "inside clip");
+    assert_pixel(img.data(), 8, 3, 3, RED, "inside clip");
+    assert_pixel(img.data(), 8, 5, 5, RED, "inside clip");
     // Outside the clip box: paper white (the canvas default).
-    assert_pixel(&img.data, 8, 0, 0, WHT, "outside clip TL");
-    assert_pixel(&img.data, 8, 7, 7, WHT, "outside clip BR");
+    assert_pixel(img.data(), 8, 0, 0, WHT, "outside clip TL");
+    assert_pixel(img.data(), 8, 7, 7, WHT, "outside clip BR");
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +350,6 @@ fn eight_bpp_accepts_full_256_entry_palette() {
     assert_eq!(img.width, 4);
     // First pixel index = 0 → palette[0] = [0,0,0,0xFF]; last pixel
     // index = 15 * 17 = 255 → palette[255] = [255,0,0,0xFF].
-    assert_pixel(&img.data, 4, 0, 0, [0, 0, 0, 0xFF], "first");
-    assert_pixel(&img.data, 4, 3, 3, [0xFF, 0, 0, 0xFF], "last");
+    assert_pixel(img.data(), 4, 0, 0, [0, 0, 0, 0xFF], "first");
+    assert_pixel(img.data(), 4, 3, 3, [0xFF, 0, 0, 0xFF], "last");
 }

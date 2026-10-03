@@ -8,6 +8,11 @@
 //! BitMap rasters in strict Table-A-3 form, including footnote `‡`
 //! (`$90` only when `rowBytes < 8`).
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{
     encode_pict_v1_bits_rect, encode_pict_v1_pack_bits_rect, parse_pict, probe_pict, PictTextState,
     ProbeVersion,
@@ -40,7 +45,7 @@ fn v1_bits_rect_round_trips_narrow_bitmap() {
     let img = parse_pict(&bytes).unwrap();
     assert_eq!((img.width, img.height), (16, 8));
     // 1-bpp threshold reproduces the checker exactly.
-    for (i, px) in img.data.chunks_exact(4).enumerate() {
+    for (i, px) in img.data().chunks_exact(4).enumerate() {
         let (x, y) = (i % 16, i / 16);
         let want = if (x + y) % 2 == 0 { 0x00 } else { 0xFF };
         assert_eq!(px[0], want, "at ({x},{y})");
@@ -59,7 +64,7 @@ fn v1_bits_rect_rejects_wide_rows_per_footnote() {
     let bytes = encode_pict_v1_pack_bits_rect(64, 4, &rgba).unwrap();
     let img = parse_pict(&bytes).unwrap();
     assert_eq!((img.width, img.height), (64, 4));
-    for (i, px) in img.data.chunks_exact(4).enumerate() {
+    for (i, px) in img.data().chunks_exact(4).enumerate() {
         let (x, y) = (i % 64, i / 64);
         let want = if (x + y) % 2 == 0 { 0x00 } else { 0xFF };
         assert_eq!(px[0], want, "at ({x},{y})");

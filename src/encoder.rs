@@ -24,7 +24,7 @@
 //!   mix drawing primitives + raster in the same v2 stream.
 //!
 //! Cross-validation: every output produced by this module decodes
-//! cleanly via [`crate::decoder::parse_pict`].
+//! cleanly via [`crate::decode`].
 //!
 //! Round 211 adds the **indexed-PixMap** variants of the four BitMap /
 //! PackBitsRect / region opcodes (Inside Macintosh §A-3 footnote `§`:
@@ -37,7 +37,8 @@
 //! follow-up.
 
 use crate::error::{PictError, Result};
-use crate::header::PictHeader;
+use crate::header::{Fixed, PictHeader};
+use crate::image::{PictComment, PictVersion};
 use crate::packbits;
 use crate::state::RectI32;
 
@@ -80,11 +81,11 @@ pub enum PackType {
 // v2 encoder (default public API).
 // ---------------------------------------------------------------------------
 
-/// Encode an RGBA8 raster (`width × height × 4 bytes`, row-major) as a
-/// PICT **v2** byte stream using `packType=1` raw pixel data.
-///
-/// Equivalent to `encode_pict_v2(width, height, data, PackType::Raw)`.
-/// Kept for API symmetry with round 2.
+/// The pre-contract name of [`crate::encode_rgba8`] with
+/// [`EncodeOptions::default`](crate::EncodeOptions::default) (v2,
+/// `packType` 1, launch stub). Equivalent to
+/// `encode_pict_v2(width, height, data, PackType::Raw)`.
+#[deprecated(note = "use oxideav_pict::encode_rgba8 (IMAGE_CRATE_API)")]
 pub fn encode_pict(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
     encode_pict_v2(width, height, data, PackType::Raw)
 }
@@ -99,79 +100,194 @@ pub fn encode_pict(width: u32, height: u32, data: &[u8]) -> Result<Vec<u8>> {
 ///   PICT v2 rowBytes limit (16 383 bytes per row).
 pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> Result<Vec<u8>> {
     validate_dims(width, height, data)?;
+    let framing = Framing::legacy(PictVersion::V2, pack, width, height);
+    encode_direct_bits(width, height, data, &framing)
+}
+
+// ---------------------------------------------------------------------------
+// Shared DirectBitsRect file writer.
+// ---------------------------------------------------------------------------
+
+/// Everything but the pixels of a single-`DirectBitsRect` PICT file:
+/// the framing [`crate::encode`] derives from its
+/// [`EncodeOptions`](crate::EncodeOptions) + image, and the fixed
+/// shapes the pre-contract `encode_pict_*` functions always wrote.
+pub(crate) struct Framing<'a> {
+    pub version: PictVersion,
+    pub pack: PackType,
+    /// Prepend the 512-byte launch stub.
+    pub stub: bool,
+    /// `picFrame` `(top, left)`.
+    pub origin: (i16, i16),
+    /// PixMap `hRes` / `vRes` (and the extended-v2 header's).
+    pub resolution: (Fixed, Fixed),
+    /// `true` → extended-v2 `HeaderOp` (`version = -2`), `false` →
+    /// plain v2 (`version = -1`). Ignored for v1.
+    pub extended_header: bool,
+    /// Rectangular `ClipRgn` emitted right after the header.
+    pub clip: Option<[i16; 4]>,
+    /// Picture Comments emitted after the clip, before the raster.
+    pub comments: &'a [PictComment],
+}
+
+impl Framing<'static> {
+    /// What `encode_pict_v2` / `encode_pict_v1_with` always wrote: stub
+    /// for v2 only, frame at the origin, 72 dpi, extended header, no
+    /// clip, no comments.
+    pub(crate) fn legacy(version: PictVersion, pack: PackType, _width: u32, _height: u32) -> Self {
+        Self {
+            version,
+            pack,
+            stub: matches!(version, PictVersion::V2),
+            origin: (0, 0),
+            resolution: (Fixed::SEVENTY_TWO_DPI, Fixed::SEVENTY_TWO_DPI),
+            extended_header: true,
+            clip: None,
+            comments: &[],
+        }
+    }
+}
+
+/// Write one RGBA8 raster (`width × height × 4` bytes, already
+/// validated) as a PICT whose only drawing is a `DirectBitsRect`.
+pub(crate) fn encode_direct_bits(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    f: &Framing<'_>,
+) -> Result<Vec<u8>> {
+    let (top, left) = f.origin;
+    let bottom = (top as i32)
+        .checked_add(height as i32)
+        .filter(|v| *v <= i16::MAX as i32)
+        .ok_or_else(|| {
+            PictError::invalid(format!(
+                "encode: picFrame top {top} + height {height} exceeds the i16 coordinate range"
+            ))
+        })? as i16;
+    let right = (left as i32)
+        .checked_add(width as i32)
+        .filter(|v| *v <= i16::MAX as i32)
+        .ok_or_else(|| {
+            PictError::invalid(format!(
+                "encode: picFrame left {left} + width {width} exceeds the i16 coordinate range"
+            ))
+        })? as i16;
 
     // For packType 3 the on-disk pixel is a 16-bit u16; for the other
     // packTypes it's 32 bits. `row_bytes_raw` is the rowBytes value
-    // we write into the PixMap header — the *uncompressed* byte
-    // stride per row, in pixel-size units.
-    let row_bytes_raw: usize = match pack {
+    // written into the PixMap header — the *uncompressed* byte stride
+    // per row, in pixel-size units. It must fit the 14-bit field (the
+    // top bit is the PixMap flag, bit 14 is reserved).
+    let row_bytes_raw: usize = match f.pack {
         PackType::Rle16 => width as usize * 2,
         _ => width as usize * 4,
     };
-    let row_bytes_disk: usize = match pack {
-        PackType::Raw => width as usize * 4,
-        PackType::Packed24 => width as usize * 3,
-        PackType::Rle16 => width as usize * 2, // post-PackBits byte count varies
-        PackType::ComponentPackBits => width as usize * 4,
-    };
-    if row_bytes_disk > 0x3FFF {
+    if row_bytes_raw > 0x3FFF {
         return Err(PictError::invalid(format!(
-            "encode: rowBytes {row_bytes_disk} exceeds the 14-bit PICT v2 PixMap limit"
+            "encode: rowBytes {row_bytes_raw} exceeds the 14-bit PICT PixMap limit"
         )));
     }
-
-    let pack_type_word: u16 = match pack {
+    let pack_type_word: u16 = match f.pack {
         PackType::Raw => 1,
         PackType::Packed24 => 2,
         PackType::Rle16 => 3,
         PackType::ComponentPackBits => 4,
     };
+    let (pixel_size, cmp_size) = match f.pack {
+        PackType::Rle16 => (16u16, 5u16),
+        _ => (32u16, 8u16),
+    };
+    let v1 = matches!(f.version, PictVersion::V1);
 
-    // Conservative capacity (exact for raw, larger than needed for
-    // compressed — Vec will shrink via push).
-    let mut out: Vec<u8> = Vec::with_capacity(512 + 80 + row_bytes_disk * height as usize + 4);
-
-    // 512-byte launch-stub prefix.
-    out.extend_from_slice(&[0u8; 512]);
+    let mut out: Vec<u8> =
+        Vec::with_capacity(if f.stub { 512 } else { 0 } + 80 + row_bytes_raw * height as usize + 4);
+    if f.stub {
+        out.extend_from_slice(&[0u8; 512]);
+    }
 
     // Picture record: picSize (0) + picFrame.
     write_u16(&mut out, 0);
-    write_i16(&mut out, 0); // top
-    write_i16(&mut out, 0); // left
-    write_i16(&mut out, height as i16); // bottom
-    write_i16(&mut out, width as i16); // right
+    write_i16(&mut out, top);
+    write_i16(&mut out, left);
+    write_i16(&mut out, bottom);
+    write_i16(&mut out, right);
 
-    // v2 sentinel + headerOp stanza.
-    write_u16(&mut out, 0x0011);
-    write_u16(&mut out, 0x02FF);
-    write_u16(&mut out, 0x0C00);
-    out.extend_from_slice(&extended_v2_header_payload(width, height));
+    let pic_frame = RectI32::from_be(top, left, bottom, right);
+    if v1 {
+        // v1 version stanza: opcode 0x11, version 0x01.
+        out.push(0x11);
+        out.push(0x01);
+    } else {
+        // v2 sentinel + headerOp stanza.
+        write_u16(&mut out, 0x0011);
+        write_u16(&mut out, 0x02FF);
+        write_u16(&mut out, 0x0C00);
+        let header = if f.extended_header {
+            PictHeader::ExtendedV2 {
+                hres: f.resolution.0,
+                vres: f.resolution.1,
+                optimal_source_rect: pic_frame,
+            }
+        } else {
+            PictHeader::v2_from_pic_frame(pic_frame)
+        };
+        out.extend_from_slice(&header.to_wire());
+    }
+
+    if let Some(c) = f.clip {
+        if v1 {
+            let rgn = build_clip_rgn_rect(c[0], c[1], c[2], c[3]);
+            // build_clip_rgn_rect emits the 2-byte v2 opcode word; v1
+            // uses the single byte $01.
+            out.push(0x01);
+            out.extend_from_slice(&rgn[2..]);
+        } else {
+            out.extend_from_slice(&build_clip_rgn_rect(c[0], c[1], c[2], c[3]));
+        }
+    }
+
+    for c in f.comments {
+        let chunk = match (v1, c.is_long) {
+            (false, false) => crate::ops::build_short_comment(c.kind),
+            (false, true) => crate::ops::build_long_comment(c.kind, &c.data)?,
+            (true, false) => crate::ops::build_short_comment_v1(c.kind),
+            (true, true) => crate::ops::build_long_comment_v1(c.kind, &c.data)?,
+        };
+        if !v1 && out.len() % 2 != 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(&chunk);
+    }
 
     // DirectBitsRect opcode.
-    write_u16(&mut out, 0x009A);
+    if v1 {
+        out.push(0x9A);
+    } else {
+        if out.len() % 2 != 0 {
+            out.push(0);
+        }
+        write_u16(&mut out, 0x009A);
+    }
     write_u32(&mut out, 0x000000FF); // baseAddr placeholder
     write_u16(&mut out, (row_bytes_raw as u16) | 0x8000); // rowBytes with PixMap flag
 
     // bounds.
-    write_i16(&mut out, 0);
-    write_i16(&mut out, 0);
-    write_i16(&mut out, height as i16);
-    write_i16(&mut out, width as i16);
+    write_i16(&mut out, top);
+    write_i16(&mut out, left);
+    write_i16(&mut out, bottom);
+    write_i16(&mut out, right);
 
     // pmVersion, packType, packSize.
     write_u16(&mut out, 0);
     write_u16(&mut out, pack_type_word);
     write_u32(&mut out, 0);
 
-    // hRes / vRes = 72 dpi.
-    write_u32(&mut out, 0x00480000);
-    write_u32(&mut out, 0x00480000);
+    // hRes / vRes.
+    write_u32(&mut out, f.resolution.0.as_u32());
+    write_u32(&mut out, f.resolution.1.as_u32());
 
     // pixelType, pixelSize, cmpCount, cmpSize.
-    let (pixel_size, cmp_size) = match pack {
-        PackType::Rle16 => (16u16, 5u16),
-        _ => (32u16, 8u16),
-    };
     write_u16(&mut out, 16); // RGBDirect
     write_u16(&mut out, pixel_size);
     write_u16(&mut out, 3); // cmpCount=3 (no alpha plane)
@@ -184,24 +300,62 @@ pub fn encode_pict_v2(width: u32, height: u32, data: &[u8], pack: PackType) -> R
 
     // srcRect / dstRect.
     for _ in 0..2 {
-        write_i16(&mut out, 0);
-        write_i16(&mut out, 0);
-        write_i16(&mut out, height as i16);
-        write_i16(&mut out, width as i16);
+        write_i16(&mut out, top);
+        write_i16(&mut out, left);
+        write_i16(&mut out, bottom);
+        write_i16(&mut out, right);
     }
 
     // mode = srcCopy.
     write_u16(&mut out, 0);
 
     // Pixel data per row.
-    write_pixel_rows(&mut out, width, height, data, pack, row_bytes_raw)?;
+    write_pixel_rows(&mut out, width, height, rgba, f.pack, row_bytes_raw)?;
 
-    // Word-align before terminator.
-    if out.len() % 2 != 0 {
-        out.push(0);
+    if v1 {
+        // v1 OpEndPic: single byte 0xFF.
+        out.push(0xFF);
+    } else {
+        // Word-align before terminator.
+        if out.len() % 2 != 0 {
+            out.push(0);
+        }
+        write_u16(&mut out, 0x00FF); // OpEndPic
     }
-    write_u16(&mut out, 0x00FF); // OpEndPic
     Ok(out)
+}
+
+/// [`crate::encode`]: write `image` as a single-`DirectBitsRect` PICT
+/// per `opts`. `Rgb24` and `Rgba` are the only layouts PICT's direct
+/// PixMap carries, and both land in the same RGBDirect record (alpha
+/// is not stored); any other layout is [`PictError::Unsupported`].
+pub(crate) fn encode_image(
+    image: &crate::image::PictImage,
+    opts: &crate::options::EncodeOptions,
+) -> Result<Vec<u8>> {
+    image.validate()?;
+    match image.format {
+        crate::image::PictPixelFormat::Rgba | crate::image::PictPixelFormat::Rgb24 => {}
+    }
+    let rgba = image.rgba_bytes();
+    let resolution = opts.resolution.unwrap_or(match image.header {
+        Some(PictHeader::ExtendedV2 { hres, vres, .. }) => (hres, vres),
+        _ => (Fixed::SEVENTY_TWO_DPI, Fixed::SEVENTY_TWO_DPI),
+    });
+    let extended_header = opts
+        .extended_header
+        .unwrap_or(!matches!(image.header, Some(PictHeader::V2 { .. })));
+    let framing = Framing {
+        version: opts.version,
+        pack: opts.pack,
+        stub: opts.writes_stub(),
+        origin: opts.frame_origin,
+        resolution,
+        extended_header,
+        clip: opts.clip,
+        comments: if opts.comments { &image.comments } else { &[] },
+    };
+    encode_direct_bits(image.width, image.height, &rgba, &framing)
 }
 
 /// Emit per-row PixMap pixel data for a DirectBitsRect-style opcode
@@ -337,94 +491,8 @@ pub fn encode_pict_v1_with(
     pack: PackType,
 ) -> Result<Vec<u8>> {
     validate_dims(width, height, data)?;
-
-    // For packType 3 the on-disk pixel is a 16-bit u16; for the other
-    // packTypes it's 32 bits. `row_bytes_raw` is the rowBytes value
-    // we write into the PixMap header — the *uncompressed* byte
-    // stride per row, in pixel-size units.
-    let row_bytes_raw: usize = match pack {
-        PackType::Rle16 => width as usize * 2,
-        _ => width as usize * 4,
-    };
-    if row_bytes_raw > 0x3FFF {
-        return Err(PictError::invalid(format!(
-            "encode_pict_v1: rowBytes {row_bytes_raw} exceeds 14-bit limit"
-        )));
-    }
-
-    let pack_type_word: u16 = match pack {
-        PackType::Raw => 1,
-        PackType::Packed24 => 2,
-        PackType::Rle16 => 3,
-        PackType::ComponentPackBits => 4,
-    };
-
-    let (pixel_size, cmp_size) = match pack {
-        PackType::Rle16 => (16u16, 5u16),
-        _ => (32u16, 8u16),
-    };
-
-    let mut out: Vec<u8> = Vec::with_capacity(10 + 4 + row_bytes_raw * height as usize + 4);
-
-    // 10-byte picture record header (NO 512-byte stub for v1).
-    write_u16(&mut out, 0); // picSize
-    write_i16(&mut out, 0); // picFrame top
-    write_i16(&mut out, 0); // left
-    write_i16(&mut out, height as i16); // bottom
-    write_i16(&mut out, width as i16); // right
-
-    // v1 version stanza: opcode 0x11, version 0x01.
-    out.push(0x11);
-    out.push(0x01);
-
-    // v1 DirectBitsRect opcode: single byte 0x9A.
-    out.push(0x9A);
-
-    // PixMap header (same layout as v2 0x009A).
-    write_u32(&mut out, 0x000000FF); // baseAddr
-    write_u16(&mut out, (row_bytes_raw as u16) | 0x8000); // rowBytes + PixMap flag
-
-    // bounds.
-    write_i16(&mut out, 0);
-    write_i16(&mut out, 0);
-    write_i16(&mut out, height as i16);
-    write_i16(&mut out, width as i16);
-
-    // pmVersion, packType, packSize.
-    write_u16(&mut out, 0);
-    write_u16(&mut out, pack_type_word);
-    write_u32(&mut out, 0);
-
-    // hRes / vRes = 72 dpi.
-    write_u32(&mut out, 0x00480000);
-    write_u32(&mut out, 0x00480000);
-
-    // pixelType, pixelSize, cmpCount, cmpSize.
-    write_u16(&mut out, 16);
-    write_u16(&mut out, pixel_size);
-    write_u16(&mut out, 3);
-    write_u16(&mut out, cmp_size);
-
-    // planeBytes, pmTable, pmReserved.
-    write_u32(&mut out, 0);
-    write_u32(&mut out, 0);
-    write_u32(&mut out, 0);
-
-    // srcRect / dstRect / mode.
-    for _ in 0..2 {
-        write_i16(&mut out, 0);
-        write_i16(&mut out, 0);
-        write_i16(&mut out, height as i16);
-        write_i16(&mut out, width as i16);
-    }
-    write_u16(&mut out, 0); // mode = srcCopy
-
-    // Pixel data per row.
-    write_pixel_rows(&mut out, width, height, data, pack, row_bytes_raw)?;
-
-    // v1 OpEndPic: single byte 0xFF.
-    out.push(0xFF);
-    Ok(out)
+    let framing = Framing::legacy(PictVersion::V1, pack, width, height);
+    encode_direct_bits(width, height, data, &framing)
 }
 
 // ---------------------------------------------------------------------------
@@ -1489,33 +1557,10 @@ pub fn encode_pict_v2_with_clip(
     pack: PackType,
     clip: [i16; 4],
 ) -> Result<Vec<u8>> {
-    // Encode the base stream (includes everything up to and including
-    // the headerOp stanza, then the DirectBitsRect pixel block).
-    // We must insert the ClipRgn AFTER the v2 header stanza and BEFORE
-    // the DirectBitsRect opcode.
-    //
-    // Strategy: build the v2 stream normally, then inject the ClipRgn
-    // bytes at the known injection point (right after the 512+2+8+2+2+26
-    // = 552 byte prefix).
-    let base = encode_pict_v2(width, height, data, pack)?;
-
-    // The ClipRgn belongs immediately after the headerOp 24-byte
-    // payload, i.e. after offset:
-    //   512 (stub) + 2 (picSize) + 8 (picFrame) + 2 (0x0011) + 2 (0x02FF)
-    //   + 2 (0x0C00) + 24 (headerOp payload) = 552.
-    const INJECT_OFFSET: usize = 552;
-    if base.len() < INJECT_OFFSET {
-        return Err(PictError::invalid(
-            "encode: base stream shorter than expected — cannot inject ClipRgn",
-        ));
-    }
-
-    let clip_bytes = build_clip_rgn_rect(clip[0], clip[1], clip[2], clip[3]);
-    let mut out = Vec::with_capacity(base.len() + clip_bytes.len());
-    out.extend_from_slice(&base[..INJECT_OFFSET]);
-    out.extend_from_slice(&clip_bytes);
-    out.extend_from_slice(&base[INJECT_OFFSET..]);
-    Ok(out)
+    validate_dims(width, height, data)?;
+    let mut framing = Framing::legacy(PictVersion::V2, pack, width, height);
+    framing.clip = Some(clip);
+    encode_direct_bits(width, height, data, &framing)
 }
 
 // ---------------------------------------------------------------------------
@@ -1621,20 +1666,20 @@ fn write_u32(out: &mut Vec<u8>, v: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::parse_pict;
+    use crate::decode as parse_pict;
 
     // ---- basic rejection tests ----
 
     #[test]
     fn rejects_size_mismatch() {
-        let err = encode_pict(2, 2, &[0u8; 8]).unwrap_err();
+        let err = encode_pict_v2(2, 2, &[0u8; 8], PackType::Raw).unwrap_err();
         assert!(matches!(err, PictError::InvalidData(_)));
     }
 
     #[test]
     fn rejects_zero_dim() {
         assert!(matches!(
-            encode_pict(0, 1, &[]).unwrap_err(),
+            encode_pict_v2(0, 1, &[], PackType::Raw).unwrap_err(),
             PictError::InvalidData(_)
         ));
     }
@@ -1646,7 +1691,7 @@ mod tests {
         let width = 3u32;
         let height = 2u32;
         let rgba: Vec<u8> = (0..(width * height * 4)).map(|i| (i * 37) as u8).collect();
-        let encoded = encode_pict(width, height, &rgba).expect("encode failed");
+        let encoded = encode_pict_v2(width, height, &rgba, PackType::Raw).expect("encode failed");
         let img = parse_pict(&encoded).expect("decode failed");
         assert_eq!(img.width, width);
         assert_eq!(img.height, height);
@@ -1654,10 +1699,10 @@ mod tests {
             for x in 0..width as usize {
                 let src = (y * width as usize + x) * 4;
                 let dst = src;
-                assert_eq!(img.data[dst], rgba[src], "R ({x},{y})");
-                assert_eq!(img.data[dst + 1], rgba[src + 1], "G ({x},{y})");
-                assert_eq!(img.data[dst + 2], rgba[src + 2], "B ({x},{y})");
-                assert_eq!(img.data[dst + 3], 0xFF, "A ({x},{y})");
+                assert_eq!(img.data()[dst], rgba[src], "R ({x},{y})");
+                assert_eq!(img.data()[dst + 1], rgba[src + 1], "G ({x},{y})");
+                assert_eq!(img.data()[dst + 2], rgba[src + 2], "B ({x},{y})");
+                assert_eq!(img.data()[dst + 3], 0xFF, "A ({x},{y})");
             }
         }
     }
@@ -1676,10 +1721,10 @@ mod tests {
         for y in 0..height as usize {
             for x in 0..width as usize {
                 let s = (y * width as usize + x) * 4;
-                assert_eq!(img.data[s], rgba[s], "R ({x},{y})");
-                assert_eq!(img.data[s + 1], rgba[s + 1], "G ({x},{y})");
-                assert_eq!(img.data[s + 2], rgba[s + 2], "B ({x},{y})");
-                assert_eq!(img.data[s + 3], 0xFF, "A ({x},{y})");
+                assert_eq!(img.data()[s], rgba[s], "R ({x},{y})");
+                assert_eq!(img.data()[s + 1], rgba[s + 1], "G ({x},{y})");
+                assert_eq!(img.data()[s + 2], rgba[s + 2], "B ({x},{y})");
+                assert_eq!(img.data()[s + 3], 0xFF, "A ({x},{y})");
             }
         }
     }
@@ -1708,10 +1753,10 @@ mod tests {
         for y in 0..height as usize {
             for x in 0..width as usize {
                 let off = (y * width as usize + x) * 4;
-                assert_eq!(img.data[off], 0xAA, "R ({x},{y})");
-                assert_eq!(img.data[off + 1], 0xBB, "G ({x},{y})");
-                assert_eq!(img.data[off + 2], 0xCC, "B ({x},{y})");
-                assert_eq!(img.data[off + 3], 0xFF, "A ({x},{y})");
+                assert_eq!(img.data()[off], 0xAA, "R ({x},{y})");
+                assert_eq!(img.data()[off + 1], 0xBB, "G ({x},{y})");
+                assert_eq!(img.data()[off + 2], 0xCC, "B ({x},{y})");
+                assert_eq!(img.data()[off + 3], 0xFF, "A ({x},{y})");
             }
         }
     }
@@ -1738,10 +1783,10 @@ mod tests {
         for y in 0..height as usize {
             for x in 0..width as usize {
                 let off = (y * width as usize + x) * 4;
-                assert_eq!(img.data[off], rgba[off], "R ({x},{y})");
-                assert_eq!(img.data[off + 1], rgba[off + 1], "G ({x},{y})");
-                assert_eq!(img.data[off + 2], rgba[off + 2], "B ({x},{y})");
-                assert_eq!(img.data[off + 3], 0xFF, "A ({x},{y})");
+                assert_eq!(img.data()[off], rgba[off], "R ({x},{y})");
+                assert_eq!(img.data()[off + 1], rgba[off + 1], "G ({x},{y})");
+                assert_eq!(img.data()[off + 2], rgba[off + 2], "B ({x},{y})");
+                assert_eq!(img.data()[off + 3], 0xFF, "A ({x},{y})");
             }
         }
     }
@@ -1791,10 +1836,10 @@ mod tests {
         for y in 0..height as usize {
             for x in 0..width as usize {
                 let off = (y * width as usize + x) * 4;
-                assert_eq!(img.data[off], rgba[off], "R ({x},{y})");
-                assert_eq!(img.data[off + 1], rgba[off + 1], "G ({x},{y})");
-                assert_eq!(img.data[off + 2], rgba[off + 2], "B ({x},{y})");
-                assert_eq!(img.data[off + 3], 0xFF, "A ({x},{y})");
+                assert_eq!(img.data()[off], rgba[off], "R ({x},{y})");
+                assert_eq!(img.data()[off + 1], rgba[off + 1], "G ({x},{y})");
+                assert_eq!(img.data()[off + 2], rgba[off + 2], "B ({x},{y})");
+                assert_eq!(img.data()[off + 3], 0xFF, "A ({x},{y})");
             }
         }
     }

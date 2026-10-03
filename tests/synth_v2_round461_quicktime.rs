@@ -17,6 +17,11 @@
 //! caller-supplied [`QuickTimeImageDecoder`], and — with the
 //! `registry` feature — `'jpeg'` through `oxideav-mjpeg`.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::state::RectI32;
 use oxideav_pict::{
@@ -65,7 +70,7 @@ fn raw_still(width: u16, height: u16, pixels: &[[u8; 3]]) -> QuickTimeCompressed
 
 fn px(img: &oxideav_pict::PictImage, x: u32, y: u32) -> [u8; 4] {
     let off = ((y * img.width + x) * 4) as usize;
-    img.data[off..off + 4].try_into().unwrap()
+    img.data()[off..off + 4].try_into().unwrap()
 }
 
 fn pict_with(frame: (i16, i16, i16, i16), qt: &QuickTimeCompressed) -> Vec<u8> {
@@ -130,7 +135,7 @@ fn src_rect_crops_in_source_space_and_places_the_crop() {
         img.quicktime[0].render,
         QuickTimeRender::Failed(_)
     ));
-    assert!(img.data.chunks_exact(4).all(|p| p == WHITE));
+    assert!(img.data().chunks_exact(4).all(|p| p == WHITE));
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +225,7 @@ fn hostile_matrix_stays_bounded_and_off_canvas_is_not_an_error() {
     qt.matrix = QuickTimeMatrix::scale_translate(ONE, ONE, Fixed(0x7FFF_0000), Fixed(0));
     let img = parse_pict(&pict_with((0, 0, 4, 4), &qt)).unwrap();
     assert!(img.quicktime[0].render.is_rendered());
-    assert!(img.data.chunks_exact(4).all(|p| p == WHITE));
+    assert!(img.data().chunks_exact(4).all(|p| p == WHITE));
 
     // Enormous scale: only the canvas-visible part is materialised.
     let mut qt = raw_still(2, 2, &pixels);
@@ -238,7 +243,7 @@ fn hostile_matrix_stays_bounded_and_off_canvas_is_not_an_error() {
         img.quicktime[0].render,
         QuickTimeRender::Failed(_)
     ));
-    assert!(img.data.chunks_exact(4).all(|p| p == WHITE));
+    assert!(img.data().chunks_exact(4).all(|p| p == WHITE));
 
     // Perspective column (u ≠ 0): drawn, bounded, no panic.
     let mut qt = raw_still(2, 2, &pixels);
@@ -414,7 +419,7 @@ fn parse_pict_with_routes_images_through_the_caller_decoder() {
     let mut dec = SolidDecoder { calls: 0 };
     let img = parse_pict_with(&bytes, &mut dec).unwrap();
     assert_eq!(dec.calls, 1);
-    assert!(img.data.chunks_exact(4).all(|p| p == [0, 200, 0, 255]));
+    assert!(img.data().chunks_exact(4).all(|p| p == [0, 200, 0, 255]));
     // The default chain does not know 'solD'.
     let img = parse_pict(&bytes).unwrap();
     assert!(matches!(
@@ -477,7 +482,7 @@ fn photo_jpeg_payload_decodes_through_the_sibling_decoder() {
         "{:?}",
         img.quicktime[0].render
     );
-    for p in img.data.chunks_exact(4) {
+    for p in img.data().chunks_exact(4) {
         for (c, want) in p[..3].iter().zip([200u8, 30, 60]) {
             assert!(
                 (*c as i32 - want as i32).abs() <= 4,
@@ -509,7 +514,7 @@ fn photo_jpeg_payload_decodes_through_the_sibling_decoder() {
     let qt = QuickTimeCompressed::still(desc(*b"jpeg", w as u16, h as u16, 24), jpeg);
     let img = parse_pict(&pict_with((0, 0, h as i16, w as i16), &qt)).unwrap();
     assert!(img.quicktime[0].render.is_rendered());
-    for p in img.data.chunks_exact(4) {
+    for p in img.data().chunks_exact(4) {
         assert!(p[..3].iter().all(|&c| (c as i32 - 128).abs() <= 2), "{p:?}");
         assert_eq!(p[3], 255);
     }
@@ -540,7 +545,7 @@ fn registry_decoder_falls_back_to_the_default_chain() {
     // 'raw ' too, so `oxideav convert` gets the pixels.
     use oxideav_core::{CodecId, CodecParameters, Frame, Packet, TimeBase};
     let mut dec =
-        oxideav_pict::decoder::make_decoder(&CodecParameters::video(CodecId::new("pict"))).unwrap();
+        oxideav_pict::make_decoder(&CodecParameters::video(CodecId::new("pict"))).unwrap();
     dec.send_packet(&Packet::new(0, TimeBase::new(1, 1), bytes))
         .unwrap();
     let Frame::Video(v) = dec.receive_frame().unwrap() else {
@@ -577,7 +582,7 @@ fn rendered_image_suppresses_the_default_warning_placeholder() {
 
     let img = parse_pict(&placeholder(true)).unwrap();
     assert!(
-        img.data.chunks_exact(4).all(|p| p == RED),
+        img.data().chunks_exact(4).all(|p| p == RED),
         "warning text must not be drawn"
     );
     assert!(matches!(
@@ -592,7 +597,7 @@ fn rendered_image_suppresses_the_default_warning_placeholder() {
     // and the text is drawn.
     let img = parse_pict(&placeholder(false)).unwrap();
     assert!(
-        img.data.chunks_exact(4).any(|p| p != RED),
+        img.data().chunks_exact(4).any(|p| p != RED),
         "text expected on the canvas"
     );
     assert!(matches!(
@@ -615,5 +620,5 @@ fn rendered_image_suppresses_the_default_warning_placeholder() {
     b.push(&build_long_text(0, 7, b"QuickTime and a").unwrap());
     b.push(&[0, 0]);
     let img = parse_pict(&b.finish()).unwrap();
-    assert!(img.data.chunks_exact(4).any(|p| p != WHITE));
+    assert!(img.data().chunks_exact(4).any(|p| p != WHITE));
 }

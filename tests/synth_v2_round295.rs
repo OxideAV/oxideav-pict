@@ -34,6 +34,11 @@
 //!
 //! Point order on disk is `(v, h)`; the crate's pen tuple is `(h, v)`.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::font::{measure_text, TextScale};
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::parse_pict;

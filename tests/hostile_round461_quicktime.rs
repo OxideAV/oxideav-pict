@@ -11,6 +11,11 @@
 //! or a typed non-render, never panic, and never allocate beyond the
 //! declared canvas.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::state::RectI32;
 use oxideav_pict::{
@@ -137,7 +142,11 @@ fn corpus_renders_before_it_is_attacked() {
         let img = parse_pict(bytes).unwrap_or_else(|e| panic!("fixture {i}: {e}"));
         assert_eq!(img.quicktime.len(), 1, "fixture {i}");
         match (i, &img.quicktime[0].render) {
-            (3, QuickTimeRender::Failed(_)) => {} // the fake JPEG is rejected, typed
+            // The fake JPEG is rejected, typed: a decode failure when
+            // `oxideav-mjpeg` is wired in (`registry`), an unsupported
+            // compressor in the framework-free build.
+            (3, QuickTimeRender::Failed(_)) if cfg!(feature = "registry") => {}
+            (3, QuickTimeRender::Unsupported { .. }) if !cfg!(feature = "registry") => {}
             (_, r) => assert!(r.is_rendered(), "fixture {i}: {r:?}"),
         }
     }

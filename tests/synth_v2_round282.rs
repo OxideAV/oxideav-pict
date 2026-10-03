@@ -27,6 +27,11 @@
 //! §4-34 identity (*"always reproduces the source image"*) so every
 //! pre-round-282 stream decodes bit-for-bit unchanged.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
     blend_source, build_direct_bits_rect_op, build_direct_bits_rect_op_with_mode, parse_pict,
@@ -36,7 +41,7 @@ use oxideav_pict::{
 /// Read pixel `(x, y)` as `(r, g, b)`.
 fn pix(img: &PictImage, x: u32, y: u32) -> (u8, u8, u8) {
     let off = ((y * img.width + x) * 4) as usize;
-    (img.data[off], img.data[off + 1], img.data[off + 2])
+    (img.data()[off], img.data()[off + 1], img.data()[off + 2])
 }
 
 /// Flatten a list of RGB triples into the RGBA8 buffer

@@ -26,6 +26,11 @@
 //! against the clean-room spec PDFs in `docs/image/quickdraw/` —
 //! they do not depend on the (round-1) BitMap encoder paths.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{parse_pict, probe_pict, ProbeTermination};
 
 // ---------------------------------------------------------------------------
@@ -201,10 +206,10 @@ fn indexed_pixmap_pack_bits_rect_4bpp_raw_narrow() {
     let p = |x: u32, y: u32| {
         let off = ((y * img.width + x) * 4) as usize;
         [
-            img.data[off],
-            img.data[off + 1],
-            img.data[off + 2],
-            img.data[off + 3],
+            img.data()[off],
+            img.data()[off + 1],
+            img.data()[off + 2],
+            img.data()[off + 3],
         ]
     };
     assert_eq!(p(0, 0), [0xFF, 0x00, 0x00, 0xFF]); // red
@@ -276,10 +281,10 @@ fn indexed_pixmap_pack_bits_rect_8bpp_packed_rows() {
     let p = |x: u32, y: u32| {
         let off = ((y * img.width + x) * 4) as usize;
         [
-            img.data[off],
-            img.data[off + 1],
-            img.data[off + 2],
-            img.data[off + 3],
+            img.data()[off],
+            img.data()[off + 1],
+            img.data()[off + 2],
+            img.data()[off + 3],
         ]
     };
     // Every pixel on row y is `palette[y % 4]`.
@@ -348,10 +353,10 @@ fn indexed_pixmap_bits_rect_8bpp_unpacked_rows() {
     let p = |x: u32, y: u32| {
         let off = ((y * img.width + x) * 4) as usize;
         [
-            img.data[off],
-            img.data[off + 1],
-            img.data[off + 2],
-            img.data[off + 3],
+            img.data()[off],
+            img.data()[off + 1],
+            img.data()[off + 2],
+            img.data()[off + 3],
         ]
     };
     assert_eq!(p(0, 0), [0x00, 0x00, 0x00, 0xFF]); // black
@@ -419,10 +424,10 @@ fn indexed_pixmap_pack_bits_rgn_8bpp_clip_full_frame() {
     let p = |x: u32, y: u32| {
         let off = ((y * img.width + x) * 4) as usize;
         [
-            img.data[off],
-            img.data[off + 1],
-            img.data[off + 2],
-            img.data[off + 3],
+            img.data()[off],
+            img.data()[off + 1],
+            img.data()[off + 2],
+            img.data()[off + 3],
         ]
     };
     // Row 0 → red, row 1 → green, full width.
@@ -474,10 +479,10 @@ fn indexed_pixmap_out_of_range_index_maps_to_black() {
     let p = |x: u32| {
         let off = (x * 4) as usize;
         [
-            img.data[off],
-            img.data[off + 1],
-            img.data[off + 2],
-            img.data[off + 3],
+            img.data()[off],
+            img.data()[off + 1],
+            img.data()[off + 2],
+            img.data()[off + 3],
         ]
     };
     assert_eq!(p(0), [0xFF, 0x00, 0x00, 0xFF]); // palette[0]
@@ -525,10 +530,10 @@ fn indexed_pixmap_pack_bits_rect_1bpp() {
     let p = |x: u32| {
         let off = (x * 4) as usize;
         [
-            img.data[off],
-            img.data[off + 1],
-            img.data[off + 2],
-            img.data[off + 3],
+            img.data()[off],
+            img.data()[off + 1],
+            img.data()[off + 2],
+            img.data()[off + 3],
         ]
     };
     assert_eq!(p(0), [0x00, 0x00, 0x00, 0xFF]); // bit 1 → palette[1] = black

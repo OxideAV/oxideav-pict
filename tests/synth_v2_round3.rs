@@ -7,6 +7,11 @@
 //!   packType 2 is exactly 75 % of raw.
 //! * v1 decoder now handles `DirectBitsRect` (opcode 0x9A) in v1 streams.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{
     encode_pict_v1, encode_pict_v2, encode_pict_v2_with_clip, parse_pict, pixel_data_sizes,
     PackType,
@@ -26,10 +31,10 @@ fn packtype2_roundtrip_16x16() {
     for y in 0..height as usize {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
-            assert_eq!(img.data[off], rgba[off], "R ({x},{y})");
-            assert_eq!(img.data[off + 1], rgba[off + 1], "G ({x},{y})");
-            assert_eq!(img.data[off + 2], rgba[off + 2], "B ({x},{y})");
-            assert_eq!(img.data[off + 3], 0xFF, "A ({x},{y})");
+            assert_eq!(img.data()[off], rgba[off], "R ({x},{y})");
+            assert_eq!(img.data()[off + 1], rgba[off + 1], "G ({x},{y})");
+            assert_eq!(img.data()[off + 2], rgba[off + 2], "B ({x},{y})");
+            assert_eq!(img.data()[off + 3], 0xFF, "A ({x},{y})");
         }
     }
 }
@@ -52,10 +57,10 @@ fn packtype4_roundtrip_solid_colour() {
     assert_eq!(img.height, height);
     for i in 0..width as usize * height as usize {
         let off = i * 4;
-        assert_eq!(img.data[off], 0x00, "R");
-        assert_eq!(img.data[off + 1], 0xFF, "G");
-        assert_eq!(img.data[off + 2], 0x00, "B");
-        assert_eq!(img.data[off + 3], 0xFF, "A");
+        assert_eq!(img.data()[off], 0x00, "R");
+        assert_eq!(img.data()[off + 1], 0xFF, "G");
+        assert_eq!(img.data()[off + 2], 0x00, "B");
+        assert_eq!(img.data()[off + 3], 0xFF, "A");
     }
 }
 
@@ -78,10 +83,10 @@ fn packtype4_roundtrip_gradient() {
     for y in 0..height as usize {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
-            assert_eq!(img.data[off], rgba[off], "R ({x},{y})");
-            assert_eq!(img.data[off + 1], rgba[off + 1], "G ({x},{y})");
-            assert_eq!(img.data[off + 2], rgba[off + 2], "B ({x},{y})");
-            assert_eq!(img.data[off + 3], 0xFF, "A ({x},{y})");
+            assert_eq!(img.data()[off], rgba[off], "R ({x},{y})");
+            assert_eq!(img.data()[off + 1], rgba[off + 1], "G ({x},{y})");
+            assert_eq!(img.data()[off + 2], rgba[off + 2], "B ({x},{y})");
+            assert_eq!(img.data()[off + 3], 0xFF, "A ({x},{y})");
         }
     }
 }
@@ -141,10 +146,10 @@ fn v1_roundtrip_8x6() {
     for y in 0..height as usize {
         for x in 0..width as usize {
             let off = (y * width as usize + x) * 4;
-            assert_eq!(img.data[off], rgba[off], "R ({x},{y})");
-            assert_eq!(img.data[off + 1], rgba[off + 1], "G ({x},{y})");
-            assert_eq!(img.data[off + 2], rgba[off + 2], "B ({x},{y})");
-            assert_eq!(img.data[off + 3], 0xFF, "A ({x},{y})");
+            assert_eq!(img.data()[off], rgba[off], "R ({x},{y})");
+            assert_eq!(img.data()[off + 1], rgba[off + 1], "G ({x},{y})");
+            assert_eq!(img.data()[off + 2], rgba[off + 2], "B ({x},{y})");
+            assert_eq!(img.data()[off + 3], 0xFF, "A ({x},{y})");
         }
     }
 }

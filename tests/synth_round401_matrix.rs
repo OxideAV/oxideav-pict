@@ -8,6 +8,11 @@
 //! decode to a **pixel-identical** canvas — that equivalence, across
 //! every v1-legal opcode family the crate can emit, is the pin here.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, PictV1Builder};
 use oxideav_pict::{
     build_arc_op, build_bk_color_code, build_dh_text, build_dhdv_text, build_dv_text,
@@ -86,11 +91,12 @@ fn v1_and_v2_streams_decode_pixel_identically() {
     let i1 = parse_pict(&v1_bytes).unwrap();
     assert_eq!(i1.width, i2.width);
     assert_eq!(
-        i1.data, i2.data,
+        i1.data(),
+        i2.data(),
         "v1 and v2 emissions of the same sequence must rasterise identically"
     );
     // Sanity: the sequence really inked the canvas.
-    assert!(i1.data.chunks_exact(4).any(|px| px[0] != 0xFF));
+    assert!(i1.data().chunks_exact(4).any(|px| px[0] != 0xFF));
 
     // Probe agrees on the version split and sees the comments in both.
     let p2 = probe_pict(&v2_bytes).unwrap();
@@ -158,7 +164,7 @@ fn classic_colour_codes_ink_both_versions() {
         for bytes in [v2.finish(), v1.finish()] {
             let img = parse_pict(&bytes).unwrap();
             let off = (5 * 16 + 5) * 4;
-            assert_eq!(&img.data[off..off + 3], &rgb, "code {code}");
+            assert_eq!(&img.data()[off..off + 3], &rgb, "code {code}");
         }
     }
 }

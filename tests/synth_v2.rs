@@ -9,6 +9,11 @@
 //! All synthesised streams here use the canonical layout per Inside
 //! Macintosh: Imaging With QuickDraw §A-3.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{blend_source, parse_pict, PictError, PictPixelFormat, Rgba, SourceMode};
 
 /// Build a v2 PICT body (no 512-byte launch-stub prefix) containing a
@@ -203,9 +208,9 @@ fn directbits_32bpp_roundtrip() {
     let img = parse_pict(&pict).expect("decode failed");
     assert_eq!(img.width, width as u32);
     assert_eq!(img.height, height as u32);
-    assert_eq!(img.pixel_format, PictPixelFormat::Rgba);
-    assert_eq!(img.data.len(), rgba.len());
-    assert_eq!(img.data, rgba);
+    assert_eq!(img.format, PictPixelFormat::Rgba);
+    assert_eq!(img.data().len(), rgba.len());
+    assert_eq!(img.data(), rgba);
 }
 
 #[test]
@@ -221,7 +226,7 @@ fn directbits_with_512_byte_prefix() {
     let img = parse_pict(&prefixed).expect("decode-with-prefix failed");
     assert_eq!(img.width, 2);
     assert_eq!(img.height, 2);
-    assert_eq!(img.data, rgba);
+    assert_eq!(img.data(), rgba);
 }
 
 #[test]
@@ -242,26 +247,26 @@ fn packbits_1bpp_roundtrip() {
     let img = parse_pict(&pict).expect("packbits decode failed");
     assert_eq!(img.width, 64);
     assert_eq!(img.height, 4);
-    assert_eq!(img.pixel_format, PictPixelFormat::Rgba);
+    assert_eq!(img.format, PictPixelFormat::Rgba);
     // Spot check: row 1 is all-black pixels = (0,0,0,255).
     for x in 0..64usize {
         let off = (64 + x) * 4;
-        assert_eq!(img.data[off], 0x00);
-        assert_eq!(img.data[off + 1], 0x00);
-        assert_eq!(img.data[off + 2], 0x00);
-        assert_eq!(img.data[off + 3], 0xFF);
+        assert_eq!(img.data()[off], 0x00);
+        assert_eq!(img.data()[off + 1], 0x00);
+        assert_eq!(img.data()[off + 2], 0x00);
+        assert_eq!(img.data()[off + 3], 0xFF);
     }
     // Row 2: all-white = (255,255,255,255).
     for x in 0..64usize {
         let off = (2 * 64 + x) * 4;
-        assert_eq!(img.data[off], 0xFF);
-        assert_eq!(img.data[off + 3], 0xFF);
+        assert_eq!(img.data()[off], 0xFF);
+        assert_eq!(img.data()[off + 3], 0xFF);
     }
     // Row 0 first pixel: bit 7 of 0xAA = 1 -> black.
-    assert_eq!(img.data[0], 0x00);
-    assert_eq!(img.data[3], 0xFF);
+    assert_eq!(img.data()[0], 0x00);
+    assert_eq!(img.data()[3], 0xFF);
     // Row 0 second pixel: bit 6 of 0xAA = 0 -> white.
-    assert_eq!(img.data[4], 0xFF);
+    assert_eq!(img.data()[4], 0xFF);
 }
 
 #[test]
@@ -318,7 +323,7 @@ fn opcode_stream_with_state_then_raster() {
         );
         let want = blend_source(SourceMode::SrcCopy, src, Rgba::WHITE, fg, Rgba::WHITE);
         assert_eq!(
-            &img.data[px * 4..px * 4 + 4],
+            &img.data()[px * 4..px * 4 + 4],
             &[want.r, want.g, want.b, want.a],
             "pixel {px}"
         );
@@ -340,7 +345,7 @@ fn no_raster_returns_no_raster_error() {
     buf.extend_from_slice(&[0u8; 24]);
     buf.extend_from_slice(&0x00FFu16.to_be_bytes());
     let err = parse_pict(&buf).unwrap_err();
-    assert_eq!(err, PictError::NoRaster);
+    assert!(matches!(err, PictError::NoRaster), "{err:?}");
 }
 
 #[test]

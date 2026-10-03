@@ -3,7 +3,7 @@
 //! Consumers that only need *metadata* about a PICT byte stream (which
 //! version, what picture frame, whether there's a 512-byte launch-stub
 //! prefix, what mix of drawing / raster / text / comment / QuickTime
-//! opcodes the file actually contains) can call [`probe_pict`] and skip
+//! opcodes the file actually contains) can call [`inspect`] and skip
 //! the cost of materialising a [`crate::PictImage`] canvas. The probe
 //! shares its opcode walker with the decoder so the set of recognised
 //! opcodes stays in sync — anything the decoder rasterises is counted
@@ -38,7 +38,7 @@ use crate::state::{
 
 /// Read-only metadata extracted from a PICT byte stream.
 ///
-/// Produced by [`probe_pict`]; never carries pixel data.
+/// Produced by [`inspect`]; never carries pixel data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PictProbe {
     /// PICT framing version detected by the version stanza.
@@ -284,14 +284,19 @@ impl From<RectI32> for ProbeRect {
     }
 }
 
-/// Walk a PICT byte stream and return a [`PictProbe`] summary.
+/// Walk a PICT byte stream and return a [`PictProbe`] summary — the
+/// depth inspection below the contract's [`crate::probe()`] (a bool
+/// sniff) and [`crate::info`] (header only).
 ///
 /// Returns an `Err` only when the framing itself is broken (no picture
 /// record at offset 0 or 512, invalid version stanza). Opcode-walk
 /// failures — unsupported opcodes, truncated bodies — are recorded in
 /// [`PictProbe::termination`] so the caller still sees the partial
 /// statistics gathered before the failure.
-pub fn probe_pict(bytes: &[u8]) -> Result<PictProbe> {
+///
+/// Was `probe_pict` before the image-crate contract; that name remains
+/// as a deprecated alias.
+pub fn inspect(bytes: &[u8]) -> Result<PictProbe> {
     let body_offset = detect_body_offset(bytes)?;
     let has_launch_stub = body_offset > 0;
     let body = &bytes[body_offset..];
@@ -347,6 +352,7 @@ pub fn probe_pict(bytes: &[u8]) -> Result<PictProbe> {
         Err(PictError::Unsupported(msg)) => ProbeTermination::Unsupported(msg),
         Err(PictError::InvalidData(msg)) => ProbeTermination::Invalid(msg),
         Err(PictError::NoRaster) => ProbeTermination::Eof,
+        Err(e) => ProbeTermination::Invalid(e.to_string()),
     };
     Ok(p)
 }

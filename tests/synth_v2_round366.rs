@@ -16,6 +16,11 @@
 //! right border decodes cleanly and rasterises the correct interior,
 //! both as a `paintRgn` fill and as a `ClipRgn` mask.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{build_rgn_inverted_op, ops::PictBuilder, ops::Verb, parse_pict};
 
 /// A `paintRgn` whose inside run reaches the bbox right border. The old
@@ -41,12 +46,12 @@ fn paint_region_run_reaching_right_border() {
         for x in 0..8usize {
             let off = (y * 8 + x) * 4;
             if x >= 4 {
-                assert_eq!(img.data[off], 0x10, "row {y} col {x} R inside");
-                assert_eq!(img.data[off + 1], 0x20, "row {y} col {x} G inside");
-                assert_eq!(img.data[off + 2], 0x30, "row {y} col {x} B inside");
+                assert_eq!(img.data()[off], 0x10, "row {y} col {x} R inside");
+                assert_eq!(img.data()[off + 1], 0x20, "row {y} col {x} G inside");
+                assert_eq!(img.data()[off + 2], 0x30, "row {y} col {x} B inside");
             } else {
                 // Outside the region: paper white, untouched.
-                assert_eq!(img.data[off], 0xFF, "row {y} col {x} paper R");
+                assert_eq!(img.data()[off], 0xFF, "row {y} col {x} paper R");
             }
         }
     }
@@ -86,11 +91,11 @@ fn clip_region_run_reaching_right_border_masks_paint() {
         for x in 0..8usize {
             let off = (y * 8 + x) * 4;
             if x >= 3 {
-                assert_eq!(img.data[off], 0xAA, "row {y} col {x} R clipped-in");
-                assert_eq!(img.data[off + 1], 0xBB, "row {y} col {x} G clipped-in");
-                assert_eq!(img.data[off + 2], 0xCC, "row {y} col {x} B clipped-in");
+                assert_eq!(img.data()[off], 0xAA, "row {y} col {x} R clipped-in");
+                assert_eq!(img.data()[off + 1], 0xBB, "row {y} col {x} G clipped-in");
+                assert_eq!(img.data()[off + 2], 0xCC, "row {y} col {x} B clipped-in");
             } else {
-                assert_eq!(img.data[off], 0xFF, "row {y} col {x} clipped-out paper");
+                assert_eq!(img.data()[off], 0xFF, "row {y} col {x} clipped-out paper");
             }
         }
     }
@@ -120,9 +125,9 @@ fn l_shaped_region_through_decoder() {
             let off = (y * 8 + x) * 4;
             let inside = if y < 4 { x < 8 } else { x < 4 };
             if inside {
-                assert_eq!(img.data[off], 0x01, "row {y} col {x} inside R");
+                assert_eq!(img.data()[off], 0x01, "row {y} col {x} inside R");
             } else {
-                assert_eq!(img.data[off], 0xFF, "row {y} col {x} outside paper");
+                assert_eq!(img.data()[off], 0xFF, "row {y} col {x} outside paper");
             }
         }
     }

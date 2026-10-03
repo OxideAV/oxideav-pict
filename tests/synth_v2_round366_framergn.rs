@@ -9,6 +9,11 @@
 //! honours the pen size (which hangs below and to the right), the pen
 //! pattern, and leaves the region interior untouched.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::{ops::PictBuilder, ops::Verb, parse_pict};
 
 /// A thin (1×1) pen frames a rectangular region with a 1-pixel border;
@@ -23,7 +28,7 @@ fn frame_rect_region_thin_pen_is_one_pixel_border() {
 
     let px = |x: usize, y: usize| {
         let off = (y * 8 + x) * 4;
-        (img.data[off], img.data[off + 1], img.data[off + 2])
+        (img.data()[off], img.data()[off + 1], img.data()[off + 2])
     };
     // Border pixels (region bbox [1,1,7,7] → outline at row/col 1 and 6).
     assert_eq!(px(1, 1), (0x20, 0x40, 0x80), "top-left corner inked");
@@ -48,7 +53,7 @@ fn frame_rect_region_thick_pen_hangs_below_and_right() {
 
     let is_red = |x: usize, y: usize| {
         let off = (y * 10 + x) * 4;
-        img.data[off] == 0xFF && img.data[off + 1] == 0x00 && img.data[off + 2] == 0x00
+        img.data()[off] == 0xFF && img.data()[off + 1] == 0x00 && img.data()[off + 2] == 0x00
     };
     // Top edge: rows 2 and 3 are inked (2-pixel pen hanging down).
     assert!(is_red(3, 2), "top edge row 2 inked");
@@ -58,8 +63,8 @@ fn frame_rect_region_thick_pen_hangs_below_and_right() {
     assert!(is_red(3, 4), "left edge col 3 inked (pen hangs right)");
     // Deep interior is paper.
     let off = (5 * 10 + 5) * 4;
-    assert_eq!(img.data[off], 0xFF, "interior R paper");
-    assert_eq!(img.data[off + 1], 0xFF, "interior G paper");
+    assert_eq!(img.data()[off], 0xFF, "interior R paper");
+    assert_eq!(img.data()[off + 1], 0xFF, "interior G paper");
 }
 
 /// A non-rectangular (masked) region's outline is pen-stamped at the
@@ -81,7 +86,7 @@ fn frame_masked_region_outlines_boundary_only() {
 
     let inked = |x: usize, y: usize| {
         let off = (y * 8 + x) * 4;
-        img.data[off] == 0x11 && img.data[off + 1] == 0x22 && img.data[off + 2] == 0x33
+        img.data()[off] == 0x11 && img.data()[off + 1] == 0x22 && img.data()[off + 2] == 0x33
     };
     // Boundary cells (perimeter of the [1,7)×[1,7) block) are inked.
     assert!(inked(1, 1), "boundary corner");
@@ -90,10 +95,10 @@ fn frame_masked_region_outlines_boundary_only() {
     assert!(inked(1, 4), "boundary left edge");
     // Interior cell (not on the boundary) shows through as paper.
     let off = (4 * 8 + 4) * 4;
-    assert_eq!(img.data[off], 0xFF, "interior paper R");
+    assert_eq!(img.data()[off], 0xFF, "interior paper R");
     // Truly outside the region is paper too.
     let off = 0;
-    assert_eq!(img.data[off], 0xFF, "outside paper R");
+    assert_eq!(img.data()[off], 0xFF, "outside paper R");
 }
 
 /// The pen pattern is honoured: an all-off pen pattern paints nothing on
@@ -113,14 +118,14 @@ fn frame_region_honours_all_off_pen_pattern() {
     // border background (paper) since on-bits select fg and there are
     // none. (This is the round-8 monochrome pattern convention.)
     let off = (8 + 3) * 4; // a top-edge border cell at row 1, col 3
-    assert_eq!(img.data[off], 0xFF, "all-off pen pattern leaves paper R");
+    assert_eq!(img.data()[off], 0xFF, "all-off pen pattern leaves paper R");
     assert_eq!(
-        img.data[off + 1],
+        img.data()[off + 1],
         0xFF,
         "all-off pen pattern leaves paper G"
     );
     assert_eq!(
-        img.data[off + 2],
+        img.data()[off + 2],
         0xFF,
         "all-off pen pattern leaves paper B"
     );

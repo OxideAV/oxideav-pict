@@ -28,6 +28,11 @@
 //! [`PictProbe::text_state`]. The probe's `text_state_op_count` field
 //! is bumped once per occurrence, mirroring round 230's accounting.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
     build_font_name, build_glyph_state, build_line_justify, parse_pict, probe_pict, Fixed,
@@ -138,7 +143,7 @@ fn pict_image_carries_font_name_after_font_name_opcode() {
     // canvas still has the paint-rect from `paint_canvas`.
     assert_eq!(img.width, 4);
     assert_eq!(img.height, 4);
-    assert_eq!(&img.data[0..4], &[0x00, 0x00, 0x00, 0xFF]);
+    assert_eq!(&img.data()[0..4], &[0x00, 0x00, 0x00, 0xFF]);
 }
 
 #[test]

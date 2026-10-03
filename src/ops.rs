@@ -1943,7 +1943,7 @@ fn expand_8_to_16(v: u8) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::parse_pict;
+    use crate::decode as parse_pict;
 
     #[test]
     fn build_line_layout() {
@@ -2083,14 +2083,14 @@ mod tests {
         assert_eq!(img.height, 16);
         // Centre pixel should be red (paint at fg).
         let off = (8 * 16 + 8) * 4;
-        assert_eq!(img.data[off], 0xFF, "R");
-        assert_eq!(img.data[off + 1], 0x00, "G");
-        assert_eq!(img.data[off + 2], 0x00, "B");
+        assert_eq!(img.data()[off], 0xFF, "R");
+        assert_eq!(img.data()[off + 1], 0x00, "G");
+        assert_eq!(img.data()[off + 2], 0x00, "B");
         // Outside the rect should be background paper (white).
         let off = (16 + 1) * 4;
-        assert_eq!(img.data[off], 0xFF, "paper R");
-        assert_eq!(img.data[off + 1], 0xFF, "paper G");
-        assert_eq!(img.data[off + 2], 0xFF, "paper B");
+        assert_eq!(img.data()[off], 0xFF, "paper R");
+        assert_eq!(img.data()[off + 1], 0xFF, "paper G");
+        assert_eq!(img.data()[off + 2], 0xFF, "paper B");
     }
 
     #[test]
@@ -2104,10 +2104,10 @@ mod tests {
         let cx = 16usize;
         let cy = 16usize;
         let off = (cy * 32 + cx) * 4;
-        assert_eq!(img.data[off + 1], 0xFF, "G at centre");
+        assert_eq!(img.data()[off + 1], 0xFF, "G at centre");
         // Corner outside the oval — should still be paper.
         let off = 0; // (0,0)
-        assert_eq!(img.data[off + 1], 0xFF, "G corner = paper");
+        assert_eq!(img.data()[off + 1], 0xFF, "G corner = paper");
     }
 
     #[test]
@@ -2120,7 +2120,7 @@ mod tests {
         let img = parse_pict(&bytes).expect("decode failed");
         // Mid-edge of round-rect — should be blue.
         let off = (16 * 32 + 16) * 4;
-        assert_eq!(img.data[off + 2], 0xFF, "B at centre");
+        assert_eq!(img.data()[off + 2], 0xFF, "B at centre");
     }
 
     #[test]
@@ -2133,9 +2133,9 @@ mod tests {
         let img = parse_pict(&bytes).expect("decode failed");
         // The triangle's centroid should be yellow.
         let off = (6 * 16 + 8) * 4;
-        assert_eq!(img.data[off], 0xFF, "R");
-        assert_eq!(img.data[off + 1], 0xFF, "G");
-        assert_eq!(img.data[off + 2], 0x00, "B");
+        assert_eq!(img.data()[off], 0xFF, "R");
+        assert_eq!(img.data()[off + 1], 0xFF, "G");
+        assert_eq!(img.data()[off + 2], 0x00, "B");
     }
 
     #[test]
@@ -2153,7 +2153,8 @@ mod tests {
         let mut rim_inked = false;
         for y in 0..16 {
             let off = (y * 32 + 30) * 4;
-            if img.data[off] != 0xFF || img.data[off + 1] != 0xFF || img.data[off + 2] != 0xFF {
+            if img.data()[off] != 0xFF || img.data()[off + 1] != 0xFF || img.data()[off + 2] != 0xFF
+            {
                 rim_inked = true;
                 break;
             }
@@ -2170,9 +2171,9 @@ mod tests {
         let img = parse_pict(&bytes).expect("decode failed");
         let off = (8 * 16 + 8) * 4;
         // Cyan (00 FF FF) inside the region.
-        assert_eq!(img.data[off], 0x00, "R");
-        assert_eq!(img.data[off + 1], 0xFF, "G");
-        assert_eq!(img.data[off + 2], 0xFF, "B");
+        assert_eq!(img.data()[off], 0x00, "R");
+        assert_eq!(img.data()[off + 1], 0xFF, "G");
+        assert_eq!(img.data()[off + 2], 0xFF, "B");
     }
 
     #[test]
@@ -2188,14 +2189,14 @@ mod tests {
         let img = parse_pict(&bytes).expect("decode failed");
         // Inside the region (row 4, col 3) → orange.
         let off = (4 * 8 + 3) * 4;
-        assert_eq!(img.data[off], 0xFF, "R inside");
-        assert_eq!(img.data[off + 1], 0xAA, "G inside");
-        assert_eq!(img.data[off + 2], 0x00, "B inside");
+        assert_eq!(img.data()[off], 0xFF, "R inside");
+        assert_eq!(img.data()[off + 1], 0xAA, "G inside");
+        assert_eq!(img.data()[off + 2], 0x00, "B inside");
         // Outside the region (row 0, col 0) → paper.
         let off = 0;
-        assert_eq!(img.data[off], 0xFF, "paper R");
-        assert_eq!(img.data[off + 1], 0xFF, "paper G");
-        assert_eq!(img.data[off + 2], 0xFF, "paper B");
+        assert_eq!(img.data()[off], 0xFF, "paper R");
+        assert_eq!(img.data()[off + 1], 0xFF, "paper G");
+        assert_eq!(img.data()[off + 2], 0xFF, "paper B");
     }
 
     #[test]
@@ -2207,9 +2208,9 @@ mod tests {
         let img = parse_pict(&bytes).expect("decode failed");
         // Diagonal pixel (5, 5) should be black.
         let off = (5 * 16 + 5) * 4;
-        assert_eq!(img.data[off], 0x00, "R on diagonal");
-        assert_eq!(img.data[off + 1], 0x00, "G on diagonal");
-        assert_eq!(img.data[off + 2], 0x00, "B on diagonal");
+        assert_eq!(img.data()[off], 0x00, "R on diagonal");
+        assert_eq!(img.data()[off + 1], 0x00, "G on diagonal");
+        assert_eq!(img.data()[off + 2], 0x00, "B on diagonal");
     }
 
     #[test]

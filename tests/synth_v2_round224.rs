@@ -17,6 +17,11 @@
 //! [`PictBuilder::short_comment`] / [`PictBuilder::long_comment`]) round-trip
 //! every emit through the decoder bit-for-bit.
 
+// The pre-contract entry points (`parse_pict` / `encode_pict` / …) are
+// exercised on purpose: they are deprecated thin wrappers over the
+// IMAGE_CRATE_API functions and this suite is their regression gate.
+#![allow(deprecated)]
+
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
     build_long_comment, build_long_comment_v1, build_short_comment, build_short_comment_v1,
