@@ -7,8 +7,11 @@ license = "MIT"
 repository = "https://github.com/OxideAV/oxideav-pict"
 homepage = "https://github.com/OxideAV/oxideav-pict"
 authors = ["Mark Karpeles"]
-description = "Pure-Rust PICT (Apple QuickDraw picture) reader for oxideav — clean-room from Inside Macintosh"
+description = "Pure-Rust PICT (Apple QuickDraw picture) decoder and encoder for oxideav — clean-room from Inside Macintosh"
 readme = "README.md"
+# crates.io caps a package at 10 MiB; the regression suite and the fuzz
+# corpus are repository material, not crate material.
+exclude = ["/tests", "/fuzz"]
 keywords = ["multimedia", "image", "pict", "quickdraw", "macintosh"]
 categories = ["multimedia::encoding", "multimedia::images"]
 
@@ -16,9 +19,10 @@ categories = ["multimedia::encoding", "multimedia::images"]
 # `oxideav-core` is gated behind the default-on `registry` feature so
 # image-library consumers can depend on `oxideav-pict` with
 # `default-features = false` and avoid the framework dependency tree
-# entirely. Without `registry` the crate exposes a free-standing
-# `parse_pict` API plus crate-local `PictImage` / `PictError` types and
-# never references `oxideav-core`.
+# entirely. Without `registry` the crate exposes the image-crate
+# contract (`probe` / `info` / `decode*` / `encode*`, IMAGE_CRATE_API)
+# plus crate-local `PictImage` / `PictError` types and never references
+# `oxideav-core`.
 oxideav-core = { version = "0.1", optional = true }
 # `'jpeg'` ("Photo - JPEG") is by far the compressor real-world
 # `$8200` CompressedQuickTime pictures carry. The payload is a codec
@@ -40,8 +44,8 @@ harness = false
 [features]
 default = ["registry"]
 
-# Wires up the codec / decoder trait implementations against
-# `oxideav-core` so the crate can plug into the `oxideav` framework
-# registry. Default-on; turn off for image-library use-cases that just
-# want the standalone `parse_pict` API.
+# Wires up the codec / decoder / encoder trait implementations and the
+# `VideoFrame` bridge against `oxideav-core` so the crate can plug into
+# the `oxideav` framework registry. Default-on; turn off for
+# image-library use-cases that just want the standalone contract API.
 registry = ["dep:oxideav-core", "dep:oxideav-mjpeg"]

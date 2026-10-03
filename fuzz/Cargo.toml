@@ -19,15 +19,22 @@ members = ["."]
 debug = 1
 
 [[bin]]
-name = "parse_pict"
-path = "fuzz_targets/parse_pict.rs"
+name = "decode"
+path = "fuzz_targets/decode.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "probe_pict"
-path = "fuzz_targets/probe_pict.rs"
+name = "probe"
+path = "fuzz_targets/probe.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "encode_roundtrip"
+path = "fuzz_targets/encode_roundtrip.rs"
 test = false
 doc = false
 bench = false

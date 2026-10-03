@@ -27,10 +27,10 @@ fuzz_target!(|data: &[u8]| {
             b.push(&t);
         }
         b.push(&[0, 0]);
-        let _ = oxideav_pict::parse_pict(&b.finish());
+        let _ = oxideav_pict::decode(&b.finish());
     }
     let mut b = PictBuilder::new(0, 0, frame, frame);
     if b.uncompressed_quicktime(data).is_ok() {
-        let _ = oxideav_pict::parse_pict(&b.finish());
+        let _ = oxideav_pict::decode(&b.finish());
     }
 });
