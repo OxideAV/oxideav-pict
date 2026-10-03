@@ -2,14 +2,171 @@
 
 [![CI](https://github.com/OxideAV/oxideav-pict/actions/workflows/ci.yml/badge.svg)](https://github.com/OxideAV/oxideav-pict/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/oxideav-pict.svg)](https://crates.io/crates/oxideav-pict) [![docs.rs](https://docs.rs/oxideav-pict/badge.svg)](https://docs.rs/oxideav-pict) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Pure-Rust PICT (Apple QuickDraw picture) reader + writer for the
+Pure-Rust PICT (Apple QuickDraw picture) decoder + encoder for the
 [`oxideav`](https://github.com/OxideAV/oxideav) framework. Clean-room
 implementation of the public **Inside Macintosh** books — *Imaging With
 QuickDraw* (1994) plus Volumes I (1985), V (1986) and VI (1991) for the
 classic QuickDraw / Color QuickDraw behaviour the opcode tables defer
-to; no external implementation source consulted.
+to, and *Inside Macintosh: QuickTime* (1993) for the `$8200` / `$8201`
+payloads; no external implementation source consulted.
 
-## Decode
+## Standalone use
+
+`oxideav-pict` follows the OxideAV image-crate contract
+(`IMAGE_CRATE_API`): the same small root vocabulary every
+`oxideav-<format>` image crate exposes, usable with
+`default-features = false` and no `oxideav-core`, returning pixels as
+plain `Vec<u8>`.
+
+```toml
+[dependencies]
+oxideav-pict = { version = "0.0", default-features = false }
+```
+
+```rust
+let bytes = std::fs::read("in.pict")?;
+if oxideav_pict::probe(&bytes) {
+    let info  = oxideav_pict::info(&bytes)?;        // header only: picFrame size, version, resolution
+    let img   = oxideav_pict::decode(&bytes)?;      // PictImage, Rgba — the rasterised picture frame
+    let rgba: Vec<u8> = img.to_rgba8();             // tightly packed RGBA, 4 * width bytes per row
+    let (w, h) = (img.width(), img.height());
+
+    let opts = oxideav_pict::EncodeOptions::default().with_pack(oxideav_pict::PackType::ComponentPackBits);
+    let out: Vec<u8> = oxideav_pict::encode_rgba8(w, h, &rgba, &opts)?;
+    std::fs::write("out.pict", out)?;
+}
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+| Item | Signature |
+|---|---|
+| `probe` | `fn(&[u8]) -> bool` — version-stanza sniff at offset 0 or after the 512-byte launch stub, allocation-free |
+| `info` | `fn(&[u8]) -> Result<ImageInfo, Error>` — `width`, `height`, `format` (`Rgba`), `frames` (1), `has_alpha` (false), `color`, `has_icc` / `has_exif` / `has_xmp` (false), plus `version`, `has_launch_stub`, `frame`, `header` (`resolution_dpi()`) — header only, no opcode walked |
+| `decode` / `decode_with` | `fn(&[u8][, &DecodeOptions]) -> Result<PictImage, Error>` — the whole picture rasterised onto `picFrame`, `Rgba` |
+| `decode_with_quicktime` | `fn(&[u8], &DecodeOptions, &mut dyn QuickTimeImageDecoder)` — the `$8200` codec hook (depth API) |
+| `decode_rgb8` / `decode_rgba8` | `-> Result<RgbImage / RgbaImage, Error>` — `{ width, height, data }`, tightly packed, 3 / 4 bytes per pixel |
+| `decode_from` | `fn<R: Read>(R) -> Result<PictImage, Error>` |
+| `encode` | `fn(&PictImage, &EncodeOptions) -> Result<Vec<u8>, Error>` — one `DirectBitsRect` raster; `Rgba` and `Rgb24` both land in the same RGBDirect PixMap (PICT has no alpha) |
+| `encode_rgb8` / `encode_rgba8` | `fn(w, h, &[u8], &EncodeOptions)` |
+| `encode_to` | `fn<W: Write>(&PictImage, &EncodeOptions, W) -> Result<(), Error>` |
+| `PictImage` | `{ width, height, format: PixelFormat, planes: Vec<Plane>, color: ColorInfo, metadata: Metadata, header: Option<PictHeader>, comments: Vec<PictComment>, quicktime: Vec<PictQuickTime>, text_state: PictTextState }` with `new` / `packed` / `from_rgb8` / `from_rgba8` (all `Result`), `width()` / `height()` / `format()` / `stride()`, `as_bytes()` / `data()` / `into_raw()`, `to_rgb8()` / `to_rgba8()` |
+| `PixelFormat` | `= PictPixelFormat`: `Rgba` (decode), `Rgb24` (encode input) — names mirror `oxideav_core::PixelFormat` |
+| `Error` | `= PictError`: `InvalidData`, `Unsupported`, `LimitExceeded`, `Io(std::io::Error)`, `NoRaster` |
+
+No `decode_all` / `encode_all`: a PICT is one picture (every raster
+opcode blits onto the same canvas).
+
+The pre-contract names — `parse_pict`, `parse_pict_with`, `encode_pict`,
+`probe_pict` — remain for one release as `#[deprecated]` thin wrappers
+(`encode_pict_v2` / `encode_pict_v1*` / `encode_pict_v2_with_clip` and
+the monochrome / indexed writers stay as the depth API, see *Encode
+depth API*).
+
+## Framework use
+
+With the default-on `registry` feature the crate plugs into the
+`oxideav-core` registry:
+
+```rust
+let mut ctx = oxideav_core::RuntimeContext::new();
+oxideav_pict::register(&mut ctx);                      // codec "pict" + the .pict / .pic / .pct extensions
+let dec = oxideav_pict::make_decoder(&params)?;        // / make_encoder
+let frame: oxideav_core::VideoFrame = img.into();      // From<PictImage>: the Rgba plane
+let back = oxideav_pict::PictImage::from_video_frame(&frame, &params)?;
+```
+
+The trait-side `Decoder` / `Encoder` are thin adapters over `decode` /
+`encode` (one implementation): the decoder emits the native `Rgba`
+plane (no colour signal — PICT defines none), the encoder accepts
+`Rgba` / `Rgb24` 1:1 and re-orders `Bgra` / `Bgr24` / `Argb` / `Abgr`.
+PICT has no container layer: the file is the picture record (with an
+optional 512-byte launch stub the decoder sniffs), so only the
+extension table is registered. `RegistryQuickTimeDecoder` routes a
+`$8200` compressor FourCC through a `CodecRegistry` (see *Embedded
+QuickTime images*).
+
+## Supported layouts
+
+Decode — every opcode lands on one canvas:
+
+| Source | `PixelFormat` | Notes |
+|---|---|---|
+| 1-bpp `BitMap` (`BitsRect` / `PackBitsRect` / `*Rgn`) | `Rgba` | black / white |
+| indexed 1 / 2 / 4 / 8-bit `PixMap` | `Rgba` | through the embedded `ColorTable` (see *Colour tables*) |
+| `DirectBitsRect` / `DirectBitsRgn` 16-bit A1R5G5B5, 32-bit XRGB | `Rgba` | `packType` 0–4; alpha `255` |
+| vector shapes, patterns, text | `Rgba` | rasterised at `picFrame` size, white paper |
+| `$8200` / `$8201` QuickTime images | `Rgba` | `'raw '` built in, `'jpeg'` via `oxideav-mjpeg` (`registry`), any FourCC via a caller decoder |
+
+Encode — `PictImage::format` → one `DirectBitsRect`:
+
+| `PixelFormat` | On the wire | Notes |
+|---|---|---|
+| `Rgba` | RGBDirect PixMap, `packType` per `EncodeOptions::pack` | alpha not stored; decodes back as `Rgba` with alpha `255` |
+| `Rgb24` | the same PixMap | `decode(encode(img))` comes back as `Rgba` |
+
+`decode(encode(img)) == img` holds for `Rgba` images with `PackType::Raw`
+/ `Packed24` / `ComponentPackBits` (`Rle16` is 5 bits per channel) —
+planes, colour, metadata, header and comments
+(`tests/contract.rs`). The lossy monochrome (`encode_pict_bits_rect`,
+…) and indexed-PixMap (`encode_pict_indexed_*`) writers and the
+drawing builders (`PictBuilder` / `PictV1Builder`) stay under their own
+names.
+
+## Options
+
+`DecodeOptions` (`Default` + `with_*`): `max_width`, `max_height`,
+`max_pixels` (default `None` — `picFrame` is `i16`-bounded by the
+format), `max_bytes` (the RGBA canvas; default 256 MiB =
+`MAX_RASTER_BYTES`, `None` lifts it) — all checked against the picture
+record header before the canvas is allocated (`Error::LimitExceeded`)
+— and `strict` (default `false`): leniently a `HeaderOp` payload with
+an unknown version word is skipped (`header = None`), a stream that
+ends without `OpEndPic` is accepted with what was drawn, and bytes
+after `OpEndPic` are ignored; strictly each is `Error::InvalidData`.
+Per-opcode buffers (`bounds × rowBytes`, a sub-image's RGBA) stay
+bounded by `MAX_RASTER_BYTES` whatever `max_bytes` says.
+
+`EncodeOptions` (`Default` + `with_*`): `version` (`V2` / `V1`), `pack`
+(`PackType::Raw` default, `Packed24`, `Rle16`, `ComponentPackBits`),
+`launch_stub` (`None` = v2 yes / v1 no), `frame_origin` (`picFrame`
+top-left, default `(0, 0)`), `resolution` (`hRes` / `vRes`; `None` =
+the image header's, else 72 dpi; `with_resolution_dpi`),
+`extended_header` (`None` = the image header's kind; `Some(true)`
+extended `version = -2`, `Some(false)` plain `version = -1`), `clip`
+(a rectangular `ClipRgn` before the raster), `comments` (write the
+image's Picture Comments back, default `true`).
+
+## Metadata and colour
+
+PICT carries no ICC profile, Exif, XMP or gamma: `PictImage::metadata`
+is always empty on decode and ignored on encode. The format's own
+annotation channel — Picture Comments (`ShortComment` / `LongComment`,
+§A-3) — is the typed `PictImage::comments` extra, written back by
+`encode`. QuickDraw's `RGBColor` is device RGB with no colour-space
+signalling, so `PictImage::color` is the documented convention
+`ColorInfo::pict_default()` = full-range RGB (`matrix` 0), primaries
+and transfer unspecified; it is not stamped on registry frames. The
+v2 `HeaderOp` resolution and optimal source rectangle are on
+`PictImage::header` / `ImageInfo::header`.
+
+## Limits
+
+Every function returns `Error` on hostile input, never panics (fuzzed:
+`probe` / `info` / `decode` / `decode_with` / `decode_rgb8` /
+`decode_rgba8` / `inspect`, the encoder round trip, and the `$8200`
+compositor). `DecodeOptions` limits fire before the canvas is
+allocated; every per-opcode buffer sized from a PixMap / region /
+polygon length field is checked against `MAX_RASTER_BYTES` (256 MiB)
+with overflow-safe arithmetic; raw pixel rows must physically fit their
+declared bounds width. `info` is header-only and may report a geometry
+that `decode` then refuses (`Unsupported` when the canvas would not
+fit `usize`, `LimitExceeded` when a limit is hit, `InvalidData` for a
+degenerate frame).
+
+
+## PICT specifics
+
+### Decode
 
 PICT is opcode-based: the file is a stream of QuickDraw drawing
 commands. The decoder walks both the v2 (16-bit, word-aligned) and v1
@@ -17,7 +174,7 @@ commands. The decoder walks both the v2 (16-bit, word-aligned) and v1
 command — lines, rectangles, round-rects, ovals, arcs, polygons,
 regions, embedded rasters, **and text** — onto an in-crate
 software-rasteriser RGBA canvas sized to `picFrame`. The result is
-returned as a `PictImage`.
+returned as a [`PictImage`] (see *Standalone use* above).
 
 | Opcode group | Behaviour |
 | ------------ | --------- |
@@ -51,7 +208,7 @@ shapes). The optional 512-byte launch-stub prefix is auto-detected.
 PackBits (§A-5) is implemented at both byte and u16 unit sizes plus
 per-channel for packType 4.
 
-### Colour tables and the Palette Manager rule
+#### Colour tables and the Palette Manager rule
 
 An indexed PixMap's `ColorTable` is normally keyed by value: *Imaging
 With QuickDraw* (book page 4-55) makes each `ColorSpec.value` the pixel
@@ -82,7 +239,7 @@ numbers against, so the entry's own RGB is used — the colours the
 article's desktop-pattern example starts from before `AnimatePalette`
 would replace them.
 
-### Patterns
+#### Patterns
 
 The three monochrome pattern slots (`PnPat` / `BkPat` / `FillPat`) and
 the three colour slots (`PnPixPat` / `BkPixPat` / `FillPixPat`) are
@@ -92,15 +249,15 @@ monochrome `Pat1Data`. The `ditherPat` sub-type resolves its target RGB
 at every cell (exact on a true-colour canvas).
 
 ```rust
-use oxideav_pict::{parse_pict, PictPixelFormat};
+use oxideav_pict::{decode, PixelFormat};
 
-let img = parse_pict(&std::fs::read("photo.pct")?)?;
-assert_eq!(img.pixel_format, PictPixelFormat::Rgba);
-assert_eq!(img.data.len(), img.width as usize * img.height as usize * 4);
+let img = decode(&std::fs::read("photo.pct")?)?;
+assert_eq!(img.format, PixelFormat::Rgba);
+assert_eq!(img.data().len(), img.width as usize * img.height as usize * 4);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-### Transfer modes
+#### Transfer modes
 
 - **Boolean pattern modes** (`patCopy = 8` … `notPatBic = 15`, §3) are
   honoured per cell on every patterned fill / frame / paint / erase verb.
@@ -127,30 +284,35 @@ their own inverse. Structured text / pen-mode / highlight state opcodes
 [`PictTextState`] for round-trip tooling; `TxMode` resolves to a typed
 [`SourceMode`] via `tx_source_mode`.
 
-## Encode
+### Encode depth API
+
+The contract `encode` writes one `DirectBitsRect` per `EncodeOptions`
+(see *Options*). Below it, the format-specific writers keep their
+names:
 
 | Function | Format |
 | -------- | ------ |
-| `encode_pict` / `encode_pict_v2(…, PackType)` | v2, packType 1 (raw) / 2 (packed24) / 3 (Rle16) / 4 (ComponentPackBits) |
-| `encode_pict_v1` / `encode_pict_v1_with(…, PackType)` | v1 framing around a v2-style `DirectBitsRect $9A` (an extension — §A-3 Table A-3 defines no `$9A`; readable by this crate, not by strict Table-A-3 readers), no stub / headerOp |
+| `encode_pict_v2(…, PackType)` | v2, packType 1 (raw) / 2 (packed24) / 3 (Rle16) / 4 (ComponentPackBits) — `encode_rgba8` with `with_pack` |
+| `encode_pict_v1` / `encode_pict_v1_with(…, PackType)` | v1 framing around a v2-style `DirectBitsRect $9A` (an extension — §A-3 Table A-3 defines no `$9A`; readable by this crate, not by strict Table-A-3 readers), no stub / headerOp — `encode_rgba8` with `with_version(PictVersion::V1)` |
 | `encode_pict_v1_bits_rect` / `encode_pict_v1_pack_bits_rect` | strict Table-A-3 v1 raster: 1-bpp BitMap via `$90` (footnote `‡`: `rowBytes < 8` only) / `$98` PackBits rows |
 | `encode_pict_bits_rect` / `encode_pict_pack_bits_rect` | v2 1-bpp BitMap (raw / PackBits-RLE rows) |
 | `encode_pict_bits_rgn` / `encode_pict_pack_bits_rgn` | masked 1-bpp variants with rectangular clip region |
 | `encode_pict_indexed_*` (`bits_rect` / `pack_bits_rect` + `*_rgn`) | indexed 1/2/4/8-bpp PixMap with embedded ColorTable |
-| `encode_pict_v2_with_clip` | v2 with a `ClipRgn` opcode before pixel data |
+| `encode_pict_v2_with_clip` | v2 with a `ClipRgn` opcode before pixel data — `encode_rgba8` with `with_clip` |
 | `ops::PictBuilder` | drawing-command synth (lines incl. `ShortLine*` compact forms / shapes incl. the same-shape replay verbs / regions / clip / `Origin` / patterns / comments / raster / text — `LongText` + `DH/DV/DHDVText`), chainable |
 | `ops::PictV1Builder` | the same opcode chunks assembled as a **v1** stream (1-byte opcodes, `$11 $01` stanza, `picSize` recorded); rejects Color-QuickDraw-only opcodes at build time |
 
 Every v2 emit path writes a canonical extended-v2 header
-(`version=-2`, `hRes=vRes=72.0` dpi, `optimal_source_rect = picFrame`);
-pre-header PICTs are still accepted on decode.
+(`version=-2`, `hRes=vRes=72.0` dpi, `optimal_source_rect = picFrame`)
+unless `EncodeOptions` says otherwise; pre-header PICTs are still
+accepted on decode.
 
 ```rust
-use oxideav_pict::{encode_pict_v2, parse_pict, PackType};
+use oxideav_pict::{decode, encode_rgba8, EncodeOptions, PackType};
 
 let rgba = vec![0u8; 4 * 4 * 4];
-let pict = encode_pict_v2(4, 4, &rgba, PackType::Rle16)?;
-let img = parse_pict(&pict)?;
+let pict = encode_rgba8(4, 4, &rgba, &EncodeOptions::default().with_pack(PackType::Rle16))?;
+let img = decode(&pict)?;
 assert_eq!(img.width, 4);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
@@ -167,7 +329,7 @@ is what the decoder replays.
 
 * **Codec boundary.** The image data's compressor is named by the
   `ImageDescription` `cType` FourCC (page 3-50), so `oxideav-pict`
-  never implements a compressor: `parse_pict` hands the description +
+  never implements a compressor: `decode` hands the description +
   bytes to a [`QuickTimeImageDecoder`] and composites the RGBA it
   returns. The default chain ([`DefaultQuickTimeDecoder`]) covers
   `'raw '` (Table 3-3's compressor that "does not compress": the data
@@ -177,8 +339,8 @@ is what the decoder replays.
   QuickTime-emitted `$8200` found in the wild carries.
   `registry::RegistryQuickTimeDecoder` resolves the FourCC through a
   caller's `oxideav_core::CodecRegistry` first (`'cvid'` → Cinepak,
-  …) and folds the decoded frame to RGBA; `parse_pict_with` takes any
-  decoder of your own. A compressor nobody decodes leaves the canvas
+  …) and folds the decoded frame to RGBA; `decode_with_quicktime` takes
+  any decoder of your own. A compressor nobody decodes leaves the canvas
   alone, keeps the wrapper typed, and is reported as
   `QuickTimeRender::Unsupported { codec, .. }` — the page 3-26 posture
   of honouring `Size` and carrying on.
@@ -242,9 +404,11 @@ is what the decoder replays.
   the `RectMatrix` placement; emit → parse round-trips compare equal
   at the typed level.
 
-## Probe (read-only introspection)
+### Inspect (read-only introspection)
 
-[`probe_pict`] returns a `PictProbe` summary without rasterising —
+[`inspect`] (`probe_pict` before the contract) returns a `PictProbe`
+summary without rasterising — the depth walker below the contract's
+`probe` (a bool sniff) and `info` (header only) —
 useful for thumbnail UIs, content scanners (spotting embedded QuickTime
 before paying decode cost), and encoder tests asserting an opcode mix.
 It shares its opcode walker with the decoder and surfaces counts
@@ -256,23 +420,24 @@ dimensions, depth, matte / mask presence, `$8201` subopcode — without
 retaining payload bytes), and a `termination` reason.
 
 ```rust
-use oxideav_pict::{encode_pict, probe_pict, ProbeVersion};
+use oxideav_pict::{encode_rgba8, inspect, EncodeOptions, ProbeVersion};
 
-let pict = encode_pict(8, 8, &vec![0x80u8; 8 * 8 * 4])?;
-let p = probe_pict(&pict)?;
+let pict = encode_rgba8(8, 8, &vec![0x80u8; 8 * 8 * 4], &EncodeOptions::default())?;
+let p = inspect(&pict)?;
 assert_eq!(p.version, ProbeVersion::V2);
 assert_eq!(p.raster_count, 1);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-## Hostile-input hardening
+### Hostile-input hardening
 
 PICT length fields (`picFrame`, PixMap `bounds` / `rowBytes`, region /
-polygon sizes …) are attacker-controlled. Every decode-side buffer
-sized from them is checked against the [`MAX_RASTER_BYTES`] budget
-(256 MiB) with overflow-safe arithmetic before allocation, and raw
-pixel rows must physically fit their declared bounds width. The
-`hostile_round401` test suite drives `parse_pict` / `probe_pict`
+polygon sizes …) are attacker-controlled. The canvas is checked
+against `DecodeOptions` and every per-opcode buffer against the
+[`MAX_RASTER_BYTES`] budget (256 MiB) with overflow-safe arithmetic
+before allocation, and raw pixel rows must physically fit their
+declared bounds width. The `hostile_round401` test suite drives the
+decoder and the walker
 through every truncation prefix of an opcode-family corpus, seeded
 byte mutations, systematic length-field maxing, and hand-crafted
 giant-header records — the decoder returns `Err`, it never panics.
@@ -285,31 +450,21 @@ streams are never reinterpreted. `tests/emitter_round461_imagemagick.rs`
 pins a tool-generated fixture byte-identical to ImageMagick's own
 render of it.
 
-`fuzz/` carries three `cargo fuzz` targets (round 461): `parse_pict`
-(whole-file decode through the default QuickTime decoder chain),
-`probe_pict` (the decode-free walker + the typed `$8200` / `$8201`
-payload parsers) and `quicktime_8200` (the fuzzer's bytes become the
-interior of one `$8200` — and one `$8201` — opcode inside a valid
-picture, so the matrix / mask / matte / mode compositor and the
-`'raw '` + `'jpeg'` decoders are hit far more often than a whole-file
-target reaches them). Run with
-`cargo +nightly fuzz run quicktime_8200 -- -max_len=65536`.
+`fuzz/` carries four `cargo fuzz` targets: `decode` (`probe` / `info` /
+`decode` / `decode_rgb8` / `decode_rgba8` / `decode_with` under
+byte-derived limits and strictness, with the plane-geometry
+invariants asserted), `probe` (`probe` / `info` / `inspect` + the typed
+`$8200` / `$8201` payload parsers, with `info` and `inspect` required to
+agree), `encode_roundtrip` (fuzzed geometry, pack type, version, stub,
+header kind, origin and clip through `encode` → `info` → `decode`, pixel
+equality for the lossless pack types) and `quicktime_8200` (the fuzzer's
+bytes become the interior of one `$8200` — and one `$8201` — opcode
+inside a valid picture, so the matrix / mask / matte / mode compositor
+and the `'raw '` + `'jpeg'` decoders are hit far more often than a
+whole-file target reaches them). Run with
+`cargo +nightly fuzz run decode`.
 
-## Standalone vs registry-integrated
-
-The default `registry` Cargo feature pulls in `oxideav-core` and exposes
-the framework `Decoder` trait surface plus a `registry::register` entry
-point. Disable it for an `oxideav-core`-free build that still exposes
-`parse_pict` / `encode_pict` plus crate-local `PictImage` /
-`PictPixelFormat` / `PictError` types.
-
-```toml
-[dependencies]
-oxideav-pict = "0.0"                                        # framework
-oxideav-pict = { version = "0.0", default-features = false } # standalone
-```
-
-## What's not yet in
+### What's not yet in
 
 * **System-font fidelity.** Text opcodes **are** rasterised, positioned,
   scaled, styled (`txFace` synthesis per Inside Macintosh Vol I — round
@@ -339,7 +494,14 @@ oxideav-pict = { version = "0.0", default-features = false } # standalone
   that draws a caption and a `NOP` right after a `$8200` would lose
   the caption. `Rendered { placeholder_skipped }` says when it fired.
 * **Multi-image PICTs.** Each raster blits onto the same canvas — no
-  separate per-image surfaces.
+  separate per-image surfaces, hence no `decode_all` / `Pal8` output:
+  an indexed PixMap is one opcode among many, and the canvas it lands
+  on is RGBA.
+* **Resolution-aware rasterising.** A vector-only picture is drawn at
+  its `picFrame` pixel size (QuickDraw coordinates are 72-dpi pixels);
+  the extended-v2 header's `hRes` / `vRes` are reported on
+  `PictImage::header` / `ImageInfo::resolution_dpi` but not applied as
+  a scale factor.
 
 ## License
 

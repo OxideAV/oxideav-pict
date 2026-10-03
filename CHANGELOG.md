@@ -9,6 +9,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- round 468: **the image-crate contract (`IMAGE_CRATE_API`).** The root
+  now exposes the fleet vocabulary — `probe` (allocation-free
+  version-stanza sniff), `info` (`ImageInfo` from the picture record
+  header: `picFrame` size, `version`, `has_launch_stub`, `frame`,
+  `header` / `resolution_dpi()`, no opcode walked), `decode` /
+  `decode_with(&DecodeOptions)` / `decode_with_quicktime` (the `$8200`
+  codec hook), `decode_rgb8` / `decode_rgba8` (`RgbImage` /
+  `RgbaImage`), `decode_from<R: Read>`, `encode(&PictImage,
+  &EncodeOptions)` / `encode_rgb8` / `encode_rgba8` / `encode_to<W:
+  Write>`. New records: `Plane`, `ColorInfo` (+ `ColorRange`,
+  `ColorInfo::pict_default()` = full-range RGB, primaries / transfer
+  unspecified), `Metadata` (always empty — PICT has no ICC / Exif /
+  XMP / gamma carrier), `ImageInfo`, `PictVersion`, `DecodeOptions`
+  (`max_width` / `max_height` / `max_pixels` / `max_bytes` checked
+  before the canvas is allocated, `strict`), `EncodeOptions`
+  (`version`, `pack`, `launch_stub`, `frame_origin`, `resolution`,
+  `extended_header`, `clip`, `comments` — every behaviour variant a
+  field), `PixelFormat` / `Error` aliases.
+- `PictPixelFormat::Rgb24` as an encode-input layout
+  (`PictImage::from_rgb8`, `encode_rgb8`): written to the same
+  RGBDirect PixMap as `Rgba`, decodes back as `Rgba`.
+- `PictError::LimitExceeded` and `PictError::Io(std::io::Error)` (+
+  `From<std::io::Error>`).
+- `DecodeOptions::strict`: rejects a `HeaderOp` payload whose version
+  word is neither `$FFFE` nor `$FFFF`, a stream that ends without
+  `OpEndPic`, and bytes after `OpEndPic` — each tolerated leniently.
+- `encode` writes the image's Picture Comments back (`ShortComment` /
+  `LongComment`, v1 and v2 framings) and follows the image header's
+  kind and resolution, so `decode(encode(img)) == img` for the
+  lossless pack types (`tests/contract.rs`).
+- `registry`: `make_encoder` (framework `Encoder` over `encode`;
+  `Rgba` / `Rgb24` 1:1, `Bgra` / `Bgr24` / `Argb` / `Abgr`
+  re-ordered), the frame bridge (`From<PictImage> for VideoFrame`,
+  `PictImage::from_video_frame(&VideoFrame, &CodecParameters)`,
+  `TryFrom<(&VideoFrame, &CodecParameters)>`, `image_into_video_frame`),
+  the 1:1 `PictPixelFormat` ↔ `oxideav_core::PixelFormat` mapping and
+  the `ColorInfo` ↔ `ColorSignal` mapping; the codec registration now
+  advertises the encoder.
+- `inspect` — the depth walker's contract-era name (was `probe_pict`).
+- CI: the standalone job now runs the test suite and clippy
+  (`--all-targets`) without default features, not just a `--lib` build.
+- Fuzz: `decode` (contract decode paths + `decode_with` limits /
+  strictness, plane-geometry invariants), `probe` (`probe` / `info` /
+  `inspect` agreement + the typed QuickTime parsers) and
+  `encode_roundtrip` (fuzzed geometry / options through `encode` →
+  `info` → `decode`) replace the `parse_pict` / `probe_pict` targets;
+  `quicktime_8200` stays.
+- `Cargo.toml` `exclude = ["/tests", "/fuzz"]` (crates.io 10 MiB cap).
+
+### Changed
+
+- **`PictImage` has the contract shape**: `format: PixelFormat` (was
+  `pixel_format`) and `planes: Vec<Plane>` (was `data: Vec<u8>`; the
+  bytes are `planes[0].data`, `data()`, `as_bytes()` or `into_raw()`),
+  plus `color` and `metadata`; `pts` is gone (the framework frame
+  carries it). The PICT extras `header`, `comments`, `quicktime`,
+  `text_state` are unchanged. The struct is `#[non_exhaustive]` with
+  fallible constructors (`new` / `packed` / `from_rgb8` / `from_rgba8`
+  → `Result`, `InvalidData` on geometry mismatches) and now derives
+  `PartialEq`.
+- `PictError` is `#[non_exhaustive]` and no longer derives `Clone` /
+  `PartialEq` / `Eq` (it carries an `io::Error`); match on variants.
+- A `picFrame` beyond the decode budget is now `LimitExceeded` (was
+  `InvalidData`); a canvas that cannot fit `usize` is `Unsupported`.
+- `DecodeOptions::max_bytes` (default 256 MiB) governs the canvas;
+  `MAX_RASTER_BYTES` keeps governing per-opcode buffers.
+- The `DirectBitsRect` writers (`encode_pict_v2`, `encode_pict_v1_with`,
+  `encode_pict_v2_with_clip`) share one framing core with `encode`;
+  their bytes are unchanged for every previously valid input.
+- The framework `Decoder` lives in `registry` (re-exported as
+  `make_decoder` at the root; `decoder::make_decoder` is gone).
+
+### Deprecated
+
+- `parse_pict` → `decode`; `parse_pict_with` →
+  `decode_with_quicktime`; `encode_pict` → `encode_rgba8`;
+  `probe_pict` → `inspect`. Thin wrappers for one release.
+
+### Fixed
+
+- `encode_pict_v2` with `PackType::Packed24` accepted widths
+  4096–5461 whose 32-bit `rowBytes` overflowed the 14-bit PixMap field
+  (writing a corrupt header); every writer now rejects them with
+  `InvalidData`.
+
+### Added
+
 - round 461: **`$8200` CompressedQuickTime pictures render pixels on
   the canvas.** The payload is a codec boundary (Inside Macintosh:
   QuickTime, page 3-50: the `ImageDescription` `cType` names the
