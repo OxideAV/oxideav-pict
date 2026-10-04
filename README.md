@@ -68,11 +68,17 @@ With the default-on `registry` feature the crate plugs into the
 `oxideav-core` registry:
 
 ```rust
+# let img = oxideav_pict::PictImage::from_rgba8(1, 1, vec![0; 4])?;
+# let mut params = oxideav_core::CodecParameters::video(oxideav_core::CodecId::new("pict"));
+# params.width = Some(1);
+# params.height = Some(1);
+# params.pixel_format = Some(oxideav_core::PixelFormat::Rgba);
 let mut ctx = oxideav_core::RuntimeContext::new();
 oxideav_pict::register(&mut ctx);                      // codec "pict" + the .pict / .pic / .pct extensions
 let dec = oxideav_pict::make_decoder(&params)?;        // / make_encoder
 let frame: oxideav_core::VideoFrame = img.into();      // From<PictImage>: the Rgba plane
 let back = oxideav_pict::PictImage::from_video_frame(&frame, &params)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 The trait-side `Decoder` / `Encoder` are thin adapters over `decode` /
