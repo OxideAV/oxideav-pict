@@ -380,19 +380,13 @@ pub fn register_codecs(reg: &mut CodecRegistry) {
     );
 }
 
-/// Register PICT file extensions into the supplied [`ContainerRegistry`].
-///
-/// PICT has no container layer of its own — the file IS the picture
-/// body (optionally prefixed by a 512-byte launch stub that the
-/// decoder sniffs), so no demuxer / probe is registered. We *do*
-/// register the canonical PICT file extensions (`.pict`, `.pic`,
-/// `.pct`) against the codec id `"pict"` so a caller resolving a path
-/// hint via [`ContainerRegistry::container_for_extension`] still gets
-/// a useful answer.
+/// Register the `pict` container ([`crate::container`]): the structural
+/// probe (version stanza + opcode walk — PICT has no magic), the
+/// demuxer (the whole file as one packet, `Rgba` stream), the muxer
+/// (the encoder's packet written verbatim) and the `.pict` / `.pct` /
+/// `.pic` extensions.
 pub fn register_containers(reg: &mut ContainerRegistry) {
-    for ext in ["pict", "pic", "pct"] {
-        reg.register_extension(ext, crate::CODEC_ID_STR);
-    }
+    crate::container::register(reg);
 }
 
 /// Unified entry point: install every codec and container provided by

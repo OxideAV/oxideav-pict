@@ -10,6 +10,8 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 oxideav-pict = { path = ".." }
+# The `demux` target drives the registry container; the published core.
+oxideav-core = "0.1"
 
 # Prevent this from interfering with workspaces.
 [workspace]
@@ -42,6 +44,17 @@ bench = false
 [[bin]]
 name = "quicktime_8200"
 path = "fuzz_targets/quicktime_8200.rs"
+test = false
+doc = false
+bench = false
+
+# `demux` drives the `pict` container through the registry: the
+# structural probe (version stanza + opcode walk, with and without an
+# extension hint), the demuxer, the registry decoder on the packet and
+# the muxer on the demuxed packet.
+[[bin]]
+name = "demux"
+path = "fuzz_targets/demux.rs"
 test = false
 doc = false
 bench = false

@@ -97,6 +97,8 @@ pub mod raster;
 #[doc(hidden)]
 pub mod reader;
 // internal — exposed for tests/fuzz; not part of the stable API
+#[cfg(feature = "registry")]
+pub mod container;
 #[doc(hidden)]
 pub mod region;
 #[cfg(feature = "registry")]

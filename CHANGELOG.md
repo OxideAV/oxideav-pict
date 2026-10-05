@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The `pict` container** (`container` module, `registry` feature):
+  `register` / `register_containers` now install a structural probe, a
+  demuxer and a muxer besides the `.pict` / `.pct` / `.pic` extensions,
+  so the framework (`oxideav_image::open`, the CLI) can open and write
+  PICT files through the registry. PICT has no magic: the probe scores
+  the §A-3 version stanza at offset 10 (record at byte 0 or 512) plus a
+  non-rasterising opcode walk (`OpEndPic` reached → 90, clean end between
+  opcodes → 60, header parsed but opcodes cut → 50 v2 / 25 v1, stanza
+  without a parseable header → 30 v2 / 15 v1, a v1 record with no parsed
+  opcode → 0, extension hint lifts a stanza match to ≥ 75,
+  bare hint 25); the sibling crates' image fixtures (467 files) and
+  synthesised foreign headers score 0 — the sweep caught a JPEG carrying
+  `$11 $01` at offset 10 by chance, which is why the v1 rule needs an
+  opcode. The demuxer declares
+  one `Rgba` video stream with the `picFrame` geometry (no colour signal
+  — PICT carries none) and emits the whole file as one packet (`pts` 0,
+  `1/1`); the muxer writes the encoder's single packet verbatim and
+  refuses a second. Pinned: registry planes == `decode` planes on eight
+  layouts (v1 / v2 × raw / PackBits, DirectBits / BitsRect / indexed 4 +
+  8 bpp, the ImageMagick fixture), `demux(mux(frame)) == frame` for
+  `Rgba` and `Rgb24` input, hostile truncations / byte flips; new
+  `demux` fuzz target
 - round 468: **the image-crate contract (`IMAGE_CRATE_API`).** The root
   now exposes the fleet vocabulary — `probe` (allocation-free
   version-stanza sniff), `info` (`ImageInfo` from the picture record

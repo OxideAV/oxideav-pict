@@ -74,7 +74,7 @@ With the default-on `registry` feature the crate plugs into the
 # params.height = Some(1);
 # params.pixel_format = Some(oxideav_core::PixelFormat::Rgba);
 let mut ctx = oxideav_core::RuntimeContext::new();
-oxideav_pict::register(&mut ctx);                      // codec "pict" + the .pict / .pic / .pct extensions
+oxideav_pict::register(&mut ctx);                      // codec "pict" + the "pict" container (.pict / .pct / .pic)
 let dec = oxideav_pict::make_decoder(&params)?;        // / make_encoder
 let frame: oxideav_core::VideoFrame = img.into();      // From<PictImage>: the Rgba plane
 let back = oxideav_pict::PictImage::from_video_frame(&frame, &params)?;
@@ -85,11 +85,48 @@ The trait-side `Decoder` / `Encoder` are thin adapters over `decode` /
 `encode` (one implementation): the decoder emits the native `Rgba`
 plane (no colour signal — PICT defines none), the encoder accepts
 `Rgba` / `Rgb24` 1:1 and re-orders `Bgra` / `Bgr24` / `Argb` / `Abgr`.
-PICT has no container layer: the file is the picture record (with an
-optional 512-byte launch stub the decoder sniffs), so only the
-extension table is registered. `RegistryQuickTimeDecoder` routes a
-`$8200` compressor FourCC through a `CodecRegistry` (see *Embedded
-QuickTime images*).
+`RegistryQuickTimeDecoder` routes a `$8200` compressor FourCC through a
+`CodecRegistry` (see *Embedded QuickTime images*).
+
+### The `pict` container
+
+`register` / `register_containers` also install the `pict` container
+(`container` module), so `oxideav_image::open(&ctx, "art.pict")` and the
+CLI resolve probe → demuxer → decoder through the registry:
+
+- **Probe.** PICT has no magic at offset 0. The score comes from the
+  picture-record structure, as Layer 1 `probe` sniffs it: the §A-3
+  version stanza at offset 10 of a record at byte 0 or byte 512
+  (`$0011 $02FF` v2, `$11 $01` v1), then a non-rasterising opcode walk
+  (`inspect`). Reaching `OpEndPic` scores 90; a stream that ends cleanly
+  between opcodes 60; a record whose header parses but whose opcodes are
+  cut (a picture larger than the probe buffer, or garbage after the
+  header) 50 (v2, a 6-byte `$0011 $02FF $0C00` signature) / 25 (v1); a
+  stanza whose record header does not parse 30 (v2) / 15 (v1); a v1
+  record with no parsed opcode — a garbage first opcode, or a bare
+  `OpEndPic`, an empty picture — is noise (the 2-byte stanza
+  matches one random file in 65 536, and a v1 picture is bounded by its
+  16-bit `picSize`, so the probe buffer never cuts a genuine one) and
+  scores 0. A `.pict` / `.pct` /
+  `.pic` hint lifts any stanza match to at least 75 and scores 25 alone
+  (`.pic` is also Radiance HDR's extension; its magic scores 100 there
+  and wins the election). The sibling crates' image fixtures (467 files
+  across 13 crates) and synthesised foreign headers are pinned to score
+  0 without a hint.
+- **Demuxer.** One video stream — `width` / `height` from `picFrame`
+  (what `info` reports; a degenerate frame is refused), native
+  `pixel_format` `Rgba`, codec `pict`, no colour signal (QuickDraw
+  carries none; the crate's documented default stays on the standalone
+  `ColorInfo`) — and one packet holding the whole file, `pts` 0 in a
+  `1/1` time base. No metadata (PICT has no textual metadata carrier).
+- **Muxer.** Exactly one packet, the encoder's complete PICT file,
+  written verbatim; a second packet is refused (a PICT holds one
+  picture). `Rgb24` frames are accepted by the encoder and decode back
+  as `Rgba` with opaque alpha.
+
+The registry frame is byte-identical to `decode` on every writer layout
+(v1 / v2, raw / PackBits, DirectBits / BitsRect / indexed) and the
+ImageMagick fixture, and `demux(mux(frame)) == frame`.
 
 ## Supported layouts
 
