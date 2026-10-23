@@ -25,7 +25,7 @@
 #![allow(deprecated)]
 
 use oxideav_pict::ops::{PictBuilder, Verb};
-use oxideav_pict::{parse_pict, PatternMode, PictImage};
+use oxideav_pict::{PatternMode, PictImage, parse_pict};
 
 const HSTRIPE: [u8; 8] = [0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00];
 

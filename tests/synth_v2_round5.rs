@@ -21,7 +21,7 @@
 
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
-    encode_pict_bits_rect, encode_pict_pack_bits_rect, encode_pict_v1_with, parse_pict, PackType,
+    PackType, encode_pict_bits_rect, encode_pict_pack_bits_rect, encode_pict_v1_with, parse_pict,
 };
 
 // ---------------------------------------------------------------------------
@@ -206,7 +206,7 @@ fn bits_rect_all_black_roundtrip() {
     let width = 8u32;
     let height = 8u32;
     let mut rgba = vec![0u8; (width * height * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[3] = 0xFF;
     }
     let enc = encode_pict_bits_rect(width, height, &rgba).unwrap();
@@ -321,7 +321,7 @@ fn builder_raster_alone_decodes() {
     let width = 4u32;
     let height = 4u32;
     let mut rgba = vec![0u8; (width * height * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[0] = 0xCC;
         px[3] = 0xFF;
     }
@@ -350,7 +350,7 @@ fn builder_drawing_under_raster() {
     b.rect(Verb::Paint, 0, 0, 16, 16);
     // 4×4 yellow raster at (4,4)..(8,8).
     let mut raster_rgba = vec![0u8; 4 * 4 * 4];
-    for px in raster_rgba.chunks_exact_mut(4) {
+    for px in raster_rgba.as_chunks_mut::<4>().0 {
         px[0] = 0xFF;
         px[1] = 0xFF;
         px[2] = 0x00;
@@ -376,7 +376,7 @@ fn builder_raster_then_drawing_overlays() {
     // Drawing AFTER the raster overlays it.
     let mut b = PictBuilder::new(0, 0, 16, 16);
     let mut raster_rgba = vec![0u8; 16 * 16 * 4];
-    for px in raster_rgba.chunks_exact_mut(4) {
+    for px in raster_rgba.as_chunks_mut::<4>().0 {
         px[2] = 0xFF; // pure blue
         px[3] = 0xFF;
     }
@@ -420,7 +420,7 @@ fn builder_drawing_and_packtype3_raster() {
     // types.
     let mut b = PictBuilder::new(0, 0, 8, 8);
     let mut raster_rgba = vec![0u8; 8 * 8 * 4];
-    for px in raster_rgba.chunks_exact_mut(4) {
+    for px in raster_rgba.as_chunks_mut::<4>().0 {
         px[0] = 0xFF;
         px[1] = 0xC0;
         px[2] = 0x00;

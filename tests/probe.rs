@@ -17,8 +17,9 @@
 
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
-    encode_pict, encode_pict_pack_bits_rect, encode_pict_v1, encode_pict_v1_with, encode_pict_v2,
-    encode_pict_v2_with_clip, parse_pict, probe_pict, PackType, ProbeTermination, ProbeVersion,
+    PackType, ProbeTermination, ProbeVersion, encode_pict, encode_pict_pack_bits_rect,
+    encode_pict_v1, encode_pict_v1_with, encode_pict_v2, encode_pict_v2_with_clip, parse_pict,
+    probe_pict,
 };
 
 // ---------------------------------------------------------------------------
@@ -80,12 +81,12 @@ fn probe_rejects_bad_version_word() {
     buf.extend_from_slice(&0i16.to_be_bytes()); // frame left
     buf.extend_from_slice(&8i16.to_be_bytes()); // frame bottom
     buf.extend_from_slice(&8i16.to_be_bytes()); // frame right
-                                                // BUT detect_body_offset won't accept this — sentinel byte mismatch.
-                                                // To exercise the actual "version detection" arm we need to craft a
-                                                // stream whose sentinel matches one of the recognised forms but
-                                                // whose follow-on bytes are bad.
-                                                // Easier: construct a v2-looking record (0x0011 0x02FF) then put
-                                                // a non-headerOp word.
+    // BUT detect_body_offset won't accept this — sentinel byte mismatch.
+    // To exercise the actual "version detection" arm we need to craft a
+    // stream whose sentinel matches one of the recognised forms but
+    // whose follow-on bytes are bad.
+    // Easier: construct a v2-looking record (0x0011 0x02FF) then put
+    // a non-headerOp word.
     let mut bad = Vec::new();
     bad.extend_from_slice(&0u16.to_be_bytes());
     bad.extend_from_slice(&0i16.to_be_bytes());

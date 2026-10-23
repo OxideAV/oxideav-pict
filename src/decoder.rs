@@ -46,9 +46,9 @@ use crate::image::{PictComment, PictImage, PictPixelFormat, PictVersion};
 use crate::opcodes::*;
 use crate::packbits;
 use crate::raster::{
-    fill_arc, fill_oval_pattern_mode, fill_oval_pix_pattern, fill_polygon_pattern_mode,
-    fill_polygon_pix_pattern, fill_rect, fill_rect_pattern_mode, fill_rect_pix_pattern,
-    fill_round_rect_pattern_mode, fill_round_rect_pix_pattern, frame_arc,
+    Canvas, PatternMode, SourceMode, fill_arc, fill_oval_pattern_mode, fill_oval_pix_pattern,
+    fill_polygon_pattern_mode, fill_polygon_pix_pattern, fill_rect, fill_rect_pattern_mode,
+    fill_rect_pix_pattern, fill_round_rect_pattern_mode, fill_round_rect_pix_pattern, frame_arc,
     frame_arc_pattern_thick_mode, frame_arc_pix_pattern_thick, frame_oval_pattern_thick_mode,
     frame_oval_pix_pattern_thick, frame_oval_thick, frame_polygon,
     frame_polygon_pattern_thick_mode, frame_polygon_pix_pattern_thick,
@@ -56,10 +56,10 @@ use crate::raster::{
     frame_round_rect_pattern_thick_mode, frame_round_rect_pix_pattern_thick, invert_arc,
     invert_oval, invert_polygon, invert_round_rect, line_pattern_thick_mode,
     line_pix_pattern_thick, line_thick as draw_line_thick, stamp_region_pen_cell_mode,
-    stamp_region_pen_cell_pix, Canvas, PatternMode, SourceMode,
+    stamp_region_pen_cell_pix,
 };
 use crate::reader::Reader;
-use crate::region::{parse_region, Region};
+use crate::region::{Region, parse_region};
 use crate::state::{
     Pattern, PictFontName, PictGlyphState, PictLineJustify, PictState, PixPattern, RectI32, Rgba,
     TextRatio,
@@ -2308,7 +2308,7 @@ fn composite_quicktime(
         match comp.matrix.transform_rect_f64(placement) {
             Some(r) => r,
             None => {
-                return QuickTimeRender::Failed("matrix projects the image behind the plane".into())
+                return QuickTimeRender::Failed("matrix projects the image behind the plane".into());
             }
         }
     };
@@ -2402,11 +2402,8 @@ fn composite_quicktime(
                 continue;
             }
             let idx = cy as usize * cw + cx as usize;
-            let inside_prev = prev_clip.as_ref().map_or(true, |m| m[idx]);
-            let inside_mask = comp
-                .mask
-                .as_ref()
-                .map_or(true, |r| r.contains(pic_x, pic_y));
+            let inside_prev = prev_clip.as_ref().is_none_or(|m| m[idx]);
+            let inside_mask = comp.mask.as_ref().is_none_or(|r| r.contains(pic_x, pic_y));
             transient[idx] = inside_prev && inside_mask;
         }
     }
@@ -3595,11 +3592,7 @@ fn decode_pix_pat(r: &mut Reader<'_>) -> Result<(Pattern, Option<PixPattern>)> {
             // (zero-dimension) or non-power-of-2 tile, or a tile too large
             // to back with the PixData we read, falls back to the Pat1Data
             // monochrome interpretation (`None`).
-            if width == 0
-                || height == 0
-                || !width.is_power_of_two()
-                || !height.is_power_of_two()
-            {
+            if width == 0 || height == 0 || !width.is_power_of_two() || !height.is_power_of_two() {
                 return Ok((pat1, None));
             }
 

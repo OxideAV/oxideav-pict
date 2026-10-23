@@ -35,8 +35,8 @@
 
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
-    build_font_name, build_glyph_state, build_line_justify, parse_pict, probe_pict, Fixed,
-    PictError, PictFontName, PictGlyphState, PictLineJustify, PictTextState,
+    Fixed, PictError, PictFontName, PictGlyphState, PictLineJustify, PictTextState,
+    build_font_name, build_glyph_state, build_line_justify, parse_pict, probe_pict,
 };
 
 // ---------------------------------------------------------------------------

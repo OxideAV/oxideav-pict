@@ -106,34 +106,34 @@ impl DecodeOptions {
     /// Check a picture frame against the limits. `bytes` is the canvas
     /// the decode would allocate.
     pub(crate) fn check(&self, width: u32, height: u32, bytes: u64) -> Result<()> {
-        if let Some(m) = self.max_width {
-            if width > m {
-                return Err(PictError::limit(format!(
-                    "PICT: width {width} exceeds max_width {m}"
-                )));
-            }
+        if let Some(m) = self.max_width
+            && width > m
+        {
+            return Err(PictError::limit(format!(
+                "PICT: width {width} exceeds max_width {m}"
+            )));
         }
-        if let Some(m) = self.max_height {
-            if height > m {
-                return Err(PictError::limit(format!(
-                    "PICT: height {height} exceeds max_height {m}"
-                )));
-            }
+        if let Some(m) = self.max_height
+            && height > m
+        {
+            return Err(PictError::limit(format!(
+                "PICT: height {height} exceeds max_height {m}"
+            )));
         }
         let pixels = u64::from(width) * u64::from(height);
-        if let Some(m) = self.max_pixels {
-            if pixels > m {
-                return Err(PictError::limit(format!(
-                    "PICT: {pixels} pixels exceed max_pixels {m}"
-                )));
-            }
+        if let Some(m) = self.max_pixels
+            && pixels > m
+        {
+            return Err(PictError::limit(format!(
+                "PICT: {pixels} pixels exceed max_pixels {m}"
+            )));
         }
-        if let Some(m) = self.max_bytes {
-            if bytes > m {
-                return Err(PictError::limit(format!(
-                    "PICT: canvas of {bytes} bytes exceeds max_bytes {m}"
-                )));
-            }
+        if let Some(m) = self.max_bytes
+            && bytes > m
+        {
+            return Err(PictError::limit(format!(
+                "PICT: canvas of {bytes} bytes exceeds max_bytes {m}"
+            )));
         }
         Ok(())
     }
@@ -349,10 +349,12 @@ mod tests {
         assert_eq!(o.launch_stub, None);
         assert!(o.writes_stub());
         assert!(!o.with_version(PictVersion::V1).writes_stub());
-        assert!(EncodeOptions::default()
-            .with_version(PictVersion::V1)
-            .with_launch_stub(true)
-            .writes_stub());
+        assert!(
+            EncodeOptions::default()
+                .with_version(PictVersion::V1)
+                .with_launch_stub(true)
+                .writes_stub()
+        );
         let o = EncodeOptions::default().with_extended_header(false);
         assert_eq!(o.extended_header, Some(false));
         assert_eq!(EncodeOptions::default().extended_header, None);

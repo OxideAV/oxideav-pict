@@ -67,7 +67,9 @@ fn frame_oval_honours_pen_size() {
 
     let inked = |img: &oxideav_pict::PictImage| {
         img.data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] == 0 && p[1] == 0 && p[2] == 0)
             .count()
     };
@@ -120,7 +122,9 @@ fn frame_arc_honours_pen_pattern() {
     let img = parse_pict(&bytes).expect("decode patterned frameArc");
     let inked = img
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[0] == 0x80 && p[1] == 0x40 && p[2] == 0x20)
         .count();
     assert!(inked > 0, "patterned arc inks some boundary cells");
@@ -133,7 +137,9 @@ fn frame_arc_honours_pen_pattern() {
     let solid_img = parse_pict(&solid.finish()).expect("solid arc");
     let solid_inked = solid_img
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[0] == 0x80 && p[1] == 0x40 && p[2] == 0x20)
         .count();
     assert!(
@@ -218,7 +224,9 @@ fn default_pen_frames_unchanged() {
         // At least one black boundary pixel must exist.
         let any_black = img
             .data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|p| p[0] == 0 && p[1] == 0 && p[2] == 0);
         assert!(any_black, "shape {shape}: outline drawn");
     }

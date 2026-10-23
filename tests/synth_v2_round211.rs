@@ -13,9 +13,9 @@
 #![allow(deprecated)]
 
 use oxideav_pict::{
+    IndexedPixelSize, PictError, PictPixelFormat, PictProbe, ProbeTermination, ProbeVersion,
     encode_pict_indexed_bits_rect, encode_pict_indexed_bits_rgn,
     encode_pict_indexed_pack_bits_rect, encode_pict_indexed_pack_bits_rgn, parse_pict, probe_pict,
-    IndexedPixelSize, PictError, PictPixelFormat, PictProbe, ProbeTermination, ProbeVersion,
 };
 
 const RED: [u8; 4] = [0xFF, 0x00, 0x00, 0xFF];

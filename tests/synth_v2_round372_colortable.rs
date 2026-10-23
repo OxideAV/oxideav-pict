@@ -178,7 +178,7 @@ fn indexed_color_table_resolves_by_value_not_position() {
 
     // PixData (raw, rowBytes < 8): indices [0, 1, 2, 3].
     bytes.extend_from_slice(&pack_4bpp(&[0, 1, 2, 3], row_bytes as usize));
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         bytes.push(0);
     }
     put_u16(&mut bytes, 0x00FF); // OpEndPic
@@ -224,7 +224,7 @@ fn indexed_color_table_unmatched_value_is_black() {
     }
     put_u16(&mut bytes, 0);
     bytes.extend_from_slice(&pack_4bpp(&[0, 1], row_bytes as usize));
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         bytes.push(0);
     }
     put_u16(&mut bytes, 0x00FF);
@@ -257,7 +257,7 @@ fn device_color_table_resolves_by_position_not_value() {
     }
     put_u16(&mut bytes, 0); // mode
     bytes.extend_from_slice(&pack_4bpp(&[0, 1, 2, 3], row_bytes as usize));
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         bytes.push(0);
     }
     put_u16(&mut bytes, 0x00FF);
@@ -292,7 +292,7 @@ fn palette_index_color_table_is_sequential_like_a_device_table() {
     }
     put_u16(&mut bytes, 0); // mode
     bytes.extend_from_slice(&pack_4bpp(&[0, 1, 2, 3], row_bytes as usize));
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         bytes.push(0);
     }
     put_u16(&mut bytes, 0x00FF);

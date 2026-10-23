@@ -664,20 +664,20 @@ impl QuickTimeCompressed {
     /// `image_data.len()` (zero stays zero — the documented "size
     /// unknown" form, recovered from the `Size` window on parse).
     pub fn to_payload_bytes(&self) -> Result<Vec<u8>> {
-        if let Some(m) = &self.matte {
-            if m.data.is_empty() {
-                return Err(PictError::invalid(
-                    "QuickTime matte with empty data: MatteSize 0 gates the matte off entirely",
-                ));
-            }
+        if let Some(m) = &self.matte
+            && m.data.is_empty()
+        {
+            return Err(PictError::invalid(
+                "QuickTime matte with empty data: MatteSize 0 gates the matte off entirely",
+            ));
         }
-        if let Some(rgn) = &self.mask_region {
-            if rgn.len() < 10 {
-                return Err(PictError::invalid(format!(
-                    "QuickTime mask region of {} bytes is smaller than the 10-byte Region header",
-                    rgn.len()
-                )));
-            }
+        if let Some(rgn) = &self.mask_region
+            && rgn.len() < 10
+        {
+            return Err(PictError::invalid(format!(
+                "QuickTime mask region of {} bytes is smaller than the 10-byte Region header",
+                rgn.len()
+            )));
         }
         if self.image_description.data_size != 0
             && self.image_description.data_size as usize != self.image_data.len()
@@ -746,12 +746,12 @@ impl QuickTimeUncompressed {
     /// [`QuickTimeCompressed::to_payload_bytes`] for the matte gate,
     /// plus the `$98`–`$9B` subopcode range check.
     pub fn to_payload_bytes(&self) -> Result<Vec<u8>> {
-        if let Some(m) = &self.matte {
-            if m.data.is_empty() {
-                return Err(PictError::invalid(
-                    "QuickTime matte with empty data: MatteSize 0 gates the matte off entirely",
-                ));
-            }
+        if let Some(m) = &self.matte
+            && m.data.is_empty()
+        {
+            return Err(PictError::invalid(
+                "QuickTime matte with empty data: MatteSize 0 gates the matte off entirely",
+            ));
         }
         if !self.subopcode_in_range() {
             return Err(PictError::invalid(format!(

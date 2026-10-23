@@ -26,8 +26,8 @@
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::state::RectI32;
 use oxideav_pict::{
-    build_direct_bits_rect_op, parse_pict, Fixed, ImageDescription, PackType, QuickTimeCompressed,
-    QuickTimeMatrix, QuickTimePayload, QuickTimeUncompressed, Verb,
+    Fixed, ImageDescription, PackType, QuickTimeCompressed, QuickTimeMatrix, QuickTimePayload,
+    QuickTimeUncompressed, Verb, build_direct_bits_rect_op, parse_pict,
 };
 
 /// A minimal conforming `ImageDescription` (idSize = 86).

@@ -17,8 +17,8 @@
 
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{
-    build_compressed_quicktime, build_uncompressed_quicktime, parse_pict, probe_pict,
-    ProbeTermination, Verb,
+    ProbeTermination, Verb, build_compressed_quicktime, build_uncompressed_quicktime, parse_pict,
+    probe_pict,
 };
 
 // ---------------------------------------------------------------------------

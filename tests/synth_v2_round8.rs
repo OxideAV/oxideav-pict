@@ -30,7 +30,7 @@
 #![allow(deprecated)]
 
 use oxideav_pict::ops::{PictBuilder, Verb};
-use oxideav_pict::{parse_pict, probe_pict, Pattern, ProbeTermination};
+use oxideav_pict::{Pattern, ProbeTermination, parse_pict, probe_pict};
 
 // 50 % grey stipple — alternates foreground / background on a 1-pixel
 // checkerboard. Each row is 0b10101010 / 0b01010101.
@@ -285,7 +285,7 @@ fn v1_pn_pat_paint_rect() {
     // picture record: picSize (placeholder) + picFrame (0,0,8,8)
     bytes.extend_from_slice(&[0x00, 0x00]); // picSize
     bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x08]); // top/left/bot/right
-                                                                                // v1 sentinel (1-byte opcode 0x11 + version 0x01)
+    // v1 sentinel (1-byte opcode 0x11 + version 0x01)
     bytes.push(0x11);
     bytes.push(0x01);
     // FgColor (v1 opcode 0x0E) = Pascal redColor (205)

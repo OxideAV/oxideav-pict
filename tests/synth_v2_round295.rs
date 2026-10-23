@@ -39,10 +39,10 @@
 // IMAGE_CRATE_API functions and this suite is their regression gate.
 #![allow(deprecated)]
 
-use oxideav_pict::font::{measure_text, TextScale};
+use oxideav_pict::PictTextFace;
+use oxideav_pict::font::{TextScale, measure_text};
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::parse_pict;
-use oxideav_pict::PictTextFace;
 
 /// The default text size a freshly-initialised `PictTextState` carries
 /// (`TxSize` defaults to 12 points). The synth pictures below never emit

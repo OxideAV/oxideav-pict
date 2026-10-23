@@ -24,7 +24,7 @@
 // IMAGE_CRATE_API functions and this suite is their regression gate.
 #![allow(deprecated)]
 
-use oxideav_pict::{parse_pict, probe_pict, ProbeTermination};
+use oxideav_pict::{ProbeTermination, parse_pict, probe_pict};
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/imagemagick_gradient_64x48.pict");
 
@@ -102,8 +102,8 @@ fn one_byte_count_and_plane_spanning_run_are_tolerated() {
         }
     }
     p.extend_from_slice(&[0, 0]); // mode
-                                  // Row: one-byte count 4, then R = 64 × 0xFF, G+B = one 128-byte
-                                  // zero run.
+    // Row: one-byte count 4, then R = 64 × 0xFF, G+B = one 128-byte
+    // zero run.
     p.extend_from_slice(&[4, 0xC1, 0xFF, 0x81, 0x00]);
     p.push(0); // word alignment
     p.extend_from_slice(&[0x00, 0xFF]); // OpEndPic

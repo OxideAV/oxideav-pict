@@ -17,10 +17,10 @@
 // IMAGE_CRATE_API functions and this suite is their regression gate.
 #![allow(deprecated)]
 
-use oxideav_pict::font::{measure_text, TextScale, ADVANCE, GLYPH_H};
-use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::PictTextFace;
-use oxideav_pict::{build_rgb_fg_col, build_tx_size, parse_pict, PictImage};
+use oxideav_pict::font::{ADVANCE, GLYPH_H, TextScale, measure_text};
+use oxideav_pict::ops::{PictBuilder, Verb};
+use oxideav_pict::{PictImage, build_rgb_fg_col, build_tx_size, parse_pict};
 
 /// A `LongText` opcode body: `$0028`, `txLoc (v, h)`, `count`, `text`.
 fn long_text(v: i16, h: i16, text: &[u8]) -> Vec<u8> {

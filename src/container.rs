@@ -41,13 +41,13 @@ use std::io::{Read, SeekFrom, Write};
 
 use oxideav_core::{
     CodecId, CodecParameters, CodecResolver, ContainerRegistry, Demuxer, Error, MediaType, Muxer,
-    Packet, ProbeData, ProbeScore, ReadSeek, Result, StreamInfo, TimeBase, WriteSeek,
-    PROBE_SCORE_EXTENSION,
+    PROBE_SCORE_EXTENSION, Packet, ProbeData, ProbeScore, ReadSeek, Result, StreamInfo, TimeBase,
+    WriteSeek,
 };
 
+use crate::CODEC_ID_STR;
 use crate::probe::ProbeTermination;
 use crate::registry::to_core_pixel_format;
-use crate::CODEC_ID_STR;
 
 /// Registered container name (the same string as the codec id).
 pub const CONTAINER_NAME: &str = CODEC_ID_STR;

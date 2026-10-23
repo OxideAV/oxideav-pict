@@ -12,7 +12,7 @@
 #![allow(deprecated)]
 
 use oxideav_pict::{
-    encode_pict_v2, ops::PictBuilder, ops::Verb, parse_pict, pixel_data_sizes, PackType,
+    PackType, encode_pict_v2, ops::PictBuilder, ops::Verb, parse_pict, pixel_data_sizes,
 };
 
 // ---- packType 3 (Rle16) round-trip ----

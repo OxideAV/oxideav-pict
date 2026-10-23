@@ -15,12 +15,12 @@
 
 use oxideav_pict::ops::{PictBuilder, PictV1Builder};
 use oxideav_pict::{
-    build_arc_op, build_bk_color_code, build_dh_text, build_dhdv_text, build_dv_text,
-    build_fg_color_code, build_fill_pat, build_line, build_line_from, build_long_comment_v1,
-    build_long_text, build_origin, build_oval_op, build_oval_size, build_pn_pat, build_pn_size,
-    build_poly_op, build_rect_op, build_rgb_fg_col, build_rgn_rect_op, build_round_rect_op,
-    build_same_arc_op, build_same_rect_op, build_short_comment_v1, build_short_line,
-    build_short_line_from, build_tx_size, parse_pict, probe_pict, ProbeVersion, Verb,
+    ProbeVersion, Verb, build_arc_op, build_bk_color_code, build_dh_text, build_dhdv_text,
+    build_dv_text, build_fg_color_code, build_fill_pat, build_line, build_line_from,
+    build_long_comment_v1, build_long_text, build_origin, build_oval_op, build_oval_size,
+    build_pn_pat, build_pn_size, build_poly_op, build_rect_op, build_rgb_fg_col, build_rgn_rect_op,
+    build_round_rect_op, build_same_arc_op, build_same_rect_op, build_short_comment_v1,
+    build_short_line, build_short_line_from, build_tx_size, parse_pict, probe_pict,
 };
 
 /// The shared drawing sequence: one chunk per v1-legal opcode family
@@ -96,7 +96,7 @@ fn v1_and_v2_streams_decode_pixel_identically() {
         "v1 and v2 emissions of the same sequence must rasterise identically"
     );
     // Sanity: the sequence really inked the canvas.
-    assert!(i1.data().chunks_exact(4).any(|px| px[0] != 0xFF));
+    assert!(i1.data().as_chunks::<4>().0.iter().any(|px| px[0] != 0xFF));
 
     // Probe agrees on the version split and sees the comments in both.
     let p2 = probe_pict(&v2_bytes).unwrap();

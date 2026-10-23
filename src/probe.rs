@@ -1219,7 +1219,7 @@ fn skip_raster_opcode_v2(r: &mut Reader<'_>, opcode: u16) -> Result<bool> {
             // added, and pixData replaces bitData") — `Bits…` is the
             // unpacked family, `PackBits…` is the packed family.
             let _ = pixel_size_for_indexed; // pixel_size resolution
-                                            // happens in the decoder.
+            // happens in the decoder.
             r.skip(row_bytes * height)?;
         }
         OP_PACK_BITS_RECT | OP_PACK_BITS_RGN => {
@@ -1296,7 +1296,7 @@ fn skip_pix_pat(r: &mut Reader<'_>) -> Result<()> {
             let ct_size = r.read_i16()?;
             let n_entries = ((ct_size as i32) + 1).max(0) as usize;
             r.skip(n_entries * 8)?; // ColorSpec = value(2) + RGB(6)
-                                    // PixData.
+            // PixData.
             if row_bytes < 8 {
                 r.skip(row_bytes * height)?;
             } else {

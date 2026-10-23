@@ -34,9 +34,10 @@
 
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
-    build_ch_extra, build_def_hilite, build_hilite_color, build_hilite_mode, build_op_color,
-    build_pn_loc_h_frac, build_pn_mode, build_sp_extra, build_tx_face, build_tx_font,
-    build_tx_mode, build_tx_ratio, build_tx_size, parse_pict, probe_pict, PictTextState, TextRatio,
+    PictTextState, TextRatio, build_ch_extra, build_def_hilite, build_hilite_color,
+    build_hilite_mode, build_op_color, build_pn_loc_h_frac, build_pn_mode, build_sp_extra,
+    build_tx_face, build_tx_font, build_tx_mode, build_tx_ratio, build_tx_size, parse_pict,
+    probe_pict,
 };
 
 // ---------------------------------------------------------------------------

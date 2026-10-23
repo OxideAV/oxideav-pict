@@ -26,14 +26,16 @@
 
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{
-    build_origin, build_same_arc_op, build_same_oval_op, build_same_rect_op,
-    build_same_round_rect_op, build_short_line, build_short_line_from, parse_pict, PictImage, Verb,
+    PictImage, Verb, build_origin, build_same_arc_op, build_same_oval_op, build_same_rect_op,
+    build_same_round_rect_op, build_short_line, build_short_line_from, parse_pict,
 };
 
 /// Count non-white pixels.
 fn ink_count(img: &PictImage) -> usize {
     img.data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[0] < 240 || px[1] < 240 || px[2] < 240)
         .count()
 }

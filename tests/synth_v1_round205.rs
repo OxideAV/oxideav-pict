@@ -36,7 +36,7 @@
 // IMAGE_CRATE_API functions and this suite is their regression gate.
 #![allow(deprecated)]
 
-use oxideav_pict::{parse_pict, probe_pict, ProbeTermination};
+use oxideav_pict::{ProbeTermination, parse_pict, probe_pict};
 
 // ---------------------------------------------------------------------------
 // Bytestream builders.
@@ -168,7 +168,7 @@ fn v1_tx_size_walked_past_2_bytes() {
 fn v1_tx_ratio_walked_past_8_bytes() {
     let mut out = v1_header();
     put_u8(&mut out, 0x10); // TxRatio
-                            // numerator (Point) + denominator (Point)
+    // numerator (Point) + denominator (Point)
     put_i16(&mut out, 1);
     put_i16(&mut out, 1);
     put_i16(&mut out, 1);
@@ -186,7 +186,7 @@ fn v1_tx_ratio_walked_past_8_bytes() {
 fn v1_long_text_walked_past() {
     let mut out = v1_header();
     put_u8(&mut out, 0x28); // LongText
-                            // txLoc Point (v, h)
+    // txLoc Point (v, h)
     put_i16(&mut out, 10);
     put_i16(&mut out, 5);
     // count + text
@@ -283,7 +283,7 @@ fn v1_all_same_rrect_verbs_walk_past() {
         put_u8(&mut out, 0x0B);
         put_i16(&mut out, 2); // v
         put_i16(&mut out, 2); // h
-                              // paintRRect (0x41) to set last_rrect.
+        // paintRRect (0x41) to set last_rrect.
         put_u8(&mut out, 0x41);
         put_i16(&mut out, 0);
         put_i16(&mut out, 0);
@@ -328,7 +328,7 @@ fn v1_all_same_arc_verbs_walk_past() {
         put_i16(&mut out, 3);
         put_i16(&mut out, 0); // startAngle
         put_i16(&mut out, 90); // arcAngle
-                               // Same-Arc: 4-byte payload = start + arc.
+        // Same-Arc: 4-byte payload = start + arc.
         put_u8(&mut out, op);
         put_i16(&mut out, 90);
         put_i16(&mut out, 180);
@@ -451,7 +451,7 @@ fn probe_v1_same_shape_count_increments_for_all_families() {
     // Rect.
     append_paint_rect(&mut out, 0, 0, 2, 2);
     put_u8(&mut out, 0x39); // paintSameRect
-                            // RRect.
+    // RRect.
     put_u8(&mut out, 0x0B);
     put_i16(&mut out, 2);
     put_i16(&mut out, 2);
@@ -461,14 +461,14 @@ fn probe_v1_same_shape_count_increments_for_all_families() {
     put_i16(&mut out, 3);
     put_i16(&mut out, 3);
     put_u8(&mut out, 0x49); // paintSameRRect
-                            // Oval.
+    // Oval.
     put_u8(&mut out, 0x51);
     put_i16(&mut out, 0);
     put_i16(&mut out, 0);
     put_i16(&mut out, 3);
     put_i16(&mut out, 3);
     put_u8(&mut out, 0x59); // paintSameOval
-                            // Arc.
+    // Arc.
     put_u8(&mut out, 0x61);
     put_i16(&mut out, 0);
     put_i16(&mut out, 0);

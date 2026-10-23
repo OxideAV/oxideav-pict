@@ -19,12 +19,12 @@
 // IMAGE_CRATE_API functions and this suite is their regression gate.
 #![allow(deprecated)]
 
-use oxideav_pict::font::{measure_text, TextScale, GLYPH_H};
-use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::PictTextFace;
+use oxideav_pict::font::{GLYPH_H, TextScale, measure_text};
+use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{
-    build_dh_text, build_dhdv_text, build_dv_text, build_long_text, build_tx_size, parse_pict,
-    probe_pict, PictImage,
+    PictImage, build_dh_text, build_dhdv_text, build_dv_text, build_long_text, build_tx_size,
+    parse_pict, probe_pict,
 };
 
 /// True if pixel `(x, y)` in `img` is (near-)black ink.

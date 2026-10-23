@@ -15,11 +15,11 @@
 // IMAGE_CRATE_API functions and this suite is their regression gate.
 #![allow(deprecated)]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{
-    build_direct_bits_rect_op, encode_pict_v2, parse_pict, probe_pict, Fixed, ImageDescription,
-    PackType, QuickTimeCompressed, QuickTimeMatrix, QuickTimeUncompressed, Verb,
+    Fixed, ImageDescription, PackType, QuickTimeCompressed, QuickTimeMatrix, QuickTimeUncompressed,
+    Verb, build_direct_bits_rect_op, encode_pict_v2, parse_pict, probe_pict,
 };
 
 /// 256 × 256 synthetic RGBA gradient (compressible but not trivial).
@@ -183,7 +183,9 @@ fn bench_quicktime(c: &mut Criterion) {
         };
         // 'raw ' 32-bit: pad, R, G, B per pixel.
         let pixels: Vec<u8> = gradient_rgba(256, 256)
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| [0xFF, p[0], p[1], p[2]])
             .collect();
         let mut qt = QuickTimeCompressed::still(desc, pixels);

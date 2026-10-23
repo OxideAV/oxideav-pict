@@ -29,9 +29,9 @@
 
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::{
-    build_direct_bits_rect_op, parse_compressed_quicktime, parse_pict,
-    parse_uncompressed_quicktime, probe_pict, Fixed, ImageDescription, PackType,
-    QuickTimeCompressed, QuickTimeMatte, QuickTimeUncompressed, Verb,
+    Fixed, ImageDescription, PackType, QuickTimeCompressed, QuickTimeMatte, QuickTimeUncompressed,
+    Verb, build_direct_bits_rect_op, parse_compressed_quicktime, parse_pict,
+    parse_uncompressed_quicktime, probe_pict,
 };
 
 struct Rng(u64);

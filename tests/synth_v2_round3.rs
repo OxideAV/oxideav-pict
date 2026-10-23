@@ -13,8 +13,8 @@
 #![allow(deprecated)]
 
 use oxideav_pict::{
-    encode_pict_v1, encode_pict_v2, encode_pict_v2_with_clip, parse_pict, pixel_data_sizes,
-    PackType,
+    PackType, encode_pict_v1, encode_pict_v2, encode_pict_v2_with_clip, parse_pict,
+    pixel_data_sizes,
 };
 
 // ---- packType 2 (Packed24) round-trip ----

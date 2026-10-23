@@ -14,7 +14,7 @@
 #![allow(deprecated)]
 
 use oxideav_pict::ops::{PictBuilder, Verb};
-use oxideav_pict::{build_pix_pat_op_sized, parse_pict, probe_pict, PictPixelFormat, PixPatSlot};
+use oxideav_pict::{PictPixelFormat, PixPatSlot, build_pix_pat_op_sized, parse_pict, probe_pict};
 
 const RED: [u8; 4] = [0xFF, 0x00, 0x00, 0xFF];
 const GREEN: [u8; 4] = [0x00, 0xFF, 0x00, 0xFF];

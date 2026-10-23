@@ -14,7 +14,7 @@
 // IMAGE_CRATE_API functions and this suite is their regression gate.
 #![allow(deprecated)]
 
-use oxideav_pict::{blend_source, parse_pict, PictError, PictPixelFormat, Rgba, SourceMode};
+use oxideav_pict::{PictError, PictPixelFormat, Rgba, SourceMode, blend_source, parse_pict};
 
 /// Build a v2 PICT body (no 512-byte launch-stub prefix) containing a
 /// single `DirectBitsRect` (`0x009A`) that holds `width × height`

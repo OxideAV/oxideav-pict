@@ -27,7 +27,7 @@
 #![allow(deprecated)]
 
 use oxideav_pict::ops::{PictBuilder, Verb};
-use oxideav_pict::{parse_pict, PictImage};
+use oxideav_pict::{PictImage, parse_pict};
 
 /// Read pixel `(x, y)` as `(r, g, b)`.
 fn pix(img: &PictImage, x: u32, y: u32) -> (u8, u8, u8) {

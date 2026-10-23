@@ -213,9 +213,9 @@ impl QuickTimeImageDecoder for RawQuickTimeDecoder {
             16 => 2,
             other => {
                 return Err(PictError::unsupported(format!(
-                "'raw ' QuickTime image at depth {other} needs the colour table named by clutID {}",
-                description.clut_id
-            )))
+                    "'raw ' QuickTime image at depth {other} needs the colour table named by clutID {}",
+                    description.clut_id
+                )));
             }
         };
         let row_len = width as usize * bytes_per_pixel;
@@ -237,7 +237,7 @@ impl QuickTimeImageDecoder for RawQuickTimeDecoder {
                 PictError::invalid("'raw ' QuickTime image exceeds the raster budget")
             })?;
         let mut rgba = vec![0u8; rgba_len];
-        for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+        for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let src = &data[i * bytes_per_pixel..(i + 1) * bytes_per_pixel];
             match bytes_per_pixel {
                 4 => {
@@ -476,7 +476,7 @@ pub fn video_frame_to_rgba(
         n => {
             return Err(PictError::unsupported(format!(
                 "decoded frame with {n} planes has no known RGBA mapping"
-            )))
+            )));
         }
     }
     DecodedQuickTimeImage::new(width, height, rgba)
@@ -632,6 +632,12 @@ mod tests {
             ],
         };
         let img = video_frame_to_rgba(&yuv, 2, 2, PackedQuad::Rgba).unwrap();
-        assert!(img.rgba.chunks_exact(4).all(|p| p == [128, 128, 128, 255]));
+        assert!(
+            img.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [128, 128, 128, 255])
+        );
     }
 }

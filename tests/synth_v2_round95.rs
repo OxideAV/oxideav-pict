@@ -24,7 +24,7 @@
 
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
-    build_pix_pat_dither_op, parse_pict, probe_pict, PictImage, PixPatSlot, ProbeTermination,
+    PictImage, PixPatSlot, ProbeTermination, build_pix_pat_dither_op, parse_pict, probe_pict,
 };
 
 fn at(img: &PictImage, x: u32, y: u32) -> [u8; 4] {

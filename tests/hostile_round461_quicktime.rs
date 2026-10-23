@@ -19,9 +19,9 @@
 use oxideav_pict::ops::PictBuilder;
 use oxideav_pict::state::RectI32;
 use oxideav_pict::{
-    build_direct_bits_rect_op, build_long_text, build_tx_size, parse_pict, probe_pict, Fixed,
-    ImageDescription, PackType, QuickTimeCompressed, QuickTimeMatrix, QuickTimeMatte,
-    QuickTimeRender, QuickTimeUncompressed,
+    Fixed, ImageDescription, PackType, QuickTimeCompressed, QuickTimeMatrix, QuickTimeMatte,
+    QuickTimeRender, QuickTimeUncompressed, build_direct_bits_rect_op, build_long_text,
+    build_tx_size, parse_pict, probe_pict,
 };
 
 fn desc(codec: [u8; 4], width: u16, height: u16, depth: u16) -> ImageDescription {

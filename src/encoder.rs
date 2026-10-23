@@ -254,7 +254,7 @@ pub(crate) fn encode_direct_bits(
             (true, false) => crate::ops::build_short_comment_v1(c.kind),
             (true, true) => crate::ops::build_long_comment_v1(c.kind, &c.data)?,
         };
-        if !v1 && out.len() % 2 != 0 {
+        if !v1 && !out.len().is_multiple_of(2) {
             out.push(0);
         }
         out.extend_from_slice(&chunk);
@@ -264,7 +264,7 @@ pub(crate) fn encode_direct_bits(
     if v1 {
         out.push(0x9A);
     } else {
-        if out.len() % 2 != 0 {
+        if !out.len().is_multiple_of(2) {
             out.push(0);
         }
         write_u16(&mut out, 0x009A);
@@ -317,7 +317,7 @@ pub(crate) fn encode_direct_bits(
         out.push(0xFF);
     } else {
         // Word-align before terminator.
-        if out.len() % 2 != 0 {
+        if !out.len().is_multiple_of(2) {
             out.push(0);
         }
         write_u16(&mut out, 0x00FF); // OpEndPic
@@ -378,7 +378,7 @@ fn write_pixel_rows(
         match pack {
             PackType::Raw => {
                 // 0xFF R G B per pixel.
-                for px in row_in.chunks_exact(4) {
+                for px in row_in.as_chunks::<4>().0 {
                     out.push(0xFF);
                     out.push(px[0]);
                     out.push(px[1]);
@@ -387,7 +387,7 @@ fn write_pixel_rows(
             }
             PackType::Packed24 => {
                 // R G B per pixel (no pad byte).
-                for px in row_in.chunks_exact(4) {
+                for px in row_in.as_chunks::<4>().0 {
                     out.push(px[0]);
                     out.push(px[1]);
                     out.push(px[2]);
@@ -396,7 +396,7 @@ fn write_pixel_rows(
             PackType::Rle16 => {
                 // Pack each pixel as A1R5G5B5 BE, then u16-PackBits.
                 let mut row_u16: Vec<u16> = Vec::with_capacity(w);
-                for px in row_in.chunks_exact(4) {
+                for px in row_in.as_chunks::<4>().0 {
                     let r5 = (px[0] >> 3) as u16 & 0x1F;
                     let g5 = (px[1] >> 3) as u16 & 0x1F;
                     let b5 = (px[2] >> 3) as u16 & 0x1F;
@@ -418,7 +418,7 @@ fn write_pixel_rows(
                 let mut r_plane = vec![0u8; w];
                 let mut g_plane = vec![0u8; w];
                 let mut b_plane = vec![0u8; w];
-                for (x, px) in row_in.chunks_exact(4).enumerate() {
+                for (x, px) in row_in.as_chunks::<4>().0.iter().enumerate() {
                     r_plane[x] = px[0];
                     g_plane[x] = px[1];
                     b_plane[x] = px[2];
@@ -584,7 +584,7 @@ pub fn build_direct_bits_rect_op_with_mode(
     write_u16(&mut buf, 0x009A); // DirectBitsRect
     write_u32(&mut buf, 0x000000FF); // baseAddr
     write_u16(&mut buf, (row_bytes_raw as u16) | 0x8000); // rowBytes + PixMap flag
-                                                          // bounds: 0..height, 0..width (the bitmap's own coordinate frame).
+    // bounds: 0..height, 0..width (the bitmap's own coordinate frame).
     write_i16(&mut buf, 0);
     write_i16(&mut buf, 0);
     write_i16(&mut buf, height as i16);
@@ -779,7 +779,7 @@ pub fn build_pix_pat_op_sized(
     write_i16(&mut buf, ct_size);
     for (i, rgba) in palette.iter().enumerate() {
         write_u16(&mut buf, i as u16); // value (= index)
-                                       // RGBColor: 16-bit per channel, high byte = colour data.
+        // RGBColor: 16-bit per channel, high byte = colour data.
         write_u16(&mut buf, ((rgba[0] as u16) << 8) | rgba[0] as u16);
         write_u16(&mut buf, ((rgba[1] as u16) << 8) | rgba[1] as u16);
         write_u16(&mut buf, ((rgba[2] as u16) << 8) | rgba[2] as u16);
@@ -864,7 +864,7 @@ fn rgba_to_1bpp(width: u32, height: u32, data: &[u8], row_bytes: usize) -> Vec<u
     let mut bitmap = vec![0u8; row_bytes * height as usize];
     for y in 0..height as usize {
         let row_in = &data[y * w * 4..(y + 1) * w * 4];
-        for (x, px) in row_in.chunks_exact(4).enumerate() {
+        for (x, px) in row_in.as_chunks::<4>().0.iter().enumerate() {
             // ITU-R BT.601 luminance approx; round to nearest with
             // integer arithmetic (multiply numerators × 1000, divide by
             // 1000 at the end).
@@ -1038,7 +1038,7 @@ fn encode_pict_bitmap(
         }
         return Ok(out);
     }
-    if out.len() % 2 != 0 {
+    if !out.len().is_multiple_of(2) {
         out.push(0);
     }
     write_u16(&mut out, 0x00FF); // OpEndPic
@@ -1147,7 +1147,7 @@ fn encode_pict_bitmap_with_region(
         }
     }
 
-    if out.len() % 2 != 0 {
+    if !out.len().is_multiple_of(2) {
         out.push(0);
     }
     write_u16(&mut out, 0x00FF);
@@ -1512,7 +1512,7 @@ fn encode_pict_indexed_pixmap(
         }
     }
 
-    if out.len() % 2 != 0 {
+    if !out.len().is_multiple_of(2) {
         out.push(0);
     }
     write_u16(&mut out, 0x00FF); // OpEndPic
@@ -1584,7 +1584,7 @@ pub fn pixel_data_sizes(width: u32, height: u32, data: &[u8], pack: PackType) ->
             for y in 0..h {
                 let row = &data[y * w * 4..(y + 1) * w * 4];
                 let mut row_u16: Vec<u16> = Vec::with_capacity(w);
-                for px in row.chunks_exact(4) {
+                for px in row.as_chunks::<4>().0 {
                     let r5 = (px[0] >> 3) as u16 & 0x1F;
                     let g5 = (px[1] >> 3) as u16 & 0x1F;
                     let b5 = (px[2] >> 3) as u16 & 0x1F;
@@ -1605,7 +1605,7 @@ pub fn pixel_data_sizes(width: u32, height: u32, data: &[u8], pack: PackType) ->
                 let mut r = vec![0u8; w];
                 let mut g = vec![0u8; w];
                 let mut b = vec![0u8; w];
-                for (x, px) in row.chunks_exact(4).enumerate() {
+                for (x, px) in row.as_chunks::<4>().0.iter().enumerate() {
                     r[x] = px[0];
                     g[x] = px[1];
                     b[x] = px[2];

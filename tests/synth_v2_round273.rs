@@ -25,7 +25,7 @@
 #![allow(deprecated)]
 
 use oxideav_pict::ops::{PictBuilder, Verb};
-use oxideav_pict::{blend_arith, parse_pict, ArithMode, PatternMode, PictImage, Rgba};
+use oxideav_pict::{ArithMode, PatternMode, PictImage, Rgba, blend_arith, parse_pict};
 
 /// Build a 2×2 PICT painting `dst`, then `OpColor`, then `PnMode` =
 /// `mode`, a solid-fg pen pattern, and a paint with foreground `src`.

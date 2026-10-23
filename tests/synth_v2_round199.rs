@@ -28,7 +28,7 @@
 // IMAGE_CRATE_API functions and this suite is their regression gate.
 #![allow(deprecated)]
 
-use oxideav_pict::{parse_pict, probe_pict, ProbeTermination};
+use oxideav_pict::{ProbeTermination, parse_pict, probe_pict};
 
 // ---------------------------------------------------------------------------
 // Bytestream builders.
@@ -85,7 +85,7 @@ fn build_v2_reserved_fixed(opcode: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = v2_header();
     put_u16(&mut out, opcode);
     out.extend_from_slice(payload);
-    if out.len() % 2 != 0 {
+    if !out.len().is_multiple_of(2) {
         out.push(0);
     }
     close_pict(&mut out);
@@ -99,7 +99,7 @@ fn build_v2_reserved_u16_prefixed(opcode: u16, payload: &[u8]) -> Vec<u8> {
     put_u16(&mut out, opcode);
     put_u16(&mut out, payload.len() as u16);
     out.extend_from_slice(payload);
-    if out.len() % 2 != 0 {
+    if !out.len().is_multiple_of(2) {
         out.push(0);
     }
     close_pict(&mut out);
@@ -113,7 +113,7 @@ fn build_v2_reserved_u32_prefixed(opcode: u16, payload: &[u8]) -> Vec<u8> {
     put_u16(&mut out, opcode);
     put_u32(&mut out, payload.len() as u32);
     out.extend_from_slice(payload);
-    if out.len() % 2 != 0 {
+    if !out.len().is_multiple_of(2) {
         out.push(0);
     }
     close_pict(&mut out);
@@ -129,7 +129,7 @@ fn build_v2_reserved_poly_sized(opcode: u16, payload: &[u8]) -> Vec<u8> {
     let poly_size = 2 + payload.len() as u16;
     put_u16(&mut out, poly_size);
     out.extend_from_slice(payload);
-    if out.len() % 2 != 0 {
+    if !out.len().is_multiple_of(2) {
         out.push(0);
     }
     close_pict(&mut out);

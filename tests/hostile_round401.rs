@@ -26,10 +26,10 @@
 
 use oxideav_pict::ops::{PictBuilder, PictV1Builder};
 use oxideav_pict::{
-    build_fg_color_code, build_rect_op, build_short_line, build_tx_face, build_tx_mode,
-    build_tx_ratio, build_tx_size, encode_pict, encode_pict_indexed_pack_bits_rect,
-    encode_pict_pack_bits_rect, encode_pict_v1, encode_pict_v1_pack_bits_rect, encode_pict_v2,
-    parse_pict, probe_pict, IndexedPixelSize, PackType, Verb, GRAYISH_TEXT_OR_MODE,
+    GRAYISH_TEXT_OR_MODE, IndexedPixelSize, PackType, Verb, build_fg_color_code, build_rect_op,
+    build_short_line, build_tx_face, build_tx_mode, build_tx_ratio, build_tx_size, encode_pict,
+    encode_pict_indexed_pack_bits_rect, encode_pict_pack_bits_rect, encode_pict_v1,
+    encode_pict_v1_pack_bits_rect, encode_pict_v2, parse_pict, probe_pict,
 };
 
 /// Deterministic xorshift64* PRNG — keeps the suite reproducible with
@@ -288,7 +288,7 @@ fn giant_pixmap_bounds_are_rejected() {
     b.extend_from_slice(&3u16.to_be_bytes()); // cmpCount
     b.extend_from_slice(&8u16.to_be_bytes()); // cmpSize
     b.extend_from_slice(&[0u8; 12]); // planeBytes/pmTable/pmReserved
-                                     // srcRect / dstRect / mode — then no pixel data (truncated).
+    // srcRect / dstRect / mode — then no pixel data (truncated).
     for w in [-32768i16, -32768, 32767, 32767] {
         b.extend_from_slice(&w.to_be_bytes());
     }

@@ -37,11 +37,24 @@ fuzz_target!(|data: &[u8]| {
     let opts = EncodeOptions::default()
         .with_pack(pack)
         .with_version(version)
-        .with_launch_stub(if sel & 8 != 0 { Some(sel & 16 != 0) } else { None })
-        .with_extended_header(if sel & 32 != 0 { Some(sel & 64 != 0) } else { None })
+        .with_launch_stub(if sel & 8 != 0 {
+            Some(sel & 16 != 0)
+        } else {
+            None
+        })
+        .with_extended_header(if sel & 32 != 0 {
+            Some(sel & 64 != 0)
+        } else {
+            None
+        })
         .with_frame_origin(origin.0, origin.1)
         .with_clip(if sel & 128 != 0 {
-            Some([origin.0, origin.1, origin.0 + h as i16 / 2, origin.1 + w as i16 / 2])
+            Some([
+                origin.0,
+                origin.1,
+                origin.0 + h as i16 / 2,
+                origin.1 + w as i16 / 2,
+            ])
         } else {
             None
         });

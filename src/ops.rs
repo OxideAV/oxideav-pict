@@ -430,12 +430,12 @@ fn build_region_bearing_op(
                 "region-bearing opcode: y={y} out of bbox [{bbox_top}, {bbox_bottom})"
             )));
         }
-        if let Some(p) = prev_y {
-            if *y <= p {
-                return Err(PictError::invalid(format!(
-                    "region-bearing opcode: scanlines not strictly ascending: {p} ≥ {y}"
-                )));
-            }
+        if let Some(p) = prev_y
+            && *y <= p
+        {
+            return Err(PictError::invalid(format!(
+                "region-bearing opcode: scanlines not strictly ascending: {p} ≥ {y}"
+            )));
         }
         prev_y = Some(*y);
         let mut prev_x: Option<i16> = None;
@@ -445,12 +445,12 @@ fn build_region_bearing_op(
                     "region-bearing opcode: x={x} out of bbox [{bbox_left}, {bbox_right}]"
                 )));
             }
-            if let Some(p) = prev_x {
-                if *x <= p {
-                    return Err(PictError::invalid(format!(
-                        "region-bearing opcode: x's not strictly ascending: {p} ≥ {x}"
-                    )));
-                }
+            if let Some(p) = prev_x
+                && *x <= p
+            {
+                return Err(PictError::invalid(format!(
+                    "region-bearing opcode: x's not strictly ascending: {p} ≥ {x}"
+                )));
             }
             prev_x = Some(*x);
         }
@@ -1112,7 +1112,7 @@ impl PictBuilder {
 
     /// Pad to a 2-byte boundary within the picture record.
     fn align_word(&mut self) {
-        if self.record_offset() % 2 != 0 {
+        if !self.record_offset().is_multiple_of(2) {
             self.bytes.push(0);
         }
     }
@@ -2037,7 +2037,7 @@ mod tests {
         assert_eq!(i16::from_be_bytes([b[6], b[7]]), 0); // left
         assert_eq!(i16::from_be_bytes([b[8], b[9]]), 4); // bottom
         assert_eq!(i16::from_be_bytes([b[10], b[11]]), 4); // right
-                                                           // First inv-record y = 1.
+        // First inv-record y = 1.
         assert_eq!(i16::from_be_bytes([b[12], b[13]]), 1);
         // x_pairs[0] = 1.
         assert_eq!(i16::from_be_bytes([b[14], b[15]]), 1);

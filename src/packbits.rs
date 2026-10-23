@@ -273,7 +273,7 @@ mod encode_tests {
         let mut out = vec![0u8; src.len() * 2];
         decode_packbits_u16_into(&mut r, &mut out).unwrap();
         let mut decoded = Vec::with_capacity(src.len());
-        for chunk in out.chunks_exact(2) {
+        for chunk in out.as_chunks::<2>().0 {
             decoded.push(u16::from_be_bytes([chunk[0], chunk[1]]));
         }
         assert_eq!(decoded, src);
@@ -288,7 +288,7 @@ mod encode_tests {
         let mut r = Reader::new(&encoded);
         let mut out = vec![0u8; src.len() * 2];
         decode_packbits_u16_into(&mut r, &mut out).unwrap();
-        for (i, chunk) in out.chunks_exact(2).enumerate() {
+        for (i, chunk) in out.as_chunks::<2>().0.iter().enumerate() {
             assert_eq!(u16::from_be_bytes([chunk[0], chunk[1]]), src[i]);
         }
     }

@@ -60,7 +60,7 @@ pub fn from_core_pixel_format(pf: PixelFormat) -> oxideav_core::Result<PictPixel
         other => {
             return Err(oxideav_core::Error::unsupported(format!(
                 "PICT: pixel format {other:?} not supported"
-            )))
+            )));
         }
     })
 }
@@ -300,7 +300,7 @@ fn frame_to_image(vf: &VideoFrame, params: &CodecParameters) -> oxideav_core::Re
         other => {
             return Err(oxideav_core::Error::invalid(format!(
                 "PICT encoder: unsupported pixel format {other:?}"
-            )))
+            )));
         }
     };
     let want = w * bpp;
@@ -334,7 +334,7 @@ impl Encoder for PictEncoder {
             _ => {
                 return Err(oxideav_core::Error::invalid(
                     "PICT encoder: expected video frame",
-                ))
+                ));
             }
         };
         let image = frame_to_image(vf, &self.out_params)?;

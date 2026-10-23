@@ -31,7 +31,7 @@
 // IMAGE_CRATE_API functions and this suite is their regression gate.
 #![allow(deprecated)]
 
-use oxideav_pict::{parse_pict, probe_pict, ProbeTermination};
+use oxideav_pict::{ProbeTermination, parse_pict, probe_pict};
 
 // ---------------------------------------------------------------------------
 // Spec-driven byte builders.
@@ -91,13 +91,13 @@ fn put_indexed_pixmap_header(
 fn put_color_table(out: &mut Vec<u8>, palette: &[[u8; 3]]) {
     put_u32(out, 0xDEADBEEF); // ctSeed
     put_i16(out, 0); // ctFlags
-                     // ctSize = number of entries - 1.
+    // ctSize = number of entries - 1.
     put_i16(out, (palette.len() as i16) - 1);
     for (i, [r, g, b]) in palette.iter().enumerate() {
         put_u16(out, i as u16); // value (entry's index)
-                                // 16-bit-per-channel RGBColor — replicate the 8-bit input
-                                // across both bytes so `Rgba::from_rgb16` (high byte) is
-                                // bit-exact on round-trip.
+        // 16-bit-per-channel RGBColor — replicate the 8-bit input
+        // across both bytes so `Rgba::from_rgb16` (high byte) is
+        // bit-exact on round-trip.
         put_u16(out, u16::from_be_bytes([*r, *r]));
         put_u16(out, u16::from_be_bytes([*g, *g]));
         put_u16(out, u16::from_be_bytes([*b, *b]));
@@ -193,7 +193,7 @@ fn indexed_pixmap_pack_bits_rect_4bpp_raw_narrow() {
     bytes.extend_from_slice(&pack_4bpp(&[0, 3, 2, 1], row_bytes as usize));
 
     // Word-align before OpEndPic.
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         bytes.push(0);
     }
     put_u16(&mut bytes, 0x00FF);
@@ -270,7 +270,7 @@ fn indexed_pixmap_pack_bits_rect_8bpp_packed_rows() {
         bytes.extend_from_slice(&enc);
     }
 
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         bytes.push(0);
     }
     put_u16(&mut bytes, 0x00FF);
@@ -341,7 +341,7 @@ fn indexed_pixmap_bits_rect_8bpp_unpacked_rows() {
         row_bytes as usize,
     ));
 
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         bytes.push(0);
     }
     put_u16(&mut bytes, 0x00FF);
@@ -412,7 +412,7 @@ fn indexed_pixmap_pack_bits_rgn_8bpp_clip_full_frame() {
         bytes.extend_from_slice(&enc);
     }
 
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         bytes.push(0);
     }
     put_u16(&mut bytes, 0x00FF);
@@ -470,7 +470,7 @@ fn indexed_pixmap_out_of_range_index_maps_to_black() {
     // Row: [palette[0]=red, palette[1]=green, idx 2=oob, idx 3=oob].
     bytes.extend_from_slice(&[0, 1, 2, 3]);
 
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         bytes.push(0);
     }
     put_u16(&mut bytes, 0x00FF);
@@ -521,7 +521,7 @@ fn indexed_pixmap_pack_bits_rect_1bpp() {
     // 0b10101010 = pixels [black, white, black, white, black, white, black, white].
     bytes.push(0b1010_1010);
 
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         bytes.push(0);
     }
     put_u16(&mut bytes, 0x00FF);

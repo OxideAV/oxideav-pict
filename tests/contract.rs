@@ -9,10 +9,10 @@ use std::io::Cursor;
 
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
-    decode, decode_from, decode_rgb8, decode_rgba8, decode_with, encode, encode_rgb8, encode_rgba8,
-    encode_to, info, probe, ColorInfo, ColorRange, DecodeOptions, EncodeOptions, Fixed, PackType,
-    PictComment, PictError, PictHeader, PictImage, PictPixelFormat, PictVersion, PixelFormat,
-    Plane,
+    ColorInfo, ColorRange, DecodeOptions, EncodeOptions, Fixed, PackType, PictComment, PictError,
+    PictHeader, PictImage, PictPixelFormat, PictVersion, PixelFormat, Plane, decode, decode_from,
+    decode_rgb8, decode_rgba8, decode_with, encode, encode_rgb8, encode_rgba8, encode_to, info,
+    probe,
 };
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/imagemagick_gradient_64x48.pict");
@@ -148,7 +148,7 @@ fn decode_returns_the_contract_shape_in_rgba() {
     assert_eq!(img.color, ColorInfo::pict_default());
     assert_eq!(img.color.range, ColorRange::Full);
     assert!(img.metadata.is_empty());
-    assert!(img.data().chunks_exact(4).all(|p| p[3] == 255));
+    assert!(img.data().as_chunks::<4>().0.iter().all(|p| p[3] == 255));
     assert_eq!(img.to_rgba8(), img.data());
     let rgb = img.to_rgb8();
     assert_eq!(rgb.len(), 64 * 48 * 3);
@@ -364,7 +364,13 @@ fn lossless_round_trip_for_every_lossless_pack_type() {
     // Rle16 is 5 bits per channel: close, never exact.
     let bytes = encode(&first, &EncodeOptions::default().with_pack(PackType::Rle16)).unwrap();
     let back = decode(&bytes).unwrap();
-    for (a, b) in back.data().chunks_exact(4).zip(rgba.chunks_exact(4)) {
+    for (a, b) in back
+        .data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(rgba.as_chunks::<4>().0)
+    {
         for c in 0..3 {
             assert!((a[c] as i32 - b[c] as i32).abs() <= 8, "{a:?} vs {b:?}");
         }

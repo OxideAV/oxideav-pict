@@ -29,7 +29,7 @@
 
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
-    blend_source, parse_pict, PackType, PatternMode, PictImage, Rgba, SourceMode, HILITE_MODE,
+    HILITE_MODE, PackType, PatternMode, PictImage, Rgba, SourceMode, blend_source, parse_pict,
 };
 
 /// Read pixel `(x, y)` as `(r, g, b)`.

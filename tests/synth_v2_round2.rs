@@ -14,7 +14,7 @@
 // IMAGE_CRATE_API functions and this suite is their regression gate.
 #![allow(deprecated)]
 
-use oxideav_pict::{encode_pict, parse_pict, PictPixelFormat};
+use oxideav_pict::{PictPixelFormat, encode_pict, parse_pict};
 
 /// Build a v2 PICT body containing exactly the supplied opcode bytes
 /// (with a sane picFrame and the standard v2 header stanza).
@@ -200,7 +200,7 @@ fn directbits_packtype2_24bpp() {
         ops.extend_from_slice(&(width as i16).to_be_bytes());
     }
     ops.extend_from_slice(&0u16.to_be_bytes()); // mode
-                                                // Pixel data: row 0 = R G B per pixel.
+    // Pixel data: row 0 = R G B per pixel.
     for _ in 0..(width * height) {
         ops.extend_from_slice(&[0xFF, 0x80, 0x40]);
     }
@@ -304,7 +304,7 @@ fn directbits_packtype4_planar_packbits() {
     // copies of one byte: flag=-3, byte. So each plane is 2 bytes.
     // Total packed planes = 6 bytes, plus byteCount prefix.
     ops.push(6); // byteCount
-                 // R plane: all 0xFF.
+    // R plane: all 0xFF.
     ops.push((1i32 - 4i32) as i8 as u8);
     ops.push(0xFF);
     // G plane: all 0x80.
@@ -378,8 +378,8 @@ fn v1_packbits_decode() {
         buf.extend_from_slice(&(width as i16).to_be_bytes());
     }
     buf.extend_from_slice(&0u16.to_be_bytes()); // mode
-                                                // row_bytes=2 < 8, so each row is raw. 2 bytes of 0xFF (all bits
-                                                // set -> all black pixels).
+    // row_bytes=2 < 8, so each row is raw. 2 bytes of 0xFF (all bits
+    // set -> all black pixels).
     buf.push(0xFF);
     buf.push(0xFF);
     // OpEndPic = 0xFF.

@@ -67,7 +67,7 @@
 //! `extra` character-widening field (page I-227). See [`StyleParams`]
 //! for how this crate applies them.
 
-use crate::raster::{blend_source, Canvas, SourceMode};
+use crate::raster::{Canvas, SourceMode, blend_source};
 use crate::state::{PictTextFace, Rgba};
 
 /// Design grid: glyph artwork is authored on a 5-wide × 7-tall cell.
@@ -192,11 +192,7 @@ fn offset_scale(len: i32, tx_size: i32, numer: i32, denom: i32) -> i32 {
     let den = DESIGN_EM as i64 * denom as i64;
     // Saturating narrow — see `ratio_scale`.
     let scaled = ((num + den / 2) / den).min(i32::MAX as i64) as i32;
-    if len < 0 {
-        -scaled
-    } else {
-        scaled
-    }
+    if len < 0 { -scaled } else { scaled }
 }
 
 /// 5×7 glyph bitmaps for ASCII `0x20..=0x7E`. Index `c - 0x20`; each

@@ -27,7 +27,7 @@
 // IMAGE_CRATE_API functions and this suite is their regression gate.
 #![allow(deprecated)]
 
-use oxideav_pict::{encode_pict_v2, parse_pict, PackType};
+use oxideav_pict::{PackType, encode_pict_v2, parse_pict};
 
 /// Locate the `DirectBitsRect` (`0x009A`) opcode in an encoded v2 PICT
 /// and overwrite its 2-byte `packType` word with `0`.

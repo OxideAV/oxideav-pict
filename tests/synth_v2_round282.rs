@@ -34,8 +34,8 @@
 
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
-    blend_source, build_direct_bits_rect_op, build_direct_bits_rect_op_with_mode, parse_pict,
-    ArithMode, PackType, PictImage, Rgba, SourceMode,
+    ArithMode, PackType, PictImage, Rgba, SourceMode, blend_source, build_direct_bits_rect_op,
+    build_direct_bits_rect_op_with_mode, parse_pict,
 };
 
 /// Read pixel `(x, y)` as `(r, g, b)`.
@@ -230,7 +230,7 @@ fn blend_source_src_copy_weighted_portions() {
     let fg = Rgba::new(0, 0, 255, 255); // blue
     let bg = Rgba::new(255, 0, 0, 255); // red
     let dst = Rgba::new(9, 9, 9, 255); // ignored by COPY
-                                       // Black source → foreground; white source → background (Table 4-1).
+    // Black source → foreground; white source → background (Table 4-1).
     assert_eq!(
         blend_source(SourceMode::SrcCopy, Rgba::BLACK, dst, fg, bg),
         fg

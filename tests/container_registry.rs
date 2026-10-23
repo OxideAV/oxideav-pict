@@ -17,13 +17,13 @@ use oxideav_core::{
     StreamInfo, TimeBase, VideoFrame, VideoPlane,
 };
 use oxideav_pict::container::{
-    probe, EXTENSIONS, PROBE_SCORE_END_PIC, PROBE_SCORE_STANZA_WITH_EXTENSION,
-    PROBE_SCORE_V2_OPCODES_CUT,
+    EXTENSIONS, PROBE_SCORE_END_PIC, PROBE_SCORE_STANZA_WITH_EXTENSION, PROBE_SCORE_V2_OPCODES_CUT,
+    probe,
 };
 use oxideav_pict::{
-    encode_pict_bits_rect, encode_pict_indexed_bits_rect, encode_pict_indexed_pack_bits_rect,
-    encode_pict_pack_bits_rect, encode_pict_v1, encode_pict_v1_pack_bits_rect, EncodeOptions,
-    IndexedPixelSize, CODEC_ID_STR,
+    CODEC_ID_STR, EncodeOptions, IndexedPixelSize, encode_pict_bits_rect,
+    encode_pict_indexed_bits_rect, encode_pict_indexed_pack_bits_rect, encode_pict_pack_bits_rect,
+    encode_pict_v1, encode_pict_v1_pack_bits_rect,
 };
 
 const CONTAINER: &str = "pict";
@@ -285,10 +285,11 @@ fn probe_rejects_foreign_files() {
                 .is_err(),
             "{ext} sample must not be named pict (the only registered container)"
         );
-        assert!(ctx
-            .containers
-            .probe_input(&mut Cursor::new(&bytes), None)
-            .is_err());
+        assert!(
+            ctx.containers
+                .probe_input(&mut Cursor::new(&bytes), None)
+                .is_err()
+        );
     }
 }
 
@@ -509,30 +510,36 @@ fn mux_rejects_bad_streams_and_packets() {
     };
     let sink = || Box::new(Cursor::new(Vec::<u8>::new()));
     assert!(ctx.containers.open_muxer(CONTAINER, sink(), &[]).is_err());
-    assert!(ctx
-        .containers
-        .open_muxer(CONTAINER, sink(), &[video.clone(), video.clone()])
-        .is_err());
+    assert!(
+        ctx.containers
+            .open_muxer(CONTAINER, sink(), &[video.clone(), video.clone()])
+            .is_err()
+    );
     let audio = StreamInfo {
         params: CodecParameters::audio(CodecId::new("pcm")),
         ..video.clone()
     };
-    assert!(ctx
-        .containers
-        .open_muxer(CONTAINER, sink(), &[audio])
-        .is_err());
+    assert!(
+        ctx.containers
+            .open_muxer(CONTAINER, sink(), &[audio])
+            .is_err()
+    );
 
     let mut muxer = ctx
         .containers
         .open_muxer(CONTAINER, sink(), std::slice::from_ref(&video))
         .unwrap();
     muxer.write_header().unwrap();
-    assert!(muxer
-        .write_packet(&Packet::new(0, TimeBase::new(1, 1), Vec::new()))
-        .is_err());
-    assert!(muxer
-        .write_packet(&Packet::new(0, TimeBase::new(1, 1), b"not a pict".to_vec()))
-        .is_err());
+    assert!(
+        muxer
+            .write_packet(&Packet::new(0, TimeBase::new(1, 1), Vec::new()))
+            .is_err()
+    );
+    assert!(
+        muxer
+            .write_packet(&Packet::new(0, TimeBase::new(1, 1), b"not a pict".to_vec()))
+            .is_err()
+    );
     assert!(muxer.write_trailer().is_err(), "no packet, no file");
     let pict = oxideav_pict::encode_rgba8(2, 2, &[1u8; 16], &EncodeOptions::default()).unwrap();
     muxer
@@ -552,10 +559,11 @@ fn mux_rejects_bad_streams_and_packets() {
 #[test]
 fn register_installs_codec_and_container() {
     let ctx = ctx();
-    assert!(ctx
-        .codecs
-        .decoder_ids()
-        .any(|c| *c == CodecId::new(CODEC_ID_STR)));
+    assert!(
+        ctx.codecs
+            .decoder_ids()
+            .any(|c| *c == CodecId::new(CODEC_ID_STR))
+    );
     assert!(ctx.containers.demuxer_names().any(|n| n == CONTAINER));
     assert!(ctx.containers.muxer_names().any(|n| n == CONTAINER));
     for ext in ["pict", "pct", "pic", "PICT"] {

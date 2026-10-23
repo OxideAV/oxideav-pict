@@ -101,7 +101,7 @@ impl<'a> Reader<'a> {
     /// Pad the cursor to the next even byte if currently odd. v2
     /// opcode boundaries are word-aligned per Inside Macintosh §A-3.
     pub fn align_word(&mut self) -> Result<()> {
-        if self.pos % 2 == 0 {
+        if self.pos.is_multiple_of(2) {
             return Ok(());
         }
         self.skip(1)

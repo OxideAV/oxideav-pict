@@ -24,8 +24,8 @@
 
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
-    build_long_comment, build_long_comment_v1, build_short_comment, build_short_comment_v1,
-    parse_pict, probe_pict, PictComment, PictError,
+    PictComment, PictError, build_long_comment, build_long_comment_v1, build_short_comment,
+    build_short_comment_v1, parse_pict, probe_pict,
 };
 
 // ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ fn v1_short_comment_decodes_into_image_comments() {
     body.extend_from_slice(&4i16.to_be_bytes()); // bottom
     body.extend_from_slice(&4i16.to_be_bytes()); // right
     body.extend_from_slice(&[0x11, 0x01]); // versionOp + version
-                                           // ShortComment 0xA0 + kind 0x1234.
+    // ShortComment 0xA0 + kind 0x1234.
     body.extend_from_slice(&build_short_comment_v1(0x1234));
     // LongComment 0xA1 + kind 0x00C8 + size 5 + "hello".
     body.extend_from_slice(&build_long_comment_v1(0x00C8, b"hello").unwrap());
@@ -327,7 +327,7 @@ fn long_comment_with_truncated_payload_errors_cleanly() {
     truncated.extend_from_slice(&[0x00, 0xC8]); // kind
     truncated.extend_from_slice(&[0x00, 0x08]); // size=8
     truncated.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]); // only 4 bytes of data
-                                                            // Splice in before OpEndPic.
+    // Splice in before OpEndPic.
     bytes.splice(end..end, truncated.iter().copied());
 
     let err = parse_pict(&bytes).expect_err("truncated LongComment must error");

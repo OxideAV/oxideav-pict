@@ -29,7 +29,10 @@ fuzz_target!(|data: &[u8]| {
             let i = info.expect("decode implies info");
             assert_eq!((i.width, i.height), (img.width, img.height));
             assert_eq!(img.to_rgba8().len(), img.planes[0].data.len());
-            assert_eq!(img.to_rgb8().len(), img.width as usize * 3 * img.height as usize);
+            assert_eq!(
+                img.to_rgb8().len(),
+                img.width as usize * 3 * img.height as usize
+            );
         }
         Err(_) => {}
     }
@@ -41,6 +44,10 @@ fuzz_target!(|data: &[u8]| {
         .with_max_width(if sel & 2 != 0 { Some(64) } else { None })
         .with_max_height(if sel & 4 != 0 { Some(64) } else { None })
         .with_max_pixels(if sel & 8 != 0 { Some(1 << 12) } else { None })
-        .with_max_bytes(if sel & 16 != 0 { Some(1 << 16) } else { Some(1 << 24) });
+        .with_max_bytes(if sel & 16 != 0 {
+            Some(1 << 16)
+        } else {
+            Some(1 << 24)
+        });
     let _ = oxideav_pict::decode_with(data, &opts);
 });

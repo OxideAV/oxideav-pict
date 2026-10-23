@@ -27,11 +27,10 @@ fuzz_target!(|data: &[u8]| {
     let _ = ctx
         .containers
         .probe_input(&mut Cursor::new(data), Some("pct"));
-    let Ok(mut demuxer) = ctx.containers.open_demuxer(
-        "pict",
-        Box::new(Cursor::new(data.to_vec())),
-        &ctx.codecs,
-    ) else {
+    let Ok(mut demuxer) =
+        ctx.containers
+            .open_demuxer("pict", Box::new(Cursor::new(data.to_vec())), &ctx.codecs)
+    else {
         return;
     };
     let stream = demuxer.streams()[0].clone();

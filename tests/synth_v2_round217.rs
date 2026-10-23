@@ -17,9 +17,9 @@
 use oxideav_pict::header::{Fixed, PictHeader};
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
-    encode_pict, encode_pict_bits_rect, encode_pict_bits_rgn, encode_pict_indexed_bits_rect,
-    encode_pict_pack_bits_rect, encode_pict_pack_bits_rgn, encode_pict_v2,
-    encode_pict_v2_with_clip, parse_pict, probe_pict, IndexedPixelSize, PackType,
+    IndexedPixelSize, PackType, encode_pict, encode_pict_bits_rect, encode_pict_bits_rgn,
+    encode_pict_indexed_bits_rect, encode_pict_pack_bits_rect, encode_pict_pack_bits_rgn,
+    encode_pict_v2, encode_pict_v2_with_clip, parse_pict, probe_pict,
 };
 
 // ---------------------------------------------------------------------------

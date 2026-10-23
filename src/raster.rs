@@ -64,7 +64,7 @@ impl Canvas {
     /// QuickDraw "paper" — usually opaque white).
     pub fn new(width: u32, height: u32, fill: Rgba) -> Self {
         let mut data = vec![0u8; (width as usize) * (height as usize) * 4];
-        for chunk in data.chunks_exact_mut(4) {
+        for chunk in data.as_chunks_mut::<4>().0 {
             chunk[0] = fill.r;
             chunk[1] = fill.g;
             chunk[2] = fill.b;
@@ -201,10 +201,10 @@ impl Canvas {
         let mut any = false;
         for x in lo..hi {
             let idx = (row + x as u32) as usize;
-            if let Some(mask) = &self.clip {
-                if !mask[idx] {
-                    continue;
-                }
+            if let Some(mask) = &self.clip
+                && !mask[idx]
+            {
+                continue;
             }
             let off = idx * 4;
             self.data[off] = !self.data[off];
@@ -930,11 +930,7 @@ pub fn fill_arc(
 fn arc_range(start_deg: i32, arc_deg: i32) -> (f64, f64) {
     let a = start_deg as f64;
     let b = (start_deg + arc_deg) as f64;
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if a <= b { (a, b) } else { (b, a) }
 }
 
 // ---------------------------------------------------------------------------
@@ -2066,10 +2062,8 @@ fn plot_pattern_pixel_mode(
             }
         }
         PatternMode::PatXor => {
-            if on {
-                if let Some(d) = canvas.pixel_at(x, y) {
-                    canvas.put(x, y, invert_rgba(d));
-                }
+            if on && let Some(d) = canvas.pixel_at(x, y) {
+                canvas.put(x, y, invert_rgba(d));
             }
         }
         PatternMode::PatBic => {
@@ -2086,10 +2080,8 @@ fn plot_pattern_pixel_mode(
             }
         }
         PatternMode::NotPatXor => {
-            if !on {
-                if let Some(d) = canvas.pixel_at(x, y) {
-                    canvas.put(x, y, invert_rgba(d));
-                }
+            if !on && let Some(d) = canvas.pixel_at(x, y) {
+                canvas.put(x, y, invert_rgba(d));
             }
         }
         PatternMode::NotPatBic => {
@@ -2114,10 +2106,8 @@ fn plot_pattern_pixel_mode(
             // §4 "Highlighting": only on-bit cells exchange; the
             // destination's background colour becomes the highlight
             // colour (and vice versa — the reversible exchange).
-            if on {
-                if let Some(d) = canvas.pixel_at(x, y) {
-                    canvas.put(x, y, hilite_exchange(d, bg_key, hilite));
-                }
+            if on && let Some(d) = canvas.pixel_at(x, y) {
+                canvas.put(x, y, hilite_exchange(d, bg_key, hilite));
             }
         }
     }
@@ -3320,8 +3310,10 @@ mod tests {
         frame_arc_pix_pattern_thick(&mut c, 2, 2, 14, 14, 0, 90, 1, 1, &pp);
         let red_pixels = c
             .data
-            .chunks_exact(4)
-            .filter(|p| p == &[255, 0, 0, 255])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| **p == [255, 0, 0, 255])
             .count();
         assert!(red_pixels > 0, "arc quarter inked red");
     }

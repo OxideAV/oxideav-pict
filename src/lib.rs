@@ -128,43 +128,45 @@ pub use image::{
 pub use options::{DecodeOptions, EncodeOptions};
 
 pub use encoder::{
-    build_clip_rgn_rect, build_direct_bits_rect_op, build_direct_bits_rect_op_with_mode,
-    build_pix_pat_dither_op, build_pix_pat_op, build_pix_pat_op_sized, encode_pict_bits_rect,
-    encode_pict_bits_rgn, encode_pict_indexed_bits_rect, encode_pict_indexed_bits_rgn,
+    IndexedPixelSize, PackType, PixPatSlot, build_clip_rgn_rect, build_direct_bits_rect_op,
+    build_direct_bits_rect_op_with_mode, build_pix_pat_dither_op, build_pix_pat_op,
+    build_pix_pat_op_sized, encode_pict_bits_rect, encode_pict_bits_rgn,
+    encode_pict_indexed_bits_rect, encode_pict_indexed_bits_rgn,
     encode_pict_indexed_pack_bits_rect, encode_pict_indexed_pack_bits_rgn,
     encode_pict_pack_bits_rect, encode_pict_pack_bits_rgn, encode_pict_v1,
     encode_pict_v1_bits_rect, encode_pict_v1_pack_bits_rect, encode_pict_v1_with, encode_pict_v2,
-    encode_pict_v2_with_clip, pixel_data_sizes, IndexedPixelSize, PackType, PixPatSlot,
+    encode_pict_v2_with_clip, pixel_data_sizes,
 };
 pub use error::{PictError, Result};
 pub use header::{Fixed, PictHeader};
 pub use image::{PictComment, PictImage, PictPixelFormat, PictQuickTime};
 pub use ops::{
-    build_arc_op, build_bk_color_code, build_bk_pat, build_ch_extra, build_clip_rgn,
-    build_compressed_quicktime, build_compressed_quicktime_image, build_def_hilite, build_dh_text,
-    build_dhdv_text, build_dv_text, build_fg_color_code, build_fill_pat, build_font_name,
-    build_glyph_state, build_hilite_color, build_hilite_mode, build_line, build_line_from,
-    build_line_justify, build_long_comment, build_long_comment_v1, build_long_text, build_op_color,
-    build_origin, build_oval_op, build_oval_size, build_pn_loc_h_frac, build_pn_mode, build_pn_pat,
-    build_pn_size, build_poly_op, build_rect_op, build_rgb_bk_col, build_rgb_fg_col,
-    build_rgn_inverted_op, build_rgn_rect_op, build_round_rect_op, build_same_arc_op,
-    build_same_oval_op, build_same_rect_op, build_same_round_rect_op, build_short_comment,
-    build_short_comment_v1, build_short_line, build_short_line_from, build_sp_extra, build_tx_face,
-    build_tx_font, build_tx_mode, build_tx_ratio, build_tx_size, build_uncompressed_quicktime,
-    build_uncompressed_quicktime_image, PictBuilder, PictV1Builder, Verb,
+    PictBuilder, PictV1Builder, Verb, build_arc_op, build_bk_color_code, build_bk_pat,
+    build_ch_extra, build_clip_rgn, build_compressed_quicktime, build_compressed_quicktime_image,
+    build_def_hilite, build_dh_text, build_dhdv_text, build_dv_text, build_fg_color_code,
+    build_fill_pat, build_font_name, build_glyph_state, build_hilite_color, build_hilite_mode,
+    build_line, build_line_from, build_line_justify, build_long_comment, build_long_comment_v1,
+    build_long_text, build_op_color, build_origin, build_oval_op, build_oval_size,
+    build_pn_loc_h_frac, build_pn_mode, build_pn_pat, build_pn_size, build_poly_op, build_rect_op,
+    build_rgb_bk_col, build_rgb_fg_col, build_rgn_inverted_op, build_rgn_rect_op,
+    build_round_rect_op, build_same_arc_op, build_same_oval_op, build_same_rect_op,
+    build_same_round_rect_op, build_short_comment, build_short_comment_v1, build_short_line,
+    build_short_line_from, build_sp_extra, build_tx_face, build_tx_font, build_tx_mode,
+    build_tx_ratio, build_tx_size, build_uncompressed_quicktime,
+    build_uncompressed_quicktime_image,
 };
-pub use probe::{inspect, PictProbe, ProbeQuickTime, ProbeRect, ProbeTermination, ProbeVersion};
+pub use probe::{PictProbe, ProbeQuickTime, ProbeRect, ProbeTermination, ProbeVersion, inspect};
 pub use qtimage::{
     DecodedQuickTimeImage, DefaultQuickTimeDecoder, QuickTimeImageDecoder, QuickTimeRender,
     RawQuickTimeDecoder,
 };
 pub use quicktime::{
-    parse_compressed_quicktime, parse_uncompressed_quicktime, ImageDescription,
-    QuickTimeCompressed, QuickTimeMatrix, QuickTimeMatte, QuickTimePayload, QuickTimeUncompressed,
+    ImageDescription, QuickTimeCompressed, QuickTimeMatrix, QuickTimeMatte, QuickTimePayload,
+    QuickTimeUncompressed, parse_compressed_quicktime, parse_uncompressed_quicktime,
 };
 pub use raster::{
-    blend_arith, blend_source, ArithMode, PatternMode, SourceMode, GRAYISH_TEXT_OR_MODE,
-    HILITE_MODE,
+    ArithMode, GRAYISH_TEXT_OR_MODE, HILITE_MODE, PatternMode, SourceMode, blend_arith,
+    blend_source,
 };
 pub use state::{
     Pattern, PictFontName, PictGlyphState, PictLineJustify, PictPattern, PictTextFace,
@@ -173,7 +175,7 @@ pub use state::{
 
 #[cfg(feature = "registry")]
 pub use registry::{
-    __oxideav_entry, image_into_video_frame, make_decoder, make_encoder,
+    __oxideav_entry, RegistryQuickTimeDecoder, image_into_video_frame, make_decoder, make_encoder,
     quicktime_codec_parameters, register, register_codecs, register_containers,
-    resolve_quicktime_codec, RegistryQuickTimeDecoder,
+    resolve_quicktime_codec,
 };

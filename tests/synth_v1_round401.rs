@@ -14,8 +14,8 @@
 #![allow(deprecated)]
 
 use oxideav_pict::{
-    encode_pict_v1_bits_rect, encode_pict_v1_pack_bits_rect, parse_pict, probe_pict, PictTextState,
-    ProbeVersion,
+    PictTextState, ProbeVersion, encode_pict_v1_bits_rect, encode_pict_v1_pack_bits_rect,
+    parse_pict, probe_pict,
 };
 
 /// A black/white RGBA checker: pixel (x, y) black when (x + y) even.
@@ -45,7 +45,7 @@ fn v1_bits_rect_round_trips_narrow_bitmap() {
     let img = parse_pict(&bytes).unwrap();
     assert_eq!((img.width, img.height), (16, 8));
     // 1-bpp threshold reproduces the checker exactly.
-    for (i, px) in img.data().chunks_exact(4).enumerate() {
+    for (i, px) in img.data().as_chunks::<4>().0.iter().enumerate() {
         let (x, y) = (i % 16, i / 16);
         let want = if (x + y) % 2 == 0 { 0x00 } else { 0xFF };
         assert_eq!(px[0], want, "at ({x},{y})");
@@ -64,7 +64,7 @@ fn v1_bits_rect_rejects_wide_rows_per_footnote() {
     let bytes = encode_pict_v1_pack_bits_rect(64, 4, &rgba).unwrap();
     let img = parse_pict(&bytes).unwrap();
     assert_eq!((img.width, img.height), (64, 4));
-    for (i, px) in img.data().chunks_exact(4).enumerate() {
+    for (i, px) in img.data().as_chunks::<4>().0.iter().enumerate() {
         let (x, y) = (i % 64, i / 64);
         let want = if (x + y) % 2 == 0 { 0x00 } else { 0xFF };
         assert_eq!(px[0], want, "at ({x},{y})");

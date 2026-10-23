@@ -25,7 +25,7 @@
 
 use oxideav_pict::ops::{PictBuilder, Verb};
 use oxideav_pict::{
-    encode_pict_bits_rgn, encode_pict_pack_bits_rgn, encode_pict_v2_with_clip, parse_pict, PackType,
+    PackType, encode_pict_bits_rgn, encode_pict_pack_bits_rgn, encode_pict_v2_with_clip, parse_pict,
 };
 
 // ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ fn clip_rgn_masks_raster_outside() {
     let width = 8u32;
     let height = 8u32;
     let mut rgba = vec![0u8; (width * height * 4) as usize];
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[0] = 0xFF;
         px[1] = 0x00;
         px[2] = 0x00;

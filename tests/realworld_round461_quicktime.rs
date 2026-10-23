@@ -29,7 +29,7 @@
 use std::path::PathBuf;
 
 use oxideav_pict::state::RectI32;
-use oxideav_pict::{parse_pict, probe_pict, QuickTimePayload};
+use oxideav_pict::{QuickTimePayload, parse_pict, probe_pict};
 
 fn sample() -> Option<Vec<u8>> {
     let dir = std::env::var_os("OXIDEAV_PICT_SAMPLES")?;
@@ -108,14 +108,16 @@ fn jd_snowy_blog_renders_and_hides_the_warning_lines() {
     // for a different JPEG decoder's rounding.
     let sum: u64 = img
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|p| u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]))
         .sum();
     let mean = sum as f64 / (img.data().len() as f64 / 4.0 * 3.0 * 255.0);
     assert!((mean - 0.375_555).abs() < 0.005, "mean {mean}");
     // Not a flat image: the photo has real contrast.
     let (mut lo, mut hi) = (255u8, 0u8);
-    for p in img.data().chunks_exact(4) {
+    for p in img.data().as_chunks::<4>().0 {
         lo = lo.min(p[1]);
         hi = hi.max(p[1]);
     }
