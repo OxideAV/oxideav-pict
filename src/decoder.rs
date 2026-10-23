@@ -2308,7 +2308,9 @@ fn composite_quicktime(
         match comp.matrix.transform_rect_f64(placement) {
             Some(r) => r,
             None => {
-                return QuickTimeRender::Failed("matrix projects the image behind the plane".into());
+                return QuickTimeRender::Failed(
+                    "matrix projects the image behind the plane".into(),
+                );
             }
         }
     };
