@@ -40,6 +40,7 @@ use crate::state::{
 ///
 /// Produced by [`inspect`]; never carries pixel data.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PictProbe {
     /// PICT framing version detected by the version stanza.
     pub version: ProbeVersion,
@@ -199,6 +200,7 @@ impl PictProbe {
 /// the published layout (`Size` remains authoritative, so the walk
 /// continues regardless).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ProbeQuickTime {
     /// `true` for `CompressedQuickTime` (`0x8200`); `false` for
     /// `UncompressedQuickTime` (`0x8201`).
@@ -246,6 +248,7 @@ pub enum ProbeVersion {
 
 /// Why the probe stopped walking opcodes.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProbeTermination {
     /// Reached an `OpEndPic` opcode — the canonical clean termination.
     EndPic,

@@ -41,6 +41,7 @@ use crate::state::RectI32;
 /// Pixels produced by a [`QuickTimeImageDecoder`]: packed RGBA8,
 /// row-major, `width × height`, no row padding.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DecodedQuickTimeImage {
     /// Width in pixels.
     pub width: u32,
@@ -99,6 +100,7 @@ pub trait QuickTimeImageDecoder {
 
 /// What happened to a QuickTime picture opcode's pixels.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum QuickTimeRender {
     /// The image reached the canvas. `dst` is the destination
     /// bounding rectangle in picture coordinates — the source
@@ -326,6 +328,7 @@ pub fn decode_jpeg_image(
 /// its producer emits.
 #[cfg(feature = "registry")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PackedQuad {
     /// R, G, B, A.
     Rgba,

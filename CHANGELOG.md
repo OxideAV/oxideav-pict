@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- API hygiene: the enums `ProbeTermination`, `QuickTimeRender`,
+  `PackedQuad` and the records `PictProbe`, `ProbeQuickTime`,
+  `PictComment`, `PictQuickTime`, `DecodedQuickTimeImage` (build it with
+  the existing checked `DecodedQuickTimeImage::new`) and `PictTextState`
+  are now `#[non_exhaustive]`. Enums and records that mirror frozen
+  QuickDraw / QuickTime on-wire layouts (`PackType`, `PixPatSlot`,
+  `IndexedPixelSize`, `PictHeader`, `Verb`, `ProbeVersion`,
+  `QuickTimePayload`, `PatternMode`, `ArithMode`, `SourceMode`,
+  `PictPattern`, `ImageDescription`, `QuickTimeMatte`,
+  `QuickTimeCompressed`, `QuickTimeUncompressed`, `PixPattern`,
+  `TextRatio`, `PictLineJustify`, `PictGlyphState`, `PictFontName`) and
+  the value types `Rgba` / `RectI32` / `ProbeRect` stay exhaustive.
+
 ## [0.0.6](https://github.com/OxideAV/oxideav-pict/compare/v0.0.5...v0.0.6) - 2026-10-23
 
 ### Fixed

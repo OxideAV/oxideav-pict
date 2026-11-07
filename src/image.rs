@@ -49,6 +49,7 @@ use crate::state::PictTextState;
 /// application chose to write, so the decoder leaves interpretation up
 /// to the consumer.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PictComment {
     /// `Kind` word as written on disk (16-bit signed in the spec, but
     /// always serialised as an unsigned 16-bit pattern in PICT files
@@ -110,6 +111,7 @@ impl PictComment {
 /// the verbatim capture (`image == None`) instead of failing the
 /// picture.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PictQuickTime {
     /// `true` for `CompressedQuickTime` (`$8200`); `false` for
     /// `UncompressedQuickTime` (`$8201`).

@@ -547,6 +547,7 @@ impl PartialEq<PictTextFace> for u8 {
 /// least once"; the slot otherwise stays at `None`, preserving the
 /// fresh-GrafPort baseline).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct PictTextState {
     /// Font number set by `TxFont` (`$0003` v2 / `$03` v1, `Integer`).
     /// §A-3 Table A-2: 2-byte payload. The numeric ID is the classic
